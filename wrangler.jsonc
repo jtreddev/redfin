@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fin",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Only the main workers.dev address (protected by Cloudflare Access); no per-version preview addresses.
+  "preview_urls": false,
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "fin",
+      "database_id": "e8493955-c304-4516-b506-4433ab1a6a90",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "triggers": {
+    // UTC. Every 15 minutes, 10:00–13:45 UTC (early morning in US time zones).
+    // Each run syncs one small step for the bank that synced longest ago.
+    "crons": ["*/15 10-13 * * *"]
+  },
+  "vars": {
+    "PLAID_ENV": "sandbox",
+    // Cloudflare Access: team domain (https://<team>.cloudflareaccess.com) and the application AUD tag.
+    "ACCESS_TEAM_DOMAIN": "https://<team>.cloudflareaccess.com",
+    "ACCESS_AUD": "<application AUD tag>"
+  },
+  "observability": { "enabled": true }
+  // Secrets (set with `npx wrangler secret put NAME`, or .dev.vars locally):
+  //   PLAID_CLIENT_ID, PLAID_SECRET, TOKEN_ENC_KEY
+}

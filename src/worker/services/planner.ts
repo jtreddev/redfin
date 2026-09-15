@@ -1,0 +1,382 @@
+import { ledgerEntries, monthActuals, type CategoryKind } from '../../shared/actuals';
+import type { Timing } from '../../shared/allocation';
+import {
+  addDays,
+  addMonths,
+  clampDay,
+  monthEnd,
+  monthOf,
+  monthStart,
+  type ISODate,
+  type MonthKey,
+} from '../../shared/dates';
+import { buildForecast, type Forecast, type ForecastLine } from '../../shared/forecast';
+import type { Cents } from '../../shared/money';
+import { payDatesBetween, payDatesInMonth } from '../../shared/paySchedule';
+import { funMoneyBalance } from '../../shared/privacy';
+import { nextOccurrence, type Cadence } from '../../shared/recurring';
+import { safeToSpend, type SafeToSpend } from '../../shared/safeToSpend';
+import { monthWeeks } from '../../shared/weeks';
+import type { HouseholdSettings } from '../env';
+import { all, first } from '../lib/db';
+import { loadCategories, loadIncomeSources, scheduleOf, type IncomeSourceRow } from './context';
+import { loadLedger } from './ledger';
+
+export interface BudgetRow {
+  categoryId: number;
+  name: string;
+  sectionId: number;
+  sectionName: string;
+  kind: CategoryKind;
+  kidScoped: boolean;
+  funMemberId: number | null;
+  lineId: number | null;
+  budgetCents: Cents;
+  timing: Timing;
+  dueDay: number | null;
+  notes: string | null;
+  actualCents: Cents;
+  byWeek: Cents[];
+  /** Budget comes from Income & paydays or a fun money allowance rather than a typed line. */
+  computed: 'paychecks' | 'fun_money' | null;
+}
+
+interface LineRow {
+  id: number;
+  categoryId: number;
+  budgetCents: number;
+  timing: Timing;
+  dueDay: number | null;
+  notes: string | null;
+}
+
+export interface MonthData {
+  month: MonthKey;
+  rows: BudgetRow[];
+  sources: IncomeSourceRow[];
+  uncategorized: { inCents: Cents; outCents: Cents; inByWeek: Cents[]; outByWeek: Cents[]; count: number };
+  allowancePayDates: ISODate[];
+}
+
+/** Budget vs actual for every category in a month, including computed paycheck and fun money lines. */
+export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthData> {
+  const [categories, lines, sources, members, ledger] = await Promise.all([
+    loadCategories(db),
+    all<LineRow>(
+      db,
+      `SELECT id, category_id AS categoryId, budget_cents AS budgetCents, timing, due_day AS dueDay, notes
+         FROM budget_lines WHERE month = ?`,
+      month,
+    ),
+    loadIncomeSources(db),
+    all<{ id: number; funAllowanceCents: number }>(db, 'SELECT id, fun_allowance_cents AS funAllowanceCents FROM members'),
+    loadLedger(db, monthStart(month), monthEnd(month)),
+  ]);
+
+  const actuals = monthActuals(ledgerEntries(ledger), month);
+  const weeks = monthWeeks(month);
+  const zeros = () => weeks.map(() => 0);
+  const lineByCategory = new Map(lines.map((l) => [l.categoryId, l]));
+  const allowanceByMember = new Map(members.map((m) => [m.id, m.funAllowanceCents]));
+
+  const allowancePayDates = [
+    ...new Set(sources.filter((s) => s.drivesAllowance === 1).flatMap((s) => payDatesInMonth(scheduleOf(s), month))),
+  ].sort();
+  const paycheckBudget = sources.reduce(
+    (total, s) => total + payDatesInMonth(scheduleOf(s), month).length * s.netPayCents,
+    0,
+  );
+
+  const rows: BudgetRow[] = [];
+  for (const c of categories) {
+    const line = lineByCategory.get(c.id);
+    const actual = actuals.byCategory.get(c.id);
+    let computed: BudgetRow['computed'] = null;
+    let budgetCents = line?.budgetCents ?? 0;
+    let timing: Timing = line?.timing ?? 'even';
+
+    if (c.sectionName === 'Income' && c.name === 'Paychecks' && sources.length) {
+      computed = 'paychecks';
+      budgetCents = paycheckBudget;
+      timing = 'due_day';
+    } else if (c.funMemberId != null && !line) {
+      computed = 'fun_money';
+      budgetCents = (allowanceByMember.get(c.funMemberId) ?? 0) * allowancePayDates.length;
+      timing = 'even';
+    }
+
+    if (c.archived && !line && !actual) continue;
+    rows.push({
+      categoryId: c.id,
+      name: c.name,
+      sectionId: c.sectionId,
+      sectionName: c.sectionName,
+      kind: c.kind,
+      kidScoped: c.kidScoped === 1,
+      funMemberId: c.funMemberId,
+      lineId: line?.id ?? null,
+      budgetCents,
+      timing,
+      dueDay: line?.dueDay ?? null,
+      notes: line?.notes ?? null,
+      actualCents: actual?.totalCents ?? 0,
+      byWeek: actual?.byWeek ?? zeros(),
+      computed,
+    });
+  }
+
+  return {
+    month,
+    rows,
+    sources,
+    uncategorized: {
+      inCents: actuals.uncategorizedIn.totalCents,
+      outCents: actuals.uncategorizedOut.totalCents,
+      inByWeek: actuals.uncategorizedIn.byWeek,
+      outByWeek: actuals.uncategorizedOut.byWeek,
+      count: actuals.uncategorizedCount,
+    },
+    allowancePayDates,
+  };
+}
+
+export interface StartingBalance {
+  cents: Cents;
+  source: 'manual' | 'bank' | 'previous_month' | 'none';
+}
+
+/** Cash on day 1: typed in, worked back from bank balances, or carried from last month's forecast. */
+async function startingBalance(
+  db: D1Database,
+  month: MonthKey,
+  household: HouseholdSettings,
+  today: ISODate,
+  depth: number,
+): Promise<StartingBalance> {
+  const manual = await first<{ cents: number | null }>(
+    db,
+    'SELECT starting_balance_cents AS cents FROM month_settings WHERE month = ?',
+    month,
+  );
+  if (manual?.cents != null) return { cents: manual.cents, source: 'manual' };
+
+  const currentMonth = monthOf(today);
+  if (month === currentMonth) {
+    const cash = await first<{ total: number; counted: number }>(
+      db,
+      `SELECT COALESCE(SUM(current_balance_cents), 0) AS total, COUNT(current_balance_cents) AS counted
+         FROM accounts WHERE is_cash = 1 AND hidden = 0 AND type NOT IN ('credit', 'loan')`,
+    );
+    if (!cash?.counted) return { cents: 0, source: 'none' };
+    const movement = await first<{ net: number }>(
+      db,
+      `SELECT COALESCE(SUM(t.amount_cents), 0) AS net
+         FROM transactions t JOIN accounts a ON a.id = t.account_id
+        WHERE a.is_cash = 1 AND a.hidden = 0 AND a.type NOT IN ('credit', 'loan') AND a.current_balance_cents IS NOT NULL
+          AND t.deleted_at IS NULL AND t.is_ignored = 0 AND t.pending = 0 AND t.date >= ?`,
+      monthStart(month),
+    );
+    return { cents: cash.total - (movement?.net ?? 0), source: 'bank' };
+  }
+
+  if (month > currentMonth && depth < 12) {
+    const previous = await buildPlanner(db, addMonths(month, -1), household, today, depth + 1);
+    return { cents: previous.forecast.totals.endBalance, source: 'previous_month' };
+  }
+  return { cents: 0, source: 'none' };
+}
+
+export interface Planner {
+  month: MonthKey;
+  data: MonthData;
+  forecast: Forecast;
+  safe: SafeToSpend;
+  startingBalance: StartingBalance;
+}
+
+export async function buildPlanner(
+  db: D1Database,
+  month: MonthKey,
+  household: HouseholdSettings,
+  today: ISODate,
+  depth = 0,
+): Promise<Planner> {
+  const [data, received, start] = await Promise.all([
+    loadMonth(db, month),
+    all<{ sourceId: number; payDate: ISODate }>(
+      db,
+      `SELECT DISTINCT income_source_id AS sourceId, pay_date AS payDate FROM transactions
+        WHERE deleted_at IS NULL AND is_ignored = 0 AND income_source_id IS NOT NULL AND pay_date BETWEEN ? AND ?`,
+      monthStart(month),
+      monthEnd(month),
+    ),
+    startingBalance(db, month, household, today, depth),
+  ]);
+
+  const weeks = monthWeeks(month);
+  const incomeByWeek = weeks.map((_, i) => data.uncategorized.inByWeek[i] ?? 0);
+  const outflowByWeek = weeks.map((_, i) => data.uncategorized.outByWeek[i] ?? 0);
+  const lines: ForecastLine[] = [];
+
+  for (const row of data.rows) {
+    if (row.kind === 'transfer') continue;
+    const planned = row.computed !== 'paychecks' && (row.lineId !== null || row.budgetCents > 0);
+    if (planned) {
+      lines.push({
+        id: row.categoryId,
+        kind: row.kind === 'income' ? 'income' : 'expense',
+        budgetCents: row.budgetCents,
+        timing: row.timing,
+        dueDay: row.dueDay,
+        actualByWeek: row.byWeek,
+      });
+    } else {
+      const target = row.kind === 'income' ? incomeByWeek : outflowByWeek;
+      row.byWeek.forEach((v, i) => {
+        target[i] = (target[i] ?? 0) + v;
+      });
+    }
+  }
+
+  const receivedBySource = new Map<number, ISODate[]>();
+  for (const r of received) receivedBySource.set(r.sourceId, [...(receivedBySource.get(r.sourceId) ?? []), r.payDate]);
+
+  const forecast = buildForecast({
+    month,
+    today,
+    startingBalanceCents: start.cents,
+    lowBalanceCents: household.lowBalanceCents,
+    paySources: data.sources.map((s) => ({
+      id: s.id,
+      netPayCents: s.netPayCents,
+      schedule: scheduleOf(s),
+      receivedPayDates: receivedBySource.get(s.id) ?? [],
+    })),
+    lines,
+    otherActual: { incomeByWeek, outflowByWeek },
+  });
+
+  return { month, data, forecast, safe: safeToSpend(forecast, household.lowBalanceCents), startingBalance: start };
+}
+
+export interface FunMoneyRow {
+  memberId: number;
+  name: string;
+  color: string;
+  allowancePerPaydayCents: Cents;
+  accruedCents: Cents;
+  spentCents: Cents;
+  balanceCents: Cents;
+  paydaysCounted: number;
+  isViewer: boolean;
+  nextPayDate: ISODate | null;
+}
+
+export async function funMoneyBalances(
+  db: D1Database,
+  household: HouseholdSettings,
+  today: ISODate,
+  viewerId: number,
+): Promise<FunMoneyRow[]> {
+  const start = household.funMoneyStartDate ?? monthStart(monthOf(today));
+  const [members, sources, categories, adjustments] = await Promise.all([
+    all<{ id: number; name: string; color: string; funAllowanceCents: number }>(
+      db,
+      'SELECT id, name, color, fun_allowance_cents AS funAllowanceCents FROM members ORDER BY id',
+    ),
+    loadIncomeSources(db),
+    loadCategories(db),
+    all<{ memberId: number; total: number }>(
+      db,
+      'SELECT member_id AS memberId, SUM(amount_cents) AS total FROM fun_adjustments WHERE date >= ? GROUP BY member_id',
+      start,
+    ),
+  ]);
+  const ledger = start <= today ? await loadLedger(db, start, today) : [];
+  const entries = ledgerEntries(ledger);
+
+  const allowanceSources = sources.filter((s) => s.drivesAllowance === 1);
+  const payDates = [...new Set(allowanceSources.flatMap((s) => payDatesBetween(scheduleOf(s), start, today)))];
+  const upcoming = allowanceSources
+    .flatMap((s) => payDatesBetween(scheduleOf(s), addDays(today, 1), addDays(today, 31)))
+    .sort()[0] ?? null;
+  const adjustmentByMember = new Map(adjustments.map((a) => [a.memberId, a.total]));
+
+  return members.map((m) => {
+    const funCategory = categories.find((c) => c.funMemberId === m.id)?.id;
+    const spentCents = entries
+      .filter((e) => e.categoryId === funCategory || e.privateMemberId === m.id)
+      .reduce((total, e) => total - e.amountCents, 0);
+    const balance = funMoneyBalance({
+      allowancePerPaydayCents: m.funAllowanceCents,
+      payDates,
+      startDate: start,
+      today,
+      spentCents,
+      adjustmentsCents: adjustmentByMember.get(m.id) ?? 0,
+    });
+    return {
+      memberId: m.id,
+      name: m.name,
+      color: m.color,
+      allowancePerPaydayCents: m.funAllowanceCents,
+      ...balance,
+      isViewer: m.id === viewerId,
+      nextPayDate: upcoming,
+    };
+  });
+}
+
+export interface UpcomingBill {
+  name: string;
+  date: ISODate;
+  amountCents: Cents;
+  overdue: boolean;
+  source: 'budget' | 'recurring';
+  categoryId: number | null;
+}
+
+/** Due-day budget lines not yet paid this month, plus confirmed recurring bills coming up. */
+export async function upcomingBills(
+  db: D1Database,
+  planner: Planner,
+  today: ISODate,
+  viewerId: number,
+  horizonDays = 21,
+): Promise<UpcomingBill[]> {
+  const bills: UpcomingBill[] = [];
+  for (const row of planner.data.rows) {
+    if (row.timing !== 'due_day' || row.dueDay == null || row.kind === 'income' || row.computed) continue;
+    const remaining = (planner.forecast.remainingByLine.get(row.categoryId) ?? []).reduce((a, b) => a + b, 0);
+    if (remaining <= 0) continue;
+    const date = clampDay(planner.month, row.dueDay);
+    bills.push({ name: row.name, date, amountCents: remaining, overdue: date < today, source: 'budget', categoryId: row.categoryId });
+  }
+
+  const recurring = await all<{ name: string; nextDate: ISODate | null; cadence: Cadence; amount: number; categoryId: number | null }>(
+    db,
+    `SELECT name, next_date AS nextDate, cadence, expected_amount_cents AS amount, category_id AS categoryId
+       FROM recurring_bills
+      WHERE status = 'confirmed' AND next_date IS NOT NULL AND (private_member_id IS NULL OR private_member_id = ?)`,
+    viewerId,
+  );
+  const horizon = addDays(today, horizonDays);
+  const budgetCategories = new Set(bills.map((b) => b.categoryId));
+  for (const r of recurring) {
+    let date = r.nextDate as ISODate;
+    // Roll stale dates forward (the charge probably happened; detection refreshes it later).
+    for (let guard = 0; date < addDays(today, -3) && guard < 60; guard++) date = nextOccurrence(date, r.cadence);
+    if (date > horizon) continue;
+    if (r.categoryId != null && budgetCategories.has(r.categoryId) && monthOf(date) === planner.month) continue;
+    bills.push({ name: r.name, date, amountCents: Math.abs(r.amount), overdue: date < today, source: 'recurring', categoryId: r.categoryId });
+  }
+  return bills.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : b.amountCents - a.amountCents));
+}
+
+/** Forecast as plain JSON (Maps don't serialize). */
+export function forecastJson(forecast: Forecast) {
+  return {
+    ...forecast,
+    remainingByLine: Object.fromEntries(forecast.remainingByLine),
+  };
+}

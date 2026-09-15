@@ -1,0 +1,95 @@
+import type { MiddlewareHandler } from 'hono';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { todayIn } from '../../shared/dates';
+import type { AppEnv, Env, HouseholdSettings, Viewer } from '../env';
+import { first, run } from '../lib/db';
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const jwksByTeam = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+
+function jwks(teamDomain: string) {
+  let set = jwksByTeam.get(teamDomain);
+  if (!set) {
+    set = createRemoteJWKSet(new URL(`${teamDomain}/cdn-cgi/access/certs`));
+    jwksByTeam.set(teamDomain, set);
+  }
+  return set;
+}
+
+async function emailFromAccess(env: Env, token: string | undefined): Promise<string | null> {
+  if (!token || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) return null;
+  const teamDomain = env.ACCESS_TEAM_DOMAIN.replace(/\/+$/, '');
+  try {
+    const { payload } = await jwtVerify(token, jwks(teamDomain), {
+      issuer: teamDomain,
+      audience: env.ACCESS_AUD,
+    });
+    return typeof payload.email === 'string' ? payload.email.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every /api request must carry a valid Cloudflare Access token (Access only lets the
+ * two of you through). Locally, DEV_AUTH_BYPASS stands in, and a deployed Worker with
+ * that setting refuses to serve anything.
+ */
+export const requireViewer: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const env = c.env;
+  const url = new URL(c.req.url);
+  const isLocal = LOCAL_HOSTS.has(url.hostname);
+
+  let email: string | null;
+  if (env.DEV_AUTH_BYPASS) {
+    if (!isLocal) return c.json({ error: 'DEV_AUTH_BYPASS must not be set on a deployed Worker.' }, 500);
+    email = (c.req.header('x-dev-user') || env.DEV_AUTH_BYPASS).toLowerCase();
+  } else {
+    if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) {
+      return c.json({ error: 'Cloudflare Access is not configured (ACCESS_TEAM_DOMAIN / ACCESS_AUD).' }, 500);
+    }
+    email = await emailFromAccess(env, c.req.header('cf-access-jwt-assertion'));
+  }
+  if (!email) return c.json({ error: 'Not signed in' }, 401);
+
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
+    const origin = c.req.header('origin');
+    if (origin && origin !== url.origin) return c.json({ error: 'Cross-site request blocked' }, 403);
+  }
+
+  const viewer = (await first<Viewer>(env.DB, 'SELECT id AS memberId, email, name FROM members WHERE email = ?', email)) ??
+    (await createMember(env.DB, email));
+
+  const household = await first<HouseholdSettings>(
+    env.DB,
+    `SELECT name, timezone, low_balance_cents AS lowBalanceCents, card_pay_mode AS cardPayMode,
+            fun_money_start_date AS funMoneyStartDate
+       FROM household WHERE id = 1`,
+  );
+  if (!household) return c.json({ error: 'Database is not initialized. Run the migrations.' }, 500);
+
+  c.set('viewer', viewer);
+  c.set('household', household);
+  c.set('today', todayIn(household.timezone));
+  await next();
+};
+
+/** First sign-in for someone Access let through: add them and give them a fun money category. */
+async function createMember(db: D1Database, email: string): Promise<Viewer> {
+  const local = email.split('@')[0] ?? email;
+  const name = local.replace(/[._-]+/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase()).trim() || 'Me';
+  const colors = ['#3b6fd8', '#c2467a', '#2e9e6b', '#8a5cd6'];
+  const count = (await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM members'))?.n ?? 0;
+  await run(db, 'INSERT OR IGNORE INTO members (email, name, color) VALUES (?, ?, ?)', email, name, colors[count % colors.length]);
+  const member = await first<Viewer>(db, 'SELECT id AS memberId, email, name FROM members WHERE email = ?', email);
+  if (!member) throw new Error('Could not create member');
+  await run(
+    db,
+    `INSERT OR IGNORE INTO categories (section_id, name, kind, fun_member_id, sort)
+     SELECT id, ?, 'expense', ?, ? FROM sections WHERE name = 'Fun Money'`,
+    `${name}'s Fun Money`,
+    member.memberId,
+    member.memberId,
+  );
+  return member;
+}
