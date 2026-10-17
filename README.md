@@ -25,6 +25,6 @@ tests        Vitest, including a golden month from the original spreadsheet
 | `npm run dev` | Local app + API with a local database |
 | `npm test` | Unit tests |
 | `npm run typecheck` | TypeScript across client, worker and tests |
-| `npm run deploy` | Build and deploy to Cloudflare |
+| `npm run deploy` | Build, apply new database migrations, and deploy to Cloudflare |
 | `npm run db:migrate:local` / `:remote` | Apply database migrations |
 | `npm run backup` | Save a full SQL copy of the production database |
