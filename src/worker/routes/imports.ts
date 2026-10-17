@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
-import { csvImportKey } from '../../shared/dedupe';
+import { addDays, type ISODate } from '../../shared/dates';
+import { csvImportKey, findImportedTwin } from '../../shared/dedupe';
 import type { AppEnv } from '../env';
-import { all, batchAll, first, run, stmt } from '../lib/db';
+import { all, batchAll, chunk, first, placeholders, run, stmt } from '../lib/db';
 import { badRequest, notFound, oneOf, optInt, optStr, paramId, readBody, reqDate, reqInt, reqStr } from '../lib/http';
 import { loadIngestContext } from '../services/context';
 import { insertTransactions, type IncomingTxn } from '../services/ingest';
@@ -81,18 +82,74 @@ imports.post('/import/batches/:id/rows', async (c) => {
     return { ...base, importHash: csvImportKey(batch.accountId, { date, amountCents, name, occurrence }) };
   });
 
-  const result = await insertTransactions(db, await loadIngestContext(db), rows);
+  const fresh = await skipSyncedTwins(db, batch.accountId, rows);
+  const result = await insertTransactions(db, await loadIngestContext(db), fresh);
+  const duplicates = result.duplicates + rows.length - fresh.length;
   await run(
     db,
     `UPDATE import_batches SET row_count = row_count + ?, inserted_count = inserted_count + ?,
        duplicate_count = duplicate_count + ? WHERE id = ?`,
     rows.length,
     result.inserted,
-    result.duplicates,
+    duplicates,
     batchId,
   );
-  return c.json({ inserted: result.inserted, duplicates: result.duplicates });
+  return c.json({ inserted: result.inserted, duplicates });
 });
+
+/**
+ * Leaves out file rows the bank sync already brought in (same account and amount, within
+ * 2 days). The synced row takes the file row's FITID or CSV key, so re-importing the
+ * same file skips it as an exact duplicate.
+ */
+async function skipSyncedTwins(db: D1Database, accountId: number, rows: readonly IncomingTxn[]): Promise<IncomingTxn[]> {
+  if (!rows.length) return [];
+  const keyOf = (r: IncomingTxn) => r.importFitid ?? r.importHash ?? '';
+  // Rows already in (from this file before) are left to the insert, which skips them.
+  const known = new Set<string>();
+  for (const group of chunk([...new Set(rows.map(keyOf))], 45)) {
+    const found = await all<{ key: string }>(
+      db,
+      `SELECT COALESCE(import_fitid, import_hash) AS key FROM transactions
+        WHERE account_id = ? AND (import_fitid IN (${placeholders(group.length)}) OR import_hash IN (${placeholders(group.length)}))`,
+      accountId,
+      ...group,
+      ...group,
+    );
+    for (const r of found) known.add(r.key);
+  }
+  const candidates = rows.filter((r) => {
+    if (known.has(keyOf(r))) return false;
+    known.add(keyOf(r)); // a key repeated within the file is matched at most once
+    return true;
+  });
+  if (!candidates.length) return [...rows];
+
+  const dates = candidates.map((r) => r.date).sort();
+  // plaid_txn_id is left out on purpose: findImportedTwin skips rows that have one.
+  const synced = await all<{ id: number; accountId: number; date: ISODate; amountCents: number }>(
+    db,
+    `SELECT id, account_id AS accountId, date, amount_cents AS amountCents FROM transactions
+      WHERE account_id = ? AND source = 'plaid' AND deleted_at IS NULL
+        AND import_fitid IS NULL AND import_hash IS NULL AND date BETWEEN ? AND ?`,
+    accountId,
+    addDays(dates[0] as ISODate, -2),
+    addDays(dates[dates.length - 1] as ISODate, 2),
+  );
+
+  const claimed = new Set<number>();
+  const stamps: D1PreparedStatement[] = [];
+  const skipped = new Set<IncomingTxn>();
+  for (const row of candidates) {
+    const twin = findImportedTwin(row, synced, 2, claimed);
+    if (twin === null) continue;
+    claimed.add(twin);
+    skipped.add(row);
+    stamps.push(stmt(db, 'UPDATE transactions SET import_fitid = ?, import_hash = ? WHERE id = ?', row.importFitid, row.importHash, twin));
+  }
+  await batchAll(db, stamps);
+  return rows.filter((r) => !skipped.has(r));
+}
 
 imports.post('/import/batches/:id/finish', async (c) => {
   const db = c.env.DB;

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Family budget app: Cloudflare Worker + D1 + React PWA",
   "engines": {
-    "node": ">=22.12"
+    "node": ">=22.13"
   },
   "scripts": {
     "dev": "vite dev",

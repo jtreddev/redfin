@@ -208,4 +208,5 @@ export interface SyncStepResult {
   status: 'ok' | 'login_required' | 'error' | 'idle';
   error?: string;
   note?: string;
+  busy?: boolean;
 }

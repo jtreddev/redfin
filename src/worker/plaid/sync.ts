@@ -39,6 +39,10 @@ const ITEM_SELECT = `SELECT id, item_id AS itemId, institution_name AS instituti
 
 const LOGIN_ERRORS = new Set(['ITEM_LOGIN_REQUIRED', 'PENDING_EXPIRATION', 'PENDING_DISCONNECT', 'ITEM_LOCKED', 'USER_SETUP_REQUIRED', 'ACCESS_NOT_GRANTED']);
 const PAGE_SIZE = 100;
+const ERROR_BACKOFF_MS = 3_600_000;
+const ITEM_ERROR_BACKOFF_MS = 6 * 3_600_000;
+/** Longer than a step takes; a crashed step's lease simply runs out. */
+const LOCK_MS = 2 * 60_000;
 
 export function accountTypeFor(account: PlaidAccount): { type: string; isCash: boolean } {
   switch (account.type) {
@@ -139,6 +143,8 @@ export interface SyncStepResult {
   error?: string;
   /** Friendly heads-up, e.g. history still loading. */
   note?: string;
+  /** Another sync is working on this bank right now; try again shortly. */
+  busy?: boolean;
 }
 
 async function pickItem(
@@ -149,35 +155,60 @@ async function pickItem(
 ): Promise<ItemRow | null> {
   if (itemId) return first<ItemRow>(db, `${ITEM_SELECT} WHERE id = ?`, itemId);
   const exclude = excludeIds.length ? `AND id NOT IN (${placeholders(excludeIds.length)})` : '';
+  const now = nowIso();
   if (since) {
     // "Sync now": each bank once since the button was pressed, plus any page still in progress.
+    // Banks in error are retried too; only a sign-in needs you.
     return first<ItemRow>(
       db,
       `${ITEM_SELECT}
-        WHERE status = 'ok' AND (has_more = 1 OR last_attempt_at IS NULL OR last_attempt_at < ?) ${exclude}
+        WHERE status != 'login_required' AND (sync_lock_until IS NULL OR sync_lock_until < ?)
+          AND (has_more = 1 OR last_attempt_at IS NULL OR last_attempt_at < ?) ${exclude}
         ORDER BY has_more DESC, COALESCE(last_attempt_at, '') ASC
         LIMIT 1`,
+      now,
       since,
       ...excludeIds,
     );
   }
   // Cron: anything mid-page, still loading history, or not synced in 6 hours.
+  // After a failed try a bank waits an hour (six if the bank reported an error with the
+  // connection), so it can't hold up the others but recovers on its own once the problem clears.
   return first<ItemRow>(
     db,
     `${ITEM_SELECT}
-      WHERE status = 'ok'
+      WHERE status != 'login_required' AND (sync_lock_until IS NULL OR sync_lock_until < ?)
         AND (has_more = 1 OR history_complete = 0 OR last_synced_at IS NULL OR last_synced_at < ?)
+        AND (error_code IS NULL OR last_attempt_at IS NULL
+             OR last_attempt_at < CASE WHEN status = 'error' THEN ? ELSE ? END)
         ${exclude}
       ORDER BY has_more DESC, COALESCE(last_synced_at, '') ASC
       LIMIT 1`,
+    now,
     new Date(Date.now() - 6 * 3_600_000).toISOString(),
+    new Date(Date.now() - ITEM_ERROR_BACKOFF_MS).toISOString(),
+    new Date(Date.now() - ERROR_BACKOFF_MS).toISOString(),
     ...excludeIds,
   );
 }
 
+/** Takes the bank's sync lease; false if another sync holds it. */
+async function lockItem(db: D1Database, id: number): Promise<boolean> {
+  const until = new Date(Date.now() + LOCK_MS).toISOString();
+  const row = await first<{ id: number }>(
+    db,
+    'UPDATE plaid_items SET sync_lock_until = ? WHERE id = ? AND (sync_lock_until IS NULL OR sync_lock_until < ?) RETURNING id',
+    until,
+    id,
+    nowIso(),
+  );
+  return row !== null;
+}
+
 /**
  * One small unit of sync work: a single page of up to 100 transactions for one bank.
- * Safe to repeat; the cursor is saved only after the page is stored. Cron and the
+ * Safe to repeat: the cursor is saved only after the page is stored, and replaying a stored
+ * page (after a failure part way, or a pagination restart) changes nothing. Cron and the
  * "Sync now" button both call this until it reports done.
  */
 export async function syncStep(
@@ -192,7 +223,18 @@ export async function syncStep(
   const db = env.DB;
   const item = await pickItem(db, itemId, since, excludeIds);
   if (!item) return { itemId: null, institutionName: null, done: true, added: 0, modified: 0, removed: 0, status: 'idle' };
+  if (!(await lockItem(db, item.id))) {
+    return { itemId: item.id, institutionName: item.institutionName, done: false, added: 0, modified: 0, removed: 0, status: 'ok', busy: true };
+  }
+  try {
+    return await syncItem(env, item, trigger, Boolean(itemId));
+  } finally {
+    await run(db, 'UPDATE plaid_items SET sync_lock_until = NULL WHERE id = ?', item.id);
+  }
+}
 
+async function syncItem(env: Env, item: ItemRow, trigger: 'cron' | 'manual' | 'link', single: boolean): Promise<SyncStepResult> {
+  const db = env.DB;
   const now = nowIso();
   const runRow = await first<{ id: number }>(
     db,
@@ -272,7 +314,7 @@ export async function syncStep(
       : !page.has_more && !allHistoryIn
         ? 'Recent transactions are in; older history is still loading and will sync automatically.'
         : undefined;
-    return { ...base, done: !page.has_more && Boolean(itemId), added, modified, removed, status: 'ok', ...(note ? { note } : {}) };
+    return { ...base, done: !page.has_more && single, added, modified, removed, status: 'ok', ...(note ? { note } : {}) };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const code = error instanceof PlaidError ? error.code : 'INTERNAL';
@@ -331,8 +373,19 @@ async function applyAdded(
     : [];
   const pendingById = new Map(pendingRows.map((r) => [r.plaidTxnId, r]));
 
+  // Already stored, e.g. a page replayed after a restart or a retry. The Plaid id is unique even on deleted rows.
+  const stored = new Set(
+    (
+      await allByIds<{ plaidTxnId: string }>(
+        db,
+        (list) => `SELECT plaid_txn_id AS plaidTxnId FROM transactions WHERE plaid_txn_id IN (${list})`,
+        added.map((t) => t.transaction_id),
+      )
+    ).map((r) => r.plaidTxnId),
+  );
+
   // File-imported rows the synced transactions duplicate.
-  const posted = added.filter((t) => !t.pending && !t.pending_transaction_id);
+  const posted = added.filter((t) => !t.pending && !stored.has(t.transaction_id));
   const accountIds = [...new Set(posted.map((t) => accountIdFor.get(t.account_id)).filter((id): id is number => id !== undefined))];
   const dates = posted.map((t) => t.date).sort();
   const importRows = accountIds.length && dates.length
@@ -352,12 +405,52 @@ async function applyAdded(
   const toInsert: IncomingTxn[] = [];
   const followUps: D1PreparedStatement[] = [];
 
+  const mergeInto = (twin: number, t: PlaidTransaction, incoming: IncomingTxn) => {
+    claimed.add(twin);
+    mergeStatements.push(
+      stmt(
+        db,
+        `UPDATE transactions SET plaid_txn_id = ?, source = 'plaid', merchant_name = ?, plaid_category = ?,
+           date = ?, pending = 0, updated_at = ? WHERE id = ?`,
+        t.transaction_id,
+        t.merchant_name,
+        incoming.plaidCategory,
+        t.date,
+        now,
+        twin,
+      ),
+    );
+  };
+
   for (const t of added) {
     const accountId = accountIdFor.get(t.account_id);
     if (accountId === undefined) continue;
     const incoming = toIncoming(t, accountId);
 
     const pending = t.pending_transaction_id ? pendingById.get(t.pending_transaction_id) : undefined;
+    const pendingTwin = pending && !t.pending && !stored.has(t.transaction_id) ? findImportedTwin(incoming, importRows, 2, claimed) : null;
+    if (pending && pendingTwin !== null) {
+      // Imported from a file while it was still pending (often with a different amount, like a tip):
+      // the imported row becomes the synced one, keeping notes and a category you picked on either.
+      mergeInto(pendingTwin, t, incoming);
+      followUps.push(stmt(db, 'UPDATE transactions SET notes = COALESCE(notes, ?) WHERE id = ?', pending.notes, pendingTwin));
+      if (pending.categorySource === 'user') {
+        followUps.push(
+          stmt(
+            db,
+            `UPDATE transactions SET category_id = ?, category_source = 'user', kid_id = ?, private_member_id = ?, is_ignored = ?
+              WHERE id = ? AND COALESCE(category_source, '') != 'user'`,
+            pending.categoryId,
+            pending.kidId,
+            pending.privateMemberId,
+            pending.isIgnored,
+            pendingTwin,
+          ),
+        );
+      }
+      followUps.push(stmt(db, 'DELETE FROM transactions WHERE id = ?', pending.id));
+      continue;
+    }
     if (pending) {
       incoming.carry = {
         categoryId: pending.categoryId,
@@ -379,9 +472,11 @@ async function applyAdded(
             db,
             `INSERT INTO splits (transaction_id, category_id, kid_id, amount_cents, notes)
              SELECT (SELECT id FROM transactions WHERE plaid_txn_id = ?), category_id, kid_id, amount_cents, notes
-               FROM splits WHERE transaction_id = ?`,
+               FROM splits WHERE transaction_id = ?
+                AND NOT EXISTS (SELECT 1 FROM splits WHERE transaction_id = (SELECT id FROM transactions WHERE plaid_txn_id = ?))`,
             t.transaction_id,
             pending.id,
+            t.transaction_id,
           ),
           stmt(db, 'UPDATE transactions SET is_split = 1 WHERE plaid_txn_id = ?', t.transaction_id),
         );
@@ -391,23 +486,11 @@ async function applyAdded(
       continue;
     }
 
+    if (stored.has(t.transaction_id)) continue;
     if (!t.pending) {
       const twin = findImportedTwin(incoming, importRows, 2, claimed);
       if (twin !== null) {
-        claimed.add(twin);
-        mergeStatements.push(
-          stmt(
-            db,
-            `UPDATE transactions SET plaid_txn_id = ?, source = 'plaid', merchant_name = ?, plaid_category = ?,
-               date = ?, pending = 0, updated_at = ? WHERE id = ?`,
-            t.transaction_id,
-            t.merchant_name,
-            incoming.plaidCategory,
-            t.date,
-            now,
-            twin,
-          ),
-        );
+        mergeInto(twin, t, incoming);
         continue;
       }
     }

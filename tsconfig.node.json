@@ -6,7 +6,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "moduleDetection": "force",
-    "types": ["node"],
+    "types": ["node", "@cloudflare/workers-types"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,

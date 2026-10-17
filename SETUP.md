@@ -4,7 +4,7 @@ Everything here runs on free tiers: Cloudflare (hosting, database, login) and Pl
 
 ## 1. Run it on your computer first
 
-Needs Node.js 22.12 or newer (`node -v`). Works on Linux, macOS and Windows.
+Needs Node.js 22.13 or newer (`node -v`). Works on Linux, macOS and Windows.
 
 ```bash
 cd ~/redfin   # wherever you cloned it

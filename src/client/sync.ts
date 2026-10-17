@@ -1,6 +1,9 @@
 import { post } from './api';
 import type { SyncStepResult } from './types';
 
+/** A bank another sync is already working on frees up within seconds. */
+const waitIfBusy = (step: SyncStepResult) => (step.busy ? new Promise((resolve) => setTimeout(resolve, 2000)) : undefined);
+
 export interface SyncSummary {
   added: number;
   errors: string[];
@@ -19,6 +22,7 @@ export async function syncAllBanks(onStep?: (step: SyncStepResult) => void): Pro
     onStep?.(step);
     added += step.added;
     if (step.status === 'idle' || step.itemId === null) break;
+    await waitIfBusy(step);
     if (step.error) {
       errors.push(`${step.institutionName ?? 'A bank'}: ${step.error}`);
       excludeIds.push(step.itemId);
@@ -38,6 +42,7 @@ export async function syncOneBank(itemId: number, onStep?: (step: SyncStepResult
     if (step.note) notes.push(step.note);
     if (step.error) return { added, errors: [step.error], notes };
     if (step.done) break;
+    await waitIfBusy(step);
   }
   return { added, errors: [], notes };
 }
