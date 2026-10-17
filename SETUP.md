@@ -59,7 +59,10 @@ npx wrangler d1 create fin
    npx wrangler secret put TOKEN_ENC_KEY      # a NEW random key; save it in your password manager
    npx wrangler secret put PLAID_CLIENT_ID
    npx wrangler secret put PLAID_SECRET
+   npx wrangler secret put ALLOWED_EMAILS     # both your emails, comma-separated: you@example.com,partner@example.com
    ```
+
+   `ALLOWED_EMAILS` is a second lock behind Cloudflare Access: anyone not on it is refused even if the Access policy is ever loosened. Without it, only people who have already signed in once can get in.
 
    Never set `DEV_AUTH_BYPASS` online; the app refuses to run if you do.
 5. `npm run deploy` again.

@@ -43,7 +43,7 @@ exportRoutes.get('/export/json', async (c) => {
       q('SELECT * FROM goals'),
       q('SELECT * FROM debts'),
       q('SELECT id, month, status, notes, items_json, snapshot_json, agreed_by_json, completed_at FROM checkins'),
-      q('SELECT * FROM fun_adjustments'),
+      q('SELECT * FROM fun_adjustments WHERE member_id = ?', viewerId),
       q('SELECT * FROM month_settings'),
     ]);
   const body = JSON.stringify({

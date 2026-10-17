@@ -71,14 +71,7 @@ rules.post('/rules', async (c) => {
   const ignore = optBool(body.ignore, 'ignore') ?? false;
   if (categoryId === null && kidId === null && !isPrivate && !ignore) throw badRequest('Pick what the rule should do.');
 
-  if (categoryId !== null) {
-    const category = await first<{ funMemberId: number | null }>(db, 'SELECT fun_member_id AS funMemberId FROM categories WHERE id = ?', categoryId);
-    if (!category) throw badRequest('Unknown category');
-    if (category.funMemberId !== null && category.funMemberId !== viewer.memberId) {
-      throw new HttpError(403, 'That’s your partner’s fun money category.');
-    }
-  }
-  const privateRule = isPrivate || (categoryId !== null && (await first(db, 'SELECT 1 FROM categories WHERE id = ? AND fun_member_id = ?', categoryId, viewer.memberId)) !== null);
+  const privateRule = (categoryId !== null && (await isOwnFunCategory(db, categoryId, viewer.memberId))) || isPrivate;
 
   const row = await first<{ id: number }>(
     db,
@@ -97,6 +90,16 @@ rules.post('/rules', async (c) => {
   return c.json({ id: row?.id, updated }, 201);
 });
 
+/** True for your own fun money category; refuses your partner's. A rule filing into fun money is private. */
+async function isOwnFunCategory(db: D1Database, categoryId: number, viewerId: number): Promise<boolean> {
+  const category = await first<{ funMemberId: number | null }>(db, 'SELECT fun_member_id AS funMemberId FROM categories WHERE id = ?', categoryId);
+  if (!category) throw badRequest('Unknown category');
+  if (category.funMemberId !== null && category.funMemberId !== viewerId) {
+    throw new HttpError(403, 'That’s your partner’s fun money category.');
+  }
+  return category.funMemberId === viewerId;
+}
+
 async function ownedRule(db: D1Database, id: number, viewerId: number) {
   const rule = await first<{ id: number; matchText: string; ownerMemberId: number | null }>(
     db,
@@ -109,14 +112,19 @@ async function ownedRule(db: D1Database, id: number, viewerId: number) {
 
 rules.patch('/rules/:id', async (c) => {
   const db = c.env.DB;
-  const rule = await ownedRule(db, paramId(c), c.get('viewer').memberId);
+  const viewerId = c.get('viewer').memberId;
+  const rule = await ownedRule(db, paramId(c), viewerId);
   const body = await readBody(c);
   const ignore = optBool(body.ignore, 'ignore');
+  const categoryId = optInt(body.categoryId, 'categoryId', { min: 1 });
+  const makePrivate = typeof categoryId === 'number' && (await isOwnFunCategory(db, categoryId, viewerId));
   const updates = new Updates()
     .set('match_field', oneOf(body.matchField, 'matchField', MATCH_FIELDS))
     .set('match_text', body.matchText === undefined ? undefined : reqStr(body.matchText, 'matchText', 120))
     .set('account_id', optInt(body.accountId, 'accountId', { min: 1 }))
-    .set('category_id', optInt(body.categoryId, 'categoryId', { min: 1 }))
+    .set('category_id', categoryId)
+    .set('private_member_id', makePrivate ? viewerId : undefined)
+    .set('owner_member_id', makePrivate ? viewerId : undefined)
     .set('kid_id', optInt(body.kidId, 'kidId', { min: 1 }))
     .set('ignore_txn', ignore === undefined ? undefined : ignore ? 1 : 0);
   if (updates.empty) throw badRequest('Nothing to update');
@@ -138,10 +146,22 @@ rules.delete('/rules/:id', async (c) => {
 rules.post('/rules/reorder', async (c) => {
   const db = c.env.DB;
   const body = await readBody(c);
-  if (!Array.isArray(body.ids) || !body.ids.every((id) => Number.isInteger(id))) throw badRequest('ids must be a list of rule ids');
+  if (!Array.isArray(body.ids) || body.ids.length > 1000 || !body.ids.every((id) => Number.isInteger(id))) {
+    throw badRequest('ids must be a list of rule ids');
+  }
+  const viewerId = c.get('viewer').memberId;
   await batchAll(
     db,
-    (body.ids as number[]).map((id, i) => stmt(db, 'UPDATE rules SET position = ?, updated_at = ? WHERE id = ?', (i + 1) * 10, nowIso(), id)),
+    (body.ids as number[]).map((id, i) =>
+      stmt(
+        db,
+        'UPDATE rules SET position = ?, updated_at = ? WHERE id = ? AND (owner_member_id IS NULL OR owner_member_id = ?)',
+        (i + 1) * 10,
+        nowIso(),
+        id,
+        viewerId,
+      ),
+    ),
   );
   return c.json({ ok: true });
 });

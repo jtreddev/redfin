@@ -316,8 +316,10 @@ async function syncItem(env: Env, item: ItemRow, trigger: 'cron' | 'manual' | 'l
         : undefined;
     return { ...base, done: !page.has_more && single, added, modified, removed, status: 'ok', ...(note ? { note } : {}) };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
     const code = error instanceof PlaidError ? error.code : 'INTERNAL';
+    // Plaid's messages are written for people; anything else stays in the logs.
+    if (!(error instanceof PlaidError)) console.error(error);
+    const message = error instanceof PlaidError ? error.message : 'Something went wrong while syncing. It will try again on its own.';
     const status = LOGIN_ERRORS.has(code) ? 'login_required' : error instanceof PlaidError && error.type === 'ITEM_ERROR' ? 'error' : null;
     await run(
       db,

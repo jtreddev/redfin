@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import worker from '../src/worker/index';
 import { syncStep } from '../src/worker/plaid/sync';
 import type { Env } from '../src/worker/env';
+import { api } from './helpers/api';
 import { TestD1 } from './helpers/d1';
 import { page, plaidTxn, seedBank, stubPlaid, testEnv } from './helpers/plaid';
 
@@ -191,19 +191,15 @@ describe('syncStep', () => {
 });
 
 describe('file import into a bank-synced account', () => {
-  const api = async (path: string, body: unknown) => {
-    const response = await worker.fetch!(
-      new Request(`http://localhost/api${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) as never,
-      { ...env, DEV_AUTH_BYPASS: 'you@example.com' },
-      {} as ExecutionContext,
-    );
+  const post = async (path: string, body: unknown) => {
+    const response = await api(env, 'POST', path, body);
     expect(response.status).toBeLessThan(300);
     return response.json() as Promise<Record<string, number>>;
   };
 
   const importCsv = async (accountId: number, rows: { date: string; amountCents: number; name: string; occurrence?: number }[]) => {
-    const { id } = await api('/import/batches', { accountId, format: 'csv' });
-    return api(`/import/batches/${id}/rows`, { rows });
+    const { id } = await post('/import/batches', { accountId, format: 'csv' });
+    return post(`/import/batches/${id}/rows`, { rows });
   };
 
   it('skips rows the bank already synced, and stays skipped on re-import', async () => {

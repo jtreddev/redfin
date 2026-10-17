@@ -69,7 +69,17 @@ function MoreMenu() {
           </button>
         ))}
       </div>
-      {me.devMode && <DevUserSwitcher />}
+      {me.devMode ? (
+        <DevUserSwitcher />
+      ) : (
+        <Card>
+          <p className="muted small">Signed in as {me.viewer.email}</p>
+          {/* Ends the Cloudflare Access session, so a shared device stops showing your private fun money. */}
+          <Button variant="secondary" onClick={() => window.location.assign('/cdn-cgi/access/logout')}>
+            Sign out
+          </Button>
+        </Card>
+      )}
     </div>
   );
 }

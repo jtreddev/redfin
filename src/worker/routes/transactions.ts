@@ -371,12 +371,15 @@ transactions.delete('/transactions/:id', async (c) => {
   return c.json({ ok: true, deleted: true });
 });
 
+const MAX_SPLITS = 20;
+
 transactions.put('/transactions/:id/splits', async (c) => {
   const db = c.env.DB;
   const viewer = c.get('viewer');
   const row = await visibleTxn(db, paramId(c), viewer.memberId);
   const body = await readBody(c);
-  if (!Array.isArray(body.splits)) throw badRequest('splits must be a list');
+  // Small enough that the whole change saves in one atomic batch.
+  if (!Array.isArray(body.splits) || body.splits.length > MAX_SPLITS) throw badRequest(`splits must be a list of at most ${MAX_SPLITS}`);
   const ctx = await loadIngestContext(db);
 
   const splits = body.splits.map((raw, i) => {

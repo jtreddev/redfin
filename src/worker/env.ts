@@ -14,6 +14,8 @@ export interface Env {
   ACCESS_TEAM_DOMAIN?: string;
   /** Cloudflare Access application audience tag. */
   ACCESS_AUD?: string;
+  /** Comma-separated emails allowed in (a secret). Unset: only people already in the household. */
+  ALLOWED_EMAILS?: string;
   /** Local development only: act as this email without Cloudflare Access. */
   DEV_AUTH_BYPASS?: string;
 }

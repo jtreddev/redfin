@@ -57,8 +57,14 @@ export const requireViewer: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (origin && origin !== url.origin) return c.json({ error: 'Cross-site request blocked' }, 403);
   }
 
-  const viewer = (await first<Viewer>(env.DB, 'SELECT id AS memberId, email, name FROM members WHERE email = ?', email)) ??
-    (await createMember(env.DB, email));
+  // Access decides who reaches the app; this list is a second lock in case that policy is ever loosened.
+  // Without a list, only people already in the household get in.
+  const allowed = env.ALLOWED_EMAILS?.split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+  const existing = await first<Viewer>(env.DB, 'SELECT id AS memberId, email, name FROM members WHERE email = ?', email);
+  if (!env.DEV_AUTH_BYPASS && (allowed ? !allowed.includes(email) : !existing)) {
+    return c.json({ error: 'This email isn’t part of this household. Ask to be added to ALLOWED_EMAILS.' }, 403);
+  }
+  const viewer = existing ?? (await createMember(env.DB, email));
 
   const household = await first<HouseholdSettings>(
     env.DB,

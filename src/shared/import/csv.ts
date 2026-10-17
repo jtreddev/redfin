@@ -51,7 +51,9 @@ export function toCsv(rows: readonly (readonly (string | number | null | undefin
     .map((row) =>
       row
         .map((value) => {
-          const text = value == null ? '' : String(value);
+          let text = value == null ? '' : String(value);
+          // Spreadsheets run cells starting with = + - @ as formulas (bank text can be written by anyone); plain numbers stay.
+          if (/^[=+\-@\t\r]/.test(text) && !/^[-+]?\d+(\.\d+)?$/.test(text)) text = `'${text}`;
           return /[",\r\n]/.test(text) || /^\s|\s$/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
         })
         .join(','),

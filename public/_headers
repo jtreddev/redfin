@@ -1,0 +1,10 @@
+# Security headers for the app's pages and files (API responses set their own in src/worker/index.ts).
+# Plaid Link needs its script and frame from cdn.plaid.com and inline scripts/styles:
+# https://plaid.com/docs/link/web/#csp-directives
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.plaid.com/link/v2/stable/link-initialize.js; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.plaid.com; connect-src 'self' https://production.plaid.com https://sandbox.plaid.com; frame-src https://cdn.plaid.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: same-origin
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()

@@ -28,6 +28,11 @@ app.onError((error, c) => {
 app.use('/api/*', async (c, next) => {
   await next();
   c.header('Cache-Control', 'no-store');
+  // App pages get theirs from public/_headers.
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+  c.header('Referrer-Policy', 'same-origin');
+  c.header('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
 });
 app.use('/api/*', requireViewer);
 

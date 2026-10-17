@@ -436,7 +436,7 @@ planning.get('/fun', async (c) => {
 
 planning.post('/fun/adjustments', async (c) => {
   const body = await readBody(c);
-  const memberId = optInt(body.memberId, 'memberId', { min: 1 }) ?? c.get('viewer').memberId;
+  const memberId = c.get('viewer').memberId;
   const amountCents = reqInt(body.amountCents, 'amountCents');
   if (amountCents === 0) throw badRequest('Amount can’t be zero');
   await run(
@@ -489,7 +489,8 @@ async function loadCheckin(db: D1Database, month: MonthKey): Promise<CheckinRow>
   return row;
 }
 
-async function checkinData(db: D1Database, month: MonthKey, today: ISODate, viewerId: number) {
+/** viewerId null: shared data only, for the snapshot both of you see once the check-in is finished. */
+async function checkinData(db: D1Database, month: MonthKey, today: ISODate, viewerId: number | null) {
   const data = await loadMonth(db, month);
   const lines: CheckinLine[] = data.rows
     .filter((r) => r.kind !== 'transfer' && (r.budgetCents > 0 || r.actualCents > 0))
@@ -616,7 +617,7 @@ planning.post('/checkins/:month/complete', async (c) => {
   if (row.status === 'complete') throw new HttpError(409, 'This check-in is already finished.');
   if (row.status !== 'agreed') throw new HttpError(409, 'You both need to tap Agree first.');
 
-  const data = await checkinData(db, month, c.get('today'), viewer.memberId);
+  const data = await checkinData(db, month, c.get('today'), null);
   const decisions = sanitizeDecisions((JSON.parse(row.itemsJson) as Record<string, unknown>).decisions);
   const nextMonth = data.nextMonth;
   const now = nowIso();
