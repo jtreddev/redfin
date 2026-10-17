@@ -76,6 +76,18 @@ describe('Cloudflare Access sign-in', () => {
     expect(db.rows('SELECT email FROM members')).toEqual([{ email: YOU }]);
   });
 
+  it('accepts the team domain and AUD as pasted (no https://, trailing slash, spaces)', async () => {
+    const pasted = { ACCESS_TEAM_DOMAIN: ' family.cloudflareaccess.com/ ', ACCESS_AUD: ` ${AUD}\n`, ALLOWED_EMAILS: YOU };
+    expect((await asAccess(YOU, pasted)).status).toBe(200);
+  });
+
+  it('refuses a token for a different Access application', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect((await asAccess(YOU, { ACCESS_AUD: 'other-aud', ALLOWED_EMAILS: YOU })).status).toBe(401);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('Access sign-in failed'), expect.anything());
+    log.mockRestore();
+  });
+
   it('sends security headers on API responses', async () => {
     const response = await asAccess(YOU, { ALLOWED_EMAILS: YOU });
     expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');

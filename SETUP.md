@@ -26,7 +26,7 @@ Your first Plaid account only offered paid plans, so it isn't eligible for the f
 1. Go to **dashboard.plaid.com/signup** and create a **new** team (your own name is fine as the company).
 2. **Do not** click anything like "Request production access" or "Get production". That starts the paid Pay-as-you-go application, and an account that has applied can no longer get the Trial.
 3. Look for the **Trial** plan: free, no card, 10 bank logins, includes Transactions, Liabilities and Investments. If you still only see paid plans, open a support ticket asking to be put on the Trial plan for personal use.
-4. **Developers › Keys**: copy the `client_id` and the **Sandbox** secret into `.dev.vars` (`PLAID_CLIENT_ID`, `PLAID_SECRET`). Keep `PLAID_ENV` as `sandbox` in `wrangler.jsonc` while testing.
+4. **Developers › Keys**: copy the `client_id` and the **Sandbox** secret into `.dev.vars` (`PLAID_CLIENT_ID`, `PLAID_SECRET`). Keep `PLAID_ENV=sandbox` in `.dev.vars`; locally you always test against Sandbox.
 5. Restart `npm run dev`, then **More › Accounts & banks › Connect a bank**. In Sandbox, pick any bank and sign in with `user_good` / `pass_good`.
 
 You'll need 3–4 of the 10 free logins: Chime, Capital One, Fidelity, plus the Fidelity Rewards Visa (issued by Elan) if you have it.
@@ -71,10 +71,17 @@ npx wrangler d1 create fin
 ## 4. Switch Plaid to your real banks
 
 1. In Plaid **Developers › API › Allowed redirect URIs**, add `https://fin.<your-subdomain>.workers.dev/oauth-return`.
-2. In `wrangler.jsonc`, set `PLAID_ENV` to `production` and add `"PLAID_REDIRECT_URI": "https://fin.<your-subdomain>.workers.dev/oauth-return"` under `vars`.
-3. `npx wrangler secret put PLAID_SECRET` with the **Production** secret, then `npm run deploy`.
-4. **From a computer browser**, open the app › More › Accounts & banks › **Connect a bank**, once each for Chime, Capital One, and Fidelity. Chime and Capital One send you to their own sites to approve access. It pulls up to 2 years of history.
-5. After the first sync:
+2. Set the **Production** secret and the redirect address as secrets. The redirect address contains your workers.dev name, so it stays out of the repo:
+
+   ```bash
+   npx wrangler secret put PLAID_SECRET          # the Production secret
+   npx wrangler secret put PLAID_REDIRECT_URI    # https://fin.<your-subdomain>.workers.dev/oauth-return
+   ```
+
+3. `wrangler.jsonc` already has `PLAID_ENV` set to `production`. Run `npm run deploy`.
+4. In More › Accounts & banks, remove any Sandbox banks; they don't work in production.
+5. **From a computer browser**, open the app › More › Accounts & banks › **Connect a bank**, once each for Chime, Capital One, and Fidelity. Chime and Capital One send you to their own sites to approve access. It pulls up to 2 years of history.
+6. After the first sync:
    - Look at a few Fidelity transactions. Core-fund sweep rows ("REDEMPTION FROM CORE ACCOUNT…") should show as left out. If others slip through, add an ignore rule (More › Rules).
    - Open a paycheck deposit, copy a distinctive word from its description (like the employer name) into **More › Income & paydays › Words in the deposit description**.
    - **Plan › Bills › Find them** to detect subscriptions and bills; confirm the real ones.

@@ -24,10 +24,12 @@
     "crons": ["*/15 10-13 * * *"]
   },
   "vars": {
-    "PLAID_ENV": "sandbox"
+    "PLAID_ENV": "production"
   },
   "observability": { "enabled": true }
   // Secrets (set with `npx wrangler secret put NAME`, or .dev.vars locally):
   //   PLAID_CLIENT_ID, PLAID_SECRET, TOKEN_ENC_KEY, ALLOWED_EMAILS (comma-separated),
-  //   ACCESS_TEAM_DOMAIN (https://<team>.cloudflareaccess.com), ACCESS_AUD
+  //   ACCESS_TEAM_DOMAIN (https://<team>.cloudflareaccess.com), ACCESS_AUD,
+  //   PLAID_REDIRECT_URI (https://fin.<your-subdomain>.workers.dev/oauth-return)
+  // Local dev uses Plaid Sandbox: PLAID_ENV=sandbox in .dev.vars overrides the setting above.
 }

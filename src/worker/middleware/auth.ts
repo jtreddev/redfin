@@ -16,16 +16,28 @@ function jwks(teamDomain: string) {
   return set;
 }
 
+/** Accepts the team domain as pasted: with or without https:// and a trailing slash. */
+function normalizeTeamDomain(value: string) {
+  const domain = value.trim().replace(/\/+$/, '');
+  return /^https?:\/\//i.test(domain) ? domain : `https://${domain}`;
+}
+
 async function emailFromAccess(env: Env, token: string | undefined): Promise<string | null> {
-  if (!token || !env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) return null;
-  const teamDomain = env.ACCESS_TEAM_DOMAIN.replace(/\/+$/, '');
+  if (!env.ACCESS_TEAM_DOMAIN || !env.ACCESS_AUD) return null;
+  if (!token) {
+    console.error('Access sign-in failed: no Cf-Access-Jwt-Assertion header (is Access turned on for this address?)');
+    return null;
+  }
+  const teamDomain = normalizeTeamDomain(env.ACCESS_TEAM_DOMAIN);
   try {
     const { payload } = await jwtVerify(token, jwks(teamDomain), {
       issuer: teamDomain,
-      audience: env.ACCESS_AUD,
+      audience: env.ACCESS_AUD.trim(),
     });
     return typeof payload.email === 'string' ? payload.email.toLowerCase() : null;
-  } catch {
+  } catch (error) {
+    // Shows in `npx wrangler tail`; usually a wrong ACCESS_TEAM_DOMAIN or ACCESS_AUD.
+    console.error(`Access sign-in failed for team ${teamDomain}:`, error instanceof Error ? error.message : error);
     return null;
   }
 }

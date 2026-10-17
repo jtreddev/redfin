@@ -3,6 +3,8 @@
 # Plaid keys from dashboard.plaid.com → Developers → Keys. Use the Sandbox secret locally.
 PLAID_CLIENT_ID=
 PLAID_SECRET=
+# Local dev always uses Sandbox (the deployed app uses production, set in wrangler.jsonc).
+PLAID_ENV=sandbox
 
 # 32 random bytes, base64. Generate with:
 #   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
