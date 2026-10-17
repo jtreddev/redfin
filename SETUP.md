@@ -4,10 +4,12 @@ Everything here runs on free tiers: Cloudflare (hosting, database, login) and Pl
 
 ## 1. Run it on your computer first
 
-```powershell
-cd C:\Users\james\fin
+Needs Node.js 22.12 or newer (`node -v`). Works on Linux, macOS and Windows.
+
+```bash
+cd ~/redfin   # wherever you cloned it
 npm install
-Copy-Item .dev.vars.example .dev.vars
+cp .dev.vars.example .dev.vars
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"   # paste into TOKEN_ENC_KEY in .dev.vars
 npm run db:migrate:local
 npm run dev
@@ -31,15 +33,15 @@ You'll need 3–4 of the 10 free logins: Chime, Capital One, Fidelity, plus the 
 
 ## 3. Put it online (Cloudflare, free)
 
-```powershell
+```bash
 npx wrangler login
 npx wrangler d1 create fin
 ```
 
-1. Copy the `database_id` it prints into `wrangler.jsonc` (replace the zeros).
+1. Copy the `database_id` it prints into `wrangler.jsonc` (replace the existing `database_id`).
 2. Create the database tables and deploy:
 
-   ```powershell
+   ```bash
    npm run db:migrate:remote
    npm run deploy
    ```
@@ -53,7 +55,7 @@ npx wrangler d1 create fin
    - Put them in `wrangler.jsonc` under `vars`: `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`.
 4. Add the secrets (each command prompts for the value):
 
-   ```powershell
+   ```bash
    npx wrangler secret put TOKEN_ENC_KEY      # a NEW random key; save it in your password manager
    npx wrangler secret put PLAID_CLIENT_ID
    npx wrangler secret put PLAID_SECRET
@@ -93,7 +95,7 @@ Open the app URL and sign in with your email (Cloudflare emails you a code).
 
 ## Maintenance
 
-- **Backups:** `npm run backup` saves the whole database to `backups\`. Weekly is good. **More › Export** downloads your data too.
+- **Backups:** `npm run backup` saves the whole database to `backups/`. Weekly is good. **More › Export** downloads your data too.
 - **Bank asks you to sign in again:** Home shows a banner; tap Fix › Reconnect.
 - **Tests:** `npm test` and `npm run typecheck`.
 - **Lost TOKEN_ENC_KEY:** set a new one and reconnect each bank. History stays.
