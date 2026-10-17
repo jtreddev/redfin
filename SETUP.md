@@ -52,7 +52,6 @@ npx wrangler d1 create fin
    - Cloudflare dashboard › **Workers & Pages** › `fin` › **Settings › Domains & Routes**: turn on **Cloudflare Access** for the workers.dev route.
    - In **Zero Trust › Access › Applications**, open that application › **Policies**: one Allow policy with **Emails** = your email and your partner's email.
    - Note the **team domain** (`https://<team>.cloudflareaccess.com`) and the application's **AUD tag**.
-   - Put them in `wrangler.jsonc` under `vars`: `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD`.
 4. Add the secrets (each command prompts for the value):
 
    ```bash
@@ -60,6 +59,8 @@ npx wrangler d1 create fin
    npx wrangler secret put PLAID_CLIENT_ID
    npx wrangler secret put PLAID_SECRET
    npx wrangler secret put ALLOWED_EMAILS     # both your emails, comma-separated: you@example.com,partner@example.com
+   npx wrangler secret put ACCESS_TEAM_DOMAIN # https://<team>.cloudflareaccess.com
+   npx wrangler secret put ACCESS_AUD         # the application's AUD tag
    ```
 
    `ALLOWED_EMAILS` is a second lock behind Cloudflare Access: anyone not on it is refused even if the Access policy is ever loosened. Without it, only people who have already signed in once can get in.

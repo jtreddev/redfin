@@ -24,12 +24,10 @@
     "crons": ["*/15 10-13 * * *"]
   },
   "vars": {
-    "PLAID_ENV": "sandbox",
-    // Cloudflare Access: team domain (https://<team>.cloudflareaccess.com) and the application AUD tag.
-    "ACCESS_TEAM_DOMAIN": "https://<team>.cloudflareaccess.com",
-    "ACCESS_AUD": "<application AUD tag>"
+    "PLAID_ENV": "sandbox"
   },
   "observability": { "enabled": true }
   // Secrets (set with `npx wrangler secret put NAME`, or .dev.vars locally):
-  //   PLAID_CLIENT_ID, PLAID_SECRET, TOKEN_ENC_KEY, ALLOWED_EMAILS (comma-separated)
+  //   PLAID_CLIENT_ID, PLAID_SECRET, TOKEN_ENC_KEY, ALLOWED_EMAILS (comma-separated),
+  //   ACCESS_TEAM_DOMAIN (https://<team>.cloudflareaccess.com), ACCESS_AUD
 }
