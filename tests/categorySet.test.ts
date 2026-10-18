@@ -75,6 +75,8 @@ describe('migration 0003: new category set', () => {
   let customInsuranceId: number;
   let foodMiscId: number;
   let healthMiscId: number;
+  let venmoId: number;
+  let cashGiftsId: number;
 
   beforeAll(() => {
     db.exec("INSERT INTO members (id, email, name) VALUES (1, 'sam@example.com', 'Sam')");
@@ -91,11 +93,15 @@ describe('migration 0003: new category set', () => {
     custom('Food', 'Misc');
     custom('Health', 'Misc');
     custom('Fun Money', 'Hobbies');
+    custom('Transfers', 'Venmo', 'transfer');
+    custom('Transfers', 'Cash Gifts', 'expense');
     boatId = id(db, 'Transportation', 'Boat');
     funId = id(db, 'Fun Money', "Sam's Fun Money");
     customInsuranceId = id(db, 'Insurance & Protection', 'Insurance');
     foodMiscId = id(db, 'Food', 'Misc');
     healthMiscId = id(db, 'Health', 'Misc');
+    venmoId = id(db, 'Transfers', 'Venmo');
+    cashGiftsId = id(db, 'Transfers', 'Cash Gifts');
 
     // Two charges per category in two months, every one a different amount.
     for (const month of ['2026-08', '2026-09']) {
@@ -129,6 +135,9 @@ describe('migration 0003: new category set', () => {
     line('2026-09', 'Savings & Goals', 'Emergency Fund', 40000, 'due_day', 5);
     line('2026-09', 'Savings & Goals', 'Retirement — Roth', 50000, 'due_day', 5);
     line('2026-09', 'Transportation', 'Boat', 5000, 'even', null);
+    line('2026-09', 'Transfers', 'Venmo', 3000, 'even', null);
+    line('2026-09', 'Transfers', 'Credit Card Payment', 2000, 'even', null);
+    line('2026-09', 'Transfers', 'Cash Gifts', 1500, 'even', null);
     line('2026-09', 'Income', 'Paychecks', 774000, 'due_day', 4);
     db.exec(
       'INSERT INTO kid_budgets (kid_id, category_id, month, budget_cents) VALUES (1, ?, ?, 10000), (1, ?, ?, 5000)',
@@ -187,7 +196,7 @@ describe('migration 0003: new category set', () => {
     ]);
     expect(db.rows('SELECT budget_cents FROM budget_lines WHERE category_id = ?', id(db, 'Income', 'Paychecks'))).toEqual([{ budget_cents: 774000 }]);
     expect(db.rows('SELECT budget_cents FROM budget_lines WHERE category_id = ?', boatId)).toEqual([{ budget_cents: 5000 }]);
-    expect(db.rows('SELECT SUM(budget_cents) AS n FROM budget_lines')).toEqual([{ n: 16500 + 7000 + 160000 + 90000 + 5000 + 774000 }]);
+    expect(db.rows('SELECT SUM(budget_cents) AS n FROM budget_lines')).toEqual([{ n: 16500 + 7000 + 160000 + 90000 + 5000 + 774000 + 3000 + 2000 + 1500 }]);
     expect(db.rows('SELECT kid_id, month, budget_cents FROM kid_budgets WHERE category_id = ?', id(db, 'Everyday', 'Kids'))).toEqual([
       { kid_id: 1, month: '2026-09', budget_cents: 15000 },
     ]);
@@ -220,6 +229,18 @@ describe('migration 0003: new category set', () => {
     expect(db.rows('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?', misc)).toEqual([{ n: 4 }]);
   });
 
+  it('folds custom transfer categories into Transfers and leaves other kinds there', () => {
+    const transfers = id(db, 'Transfers', 'Transfers');
+    expect(categoryOf(db, venmoId)).toMatchObject({ section: 'Transfers', name: 'Venmo', archived: 1 });
+    expect(db.rows('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?', venmoId)).toEqual([{ n: 0 }]);
+    // Transfer, Credit Card Payment, Credit Card Paydown and Venmo, two charges each.
+    expect(db.rows('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?', transfers)).toEqual([{ n: 8 }]);
+    expect(db.rows('SELECT budget_cents FROM budget_lines WHERE category_id = ?', transfers)).toEqual([{ budget_cents: 5000 }]);
+    expect(categoryOf(db, cashGiftsId)).toMatchObject({ section: 'Transfers', kind: 'expense', archived: 0 });
+    expect(db.rows('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?', cashGiftsId)).toEqual([{ n: 2 }]);
+    expect(db.rows('SELECT budget_cents FROM budget_lines WHERE category_id = ?', cashGiftsId)).toEqual([{ budget_cents: 1500 }]);
+  });
+
   it('fun money stays', () => {
     expect(categoryOf(db, funId)).toMatchObject({ section: 'Fun & Wants', funMemberId: 1, archived: 0 });
     expect(db.rows('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?', funId)).toEqual([{ n: 2 }]);
@@ -235,10 +256,11 @@ describe('migration 0003: new category set', () => {
     }
     const live = db.rows<{ name: string }>(
       `SELECT c.name FROM categories c JOIN sections s ON s.id = c.section_id
-        WHERE c.archived = 0 AND c.fun_member_id IS NULL AND c.id NOT IN (?, ?, ?)`,
+        WHERE c.archived = 0 AND c.fun_member_id IS NULL AND c.id NOT IN (?, ?, ?, ?)`,
       boatId,
       id(db, 'Fun & Wants', 'Hobbies'),
       id(db, 'Everyday', 'Misc'),
+      cashGiftsId,
     );
     expect(live).toHaveLength(NEW_CATEGORIES.length);
     expect(db.rows('SELECT name FROM sections WHERE name IN (?, ?, ?, ?, ?, ?, ?) ORDER BY sort', ...Object.values(GROUPS))).toEqual(
@@ -256,7 +278,7 @@ describe('migration 0003: new category set', () => {
     ] as const) {
       expect(categoryOf(db, id(db, section, name))?.archived, name).toBe(1);
     }
-    expect(db.rows('SELECT COUNT(*) AS n FROM categories')).toEqual([{ n: 42 + 6 + 22 }]);
+    expect(db.rows('SELECT COUNT(*) AS n FROM categories')).toEqual([{ n: 42 + 8 + 22 }]);
   });
 
   it('adds the columns and tables later tasks use', () => {

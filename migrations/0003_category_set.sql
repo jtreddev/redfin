@@ -95,6 +95,18 @@ SELECT o.id, n.id
   JOIN sections ns ON ns.name = m.new_section
   JOIN categories n ON n.section_id = ns.id AND n.name = m.new_name;
 
+-- The household's own transfer categories fold into Transfers too. Other kinds filed under
+-- Transfers stay where they are, so no total changes.
+INSERT INTO category_map (old_id, new_id)
+SELECT c.id, t.id
+  FROM sections s
+  JOIN categories t ON t.section_id = s.id AND t.name = 'Transfers'
+  JOIN categories c ON c.section_id = s.id AND c.id <> t.id
+ WHERE s.name = 'Transfers'
+   AND c.kind = 'transfer'
+   AND c.fun_member_id IS NULL
+   AND c.id NOT IN (SELECT old_id FROM category_map);
+
 -- 4. The household's own categories keep their names and move to the closest group.
 CREATE TABLE custom_move AS
 SELECT c.id, c.name, ns.id AS section_id
