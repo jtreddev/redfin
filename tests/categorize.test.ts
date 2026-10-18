@@ -23,9 +23,9 @@ describe('POST /categorize/all', () => {
     db.exec(`INSERT INTO accounts (name, type) VALUES ('Card', 'credit')`);
   });
 
-  it('recategorizes 1,200 charges in three batches, leaves hand-set ones alone, and records the run', async () => {
+  it('recategorizes 500 charges in three batches of 200, leaves hand-set ones alone, and records the run', async () => {
     const other = db.rows<{ id: number }>(`SELECT id FROM categories WHERE name = 'Shopping'`)[0]!.id;
-    for (let i = 0; i < 1200; i++) {
+    for (let i = 0; i < 500; i++) {
       db.exec(
         `INSERT INTO transactions (account_id, date, amount_cents, name, normalized_merchant, source, category_id, category_source)
          VALUES (1, '2026-10-01', -1500, 'SHELL OIL 123', 'SHELL OIL', 'plaid', ?, ?)`,
@@ -36,12 +36,12 @@ describe('POST /categorize/all', () => {
     expect((await me()).household.categorizedAllAt).toBeNull();
 
     const a = await step();
-    expect(a.nextAfterId).toBe(500);
+    expect(a.nextAfterId).toBe(200);
     const b = await step(a.nextAfterId!);
-    expect(b.nextAfterId).toBe(1000);
+    expect(b.nextAfterId).toBe(400);
     const c = await step(b.nextAfterId!);
     expect(c.nextAfterId).toBeNull();
-    expect(a.updated + b.updated + c.updated).toBe(1199);
+    expect(a.updated + b.updated + c.updated).toBe(499);
 
     expect(db.rows(`SELECT id FROM transactions WHERE category_id IS NULL`)).toEqual([]);
     expect(db.rows('SELECT category_id, category_source FROM transactions WHERE id = 1')).toEqual([

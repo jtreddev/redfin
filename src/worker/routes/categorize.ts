@@ -7,7 +7,8 @@ import { reclassify, STORED_SELECT, type StoredTxn } from '../services/ingest';
 
 export const categorize = new Hono<AppEnv>();
 
-const BATCH = 500;
+/** Small enough to stay well inside the free plan's 10 ms CPU per request, even on a cold isolate. */
+const BATCH = 200;
 
 /**
  * Re-derives automatic categories for one batch of history (hand-set and split rows are skipped by reclassify).

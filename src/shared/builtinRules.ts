@@ -18,8 +18,33 @@ const KNOWN_NAMES: readonly { ref: CategoryRef; label: string; tokens: readonly 
     label: 'a subscription',
     tokens: [
       'NETFLIX', 'HULU', 'SPOTIFY', 'DISNEY PLUS', 'DISNEYPLUS', 'HBO MAX', 'MAX COM', 'APPLE COM BILL', 'GOOGLE', 'YOUTUBE',
-      'AMAZON PRIME', 'PRIME VIDEO', 'DASHPASS',
+      'AMAZON PRIME', 'PRIME VIDEO', 'DASHPASS', 'AMAZON KIDS', 'ANTHROPIC', 'OPENAI', 'CHATGPT',
     ],
+  },
+  // Older charges carry only the bank's broad category (FOOD_AND_DRINK), which would file these as Eating Out.
+  {
+    ref: ['Habits', 'Coffee & Fast Food'],
+    label: 'fast food or coffee',
+    tokens: [
+      "MCDONALD'S", 'MCDONALDS', 'TACO BELL', "WENDY'S", 'WENDYS', 'BURGER KING', 'SUBWAY', 'SONIC DRIVE', "ARBY'S", 'ARBYS',
+      'CHICK FIL A', 'KFC', 'DAIRY QUEEN', "CULVER'S", 'CULVERS', 'LITTLE CAESARS', "LITTLE CAESAR'S", "DOMINO'S", 'DOMINOS',
+      'PIZZA HUT', "PAPA JOHN'S", 'PAPA JOHNS', "JIMMY JOHN'S", 'JIMMY JOHNS', 'TACO JOHNS', "HARDEE'S", 'HARDEES', 'WHITE CASTLE',
+      'POPEYES', 'STARBUCKS', 'DUNKIN', 'COFFEE',
+    ],
+  },
+  {
+    ref: ['Everyday', 'Groceries'],
+    label: 'a grocery store',
+    tokens: [
+      'ALDI', 'KROGER', 'HY VEE', 'JEWEL OSCO', 'MEIJER', "TRADER JOE'S", 'TRADER JOES', 'WHOLE FOODS', 'PUBLIX', 'SAFEWAY',
+      'SCHNUCKS', 'FOOD LION', 'WEGMANS', 'PIGGLY WIGGLY', 'WINCO', 'FRESH THYME', 'SPROUTS',
+    ],
+  },
+  { ref: ['Habits', 'Habits'], label: 'a liquor store', tokens: ['LIQUOR', 'LIQUORS'] },
+  {
+    ref: ['Everyday', 'Household & Personal'],
+    label: 'pet care',
+    tokens: ['PETSMART', 'PETCO', 'CHEWY', 'ANIMAL HOSPITAL', 'ANIMAL HEALTH', 'ANIMAL CLINIC', 'VETERINARY', 'VET CLINIC'],
   },
   { ref: ['Bills', 'Housing'], label: 'a mortgage', tokens: ['ROCKET MORTGAGE', 'MORTGAGE'] },
   { ref: ['Bills', 'Loans'], label: 'a loan', tokens: ['AIDVANTAGE', 'NELNET', 'MOHELA', 'BRIDGECREST', 'AUTO LOAN', 'STUDENT LOAN'] },

@@ -51,7 +51,7 @@ export async function syncOneBank(itemId: number, onStep?: (step: SyncStepResult
   return { added, refreshed, errors: [], notes };
 }
 
-/** Re-derives automatic categories for all history, 500 charges at a time. Returns how many changed. */
+/** Re-derives automatic categories for all history, 200 charges at a time. Returns how many changed. */
 export async function recategorizeAll(onProgress?: (done: number) => void): Promise<number> {
   let afterId: number | undefined;
   let updated = 0;

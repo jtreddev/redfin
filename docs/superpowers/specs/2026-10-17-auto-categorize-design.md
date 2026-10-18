@@ -116,7 +116,11 @@ Layers, first match wins:
      YouTube, Amazon Prime, DashPass → Subscriptions; Rocket Mortgage and names containing
      "MORTGAGE" → Housing; Aidvantage, Nelnet, MOHELA, Bridgecrest, and names containing
      "AUTO LOAN" or "STUDENT LOAN" → Loans; Geico, Progressive, State Farm, Allstate → Insurance; T-Mobile, Verizon,
-     AT&T Wireless → Phone; Xfinity, Comcast, Spectrum → Internet).
+     AT&T Wireless → Phone; Xfinity, Comcast, Spectrum → Internet). Added after the dry run, because
+     older charges carry only the bank's broad category: national fast-food and coffee chains and
+     names with "COFFEE" → Coffee & Fast Food; national grocery chains (Aldi, Kroger, Hy-Vee, …) →
+     Groceries; names with "LIQUOR" → Habits; PetSmart, Petco, Chewy and vet clinics → Household &
+     Personal; Amazon Kids+, Anthropic, OpenAI/ChatGPT → Subscriptions.
 5. **Bank category**: Plaid `personal_finance_category.detailed`, mapped by a table in
    `src/shared/bankCategories.ts`, falling back to `primary`. Examples: `FOOD_AND_DRINK_GROCERIES`
    → Groceries; `FOOD_AND_DRINK_FAST_FOOD` and `FOOD_AND_DRINK_COFFEE` → Coffee & Fast Food;
@@ -153,8 +157,8 @@ screen's sync gets a one-time "Refresh bank details" that restarts each item's
 - On every new or changed charge during sync (`classify()` in `services/ingest.ts` calls
   `categorize()`).
 - Once over all history after the migration, from a new endpoint `POST /categorize/all` the app
-  calls on first load when a flag in `household` says it hasn't run. Batches of 500 charges per
-  request so it stays inside the Worker CPU limit; the client loops until done.
+  calls on first load when a flag in `household` says it hasn't run. Batches of 200 charges per
+  request so it stays inside the Worker CPU limit (lowered from 500 after the dry run timed a cold batch near 10 ms); the client loops until done.
 - From "Recategorize everything" in Settings, for after changing the cutoff.
 
 All three skip charges set by hand.

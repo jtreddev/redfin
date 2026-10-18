@@ -91,6 +91,42 @@ describe('categorize', () => {
     }
   });
 
+  // Older charges only have the bank's primary category (FOOD_AND_DRINK, GENERAL_MERCHANDISE, OTHER),
+  // and CSV imports have none, so well-known chains are named here.
+  it('known chains beat a vague bank category', () => {
+    const cases: [string, string | null, string, string][] = [
+      ["MCDONALD'S F12345 SPRINGFIELD IL", 'FOOD_AND_DRINK', 'Habits', 'Coffee & Fast Food'],
+      ['MCDONALDS 4521', 'FOOD_AND_DRINK', 'Habits', 'Coffee & Fast Food'],
+      ['TACO BELL #031234', 'FOOD_AND_DRINK', 'Habits', 'Coffee & Fast Food'],
+      ["CULVER'S OF ANYTOWN", 'FOOD_AND_DRINK', 'Habits', 'Coffee & Fast Food'],
+      ['LITTLE CAESARS 1234-0001', 'FOOD_AND_DRINK', 'Habits', 'Coffee & Fast Food'],
+      ['PIZZA HUT 012345', 'FOOD_AND_DRINK', 'Habits', 'Coffee & Fast Food'],
+      ['WENDYS #4410', 'FOOD_AND_DRINK', 'Habits', 'Coffee & Fast Food'],
+      ['STARBUCKS STORE 01234', 'FOOD_AND_DRINK', 'Habits', 'Coffee & Fast Food'],
+      ['DUNKIN #348812', 'FOOD_AND_DRINK', 'Habits', 'Coffee & Fast Food'],
+      ['TST* MAPLE STREET COFFEE', 'FOOD_AND_DRINK', 'Habits', 'Coffee & Fast Food'],
+      ['ALDI 72034 ANYTOWN IL', 'FOOD_AND_DRINK', 'Everyday', 'Groceries'],
+      ['KROGER #0412', 'FOOD_AND_DRINK', 'Everyday', 'Groceries'],
+      ['HY-VEE ANYTOWN 1234', 'FOOD_AND_DRINK', 'Everyday', 'Groceries'],
+      ['MAIN ST LIQUOR', 'FOOD_AND_DRINK', 'Habits', 'Habits'],
+      ['PETSMART # 1234', 'GENERAL_MERCHANDISE', 'Everyday', 'Household & Personal'],
+      ['CHEWY.COM', 'GENERAL_MERCHANDISE', 'Everyday', 'Household & Personal'],
+      ['PRAIRIE ANIMAL HOSPITAL', 'MEDICAL', 'Everyday', 'Household & Personal'],
+      ['CLAUDE.AI ANTHROPIC', 'OTHER', 'Bills', 'Subscriptions'],
+      ['OPENAI *CHATGPT SUBSCR', null, 'Bills', 'Subscriptions'],
+      ['AMAZON KIDS+', 'OTHER', 'Bills', 'Subscriptions'],
+    ];
+    for (const [name, bankPrimary, section, category] of cases) {
+      const result = categorize(txn(name, -1899, { bankPrimary }), ctx());
+      expect(result.categoryId, `${name} → ${normalizeMerchant(name)}`).toBe(id(section, category));
+      expect(result.reason, name).toMatch(/^Looks like/);
+    }
+    // Whole words only.
+    expect(categorize(txn('ALDISTRA DESIGN', -1899), ctx()).categoryId).toBeNull();
+    // Refunds aren't habits.
+    expect(categorize(txn('STARBUCKS STORE 01234', 500, { bankPrimary: 'FOOD_AND_DRINK' }), ctx()).categoryId).toBe(id('Fun & Wants', 'Eating Out'));
+  });
+
   it('bank detailed then primary', () => {
     expect(categorize(txn('BURGER PALACE', -900, { bankDetailed: 'FOOD_AND_DRINK_FAST_FOOD', bankPrimary: 'FOOD_AND_DRINK' }), ctx())).toMatchObject({
       categoryId: id('Habits', 'Coffee & Fast Food'),
