@@ -187,3 +187,52 @@ describe('searching activity', () => {
     expect(ids(await search(q('bookshop'), PARTNER))).toEqual([theirs, shared]);
   });
 });
+
+describe('searching bills', () => {
+  type Bill = { id: number; name: string; status: string };
+  function bill(name: string, merchant: string, cents: number, status = 'confirmed', privateTo: number | null = null) {
+    db.exec(
+      `INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, status, private_member_id, category_id)
+       VALUES (?, ?, 'monthly', ?, ?, ?, ?)`,
+      merchant,
+      name,
+      cents,
+      status,
+      privateTo,
+      cat('Phone'),
+    );
+    return db.rows<{ id: number }>('SELECT MAX(id) AS id FROM recurring_bills')[0]!.id;
+  }
+  async function bills(query: string, email = YOU) {
+    const res = await api(env, 'GET', `/recurring${query ? `?${query}` : ''}`, undefined, email);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as Bill[]).map((b) => b.id).sort((a, b) => a - b);
+  }
+
+  it('by name, merchant, category or amount, and by status', async () => {
+    const phone = bill('Phone bill', 'verizon', 8512);
+    const net = bill('Internet', 'comcast', 6000, 'suggested');
+    const gym = bill('Gym', 'planet fitness', 2500, 'dismissed');
+    const theirs = bill('Their gym', 'yoga studio', 4000, 'confirmed', partner);
+
+    // Today's default: everything but dismissed.
+    expect(await bills('')).toEqual([phone, net]);
+    expect(await bills('all=1')).toEqual([phone, net, gym]);
+    expect(await bills('status=all')).toEqual([phone, net, gym]);
+    expect(await bills('status=dismissed')).toEqual([gym]);
+    expect(await bills('status=suggested')).toEqual([net]);
+    expect(await bills('status=confirmed')).toEqual([phone]);
+    expect((await api(env, 'GET', '/recurring?status=nope')).status).toBe(400);
+
+    expect(await bills(q('VERIZON'))).toEqual([phone]);
+    expect(await bills(q('internet'))).toEqual([net]);
+    expect(await bills(q('phone'))).toEqual([phone, net]);
+    expect(await bills(q('85.12'))).toEqual([phone]);
+    expect(await bills(q('$85'))).toEqual([phone]);
+    expect(await bills(q('>50'))).toEqual([phone, net]);
+    expect(await bills(`${q('gym')}&status=all`)).toEqual([gym]);
+    expect(await bills(q('gym'))).toEqual([]);
+    expect(await bills(`${q('yoga')}&status=all`)).toEqual([]);
+    expect(await bills(q('yoga'), PARTNER)).toEqual([theirs]);
+  });
+});
