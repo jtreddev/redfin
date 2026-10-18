@@ -177,7 +177,9 @@ function BudgetView({ month }: { month: string }) {
                         ? 'From Income & paydays'
                         : row.computed === 'fun_money'
                           ? 'Allowance × paydays'
-                          : row.timing === 'due_day' && row.dueDay
+                          : row.computed === 'planned_costs'
+                            ? `Includes ${money(row.plannedCostsCents, { whole: true })} for planned costs`
+                            : row.timing === 'due_day' && row.dueDay
                             ? `Due on the ${ordinal(row.dueDay)}`
                             : 'Spread across the month'}
                     </div>
@@ -213,7 +215,8 @@ function ordinal(n: number) {
 
 function LineSheet({ month, row, onClose, onSaved }: { month: string; row: BudgetRow; onClose: () => void; onSaved: () => Promise<void> }) {
   const { toast } = useApp();
-  const [cents, setCents] = useState<number | null>(row.budgetCents);
+  // Only the typed part; planned-cost set-asides are added on top by the server.
+  const [cents, setCents] = useState<number | null>(row.budgetCents - row.plannedCostsCents);
   const [timing, setTiming] = useState(row.timing);
   const [dueDay, setDueDay] = useState(row.dueDay ?? 1);
   const [notes, setNotes] = useState(row.notes ?? '');

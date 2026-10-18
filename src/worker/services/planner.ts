@@ -22,6 +22,7 @@ import type { HouseholdSettings } from '../env';
 import { all, first } from '../lib/db';
 import { loadCategories, loadIncomeSources, scheduleOf, type IncomeSourceRow } from './context';
 import { loadLedger } from './ledger';
+import { plannedCostsForMonth } from './plannedCosts';
 
 export interface BudgetRow {
   categoryId: number;
@@ -38,8 +39,13 @@ export interface BudgetRow {
   notes: string | null;
   actualCents: Cents;
   byWeek: Cents[];
-  /** Budget comes from Income & paydays or a fun money allowance rather than a typed line. */
-  computed: 'paychecks' | 'fun_money' | null;
+  /**
+   * Budget comes from Income & paydays or a fun money allowance rather than a typed line.
+   * planned_costs: the hand budget plus this month's planned-cost set-asides (see plannedCostsCents).
+   */
+  computed: 'paychecks' | 'fun_money' | 'planned_costs' | null;
+  /** The part of budgetCents that is planned-cost set-asides (0 except on Saving › Savings & Planned Costs). */
+  plannedCostsCents: Cents;
 }
 
 interface LineRow {
@@ -61,7 +67,7 @@ export interface MonthData {
 
 /** Budget vs actual for every category in a month, including computed paycheck and fun money lines. */
 export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthData> {
-  const [categories, lines, sources, members, ledger] = await Promise.all([
+  const [categories, lines, sources, members, ledger, plannedCostsCents] = await Promise.all([
     loadCategories(db),
     all<LineRow>(
       db,
@@ -72,6 +78,7 @@ export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthD
     loadIncomeSources(db),
     all<{ id: number; funAllowanceCents: number }>(db, 'SELECT id, fun_allowance_cents AS funAllowanceCents FROM members'),
     loadLedger(db, monthStart(month), monthEnd(month)),
+    plannedCostsForMonth(db, month),
   ]);
 
   const actuals = monthActuals(ledgerEntries(ledger), month);
@@ -95,6 +102,7 @@ export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthD
     let computed: BudgetRow['computed'] = null;
     let budgetCents = line?.budgetCents ?? 0;
     let timing: Timing = line?.timing ?? 'even';
+    let planned = 0;
 
     if (c.sectionName === SPECIAL.paychecks[0] && c.name === SPECIAL.paychecks[1] && sources.length) {
       computed = 'paychecks';
@@ -104,6 +112,11 @@ export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthD
       computed = 'fun_money';
       budgetCents = (allowanceByMember.get(c.funMemberId) ?? 0) * allowancePayDates.length;
       timing = 'even';
+    } else if (c.sectionName === SPECIAL.savings[0] && c.name === SPECIAL.savings[1] && plannedCostsCents) {
+      // Added to the hand budget (other savings), never replacing it.
+      computed = 'planned_costs';
+      planned = plannedCostsCents;
+      budgetCents += planned;
     }
 
     if (c.archived && !line && !actual) continue;
@@ -123,6 +136,7 @@ export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthD
       actualCents: actual?.totalCents ?? 0,
       byWeek: actual?.byWeek ?? zeros(),
       computed,
+      plannedCostsCents: planned,
     });
   }
 
@@ -347,7 +361,8 @@ export async function upcomingBills(
 ): Promise<UpcomingBill[]> {
   const bills: UpcomingBill[] = [];
   for (const row of planner.data.rows) {
-    if (row.timing !== 'due_day' || row.dueDay == null || row.kind === 'income' || row.computed) continue;
+    if (row.timing !== 'due_day' || row.dueDay == null || row.kind === 'income') continue;
+    if (row.computed === 'paychecks' || row.computed === 'fun_money') continue;
     const remaining = (planner.forecast.remainingByLine.get(row.categoryId) ?? []).reduce((a, b) => a + b, 0);
     if (remaining <= 0) continue;
     const date = clampDay(planner.month, row.dueDay);
