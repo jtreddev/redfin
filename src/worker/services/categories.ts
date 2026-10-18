@@ -25,6 +25,9 @@ function numbered(db: D1Database, sql: string, ...values: Param[]): D1PreparedSt
 export const CATEGORY_REFERENCES: readonly { table: string; column: string }[] = [
   { table: 'budget_lines', column: 'category_id' },
   { table: 'categories', column: 'parent_id' },
+  // Undo of a bulk change (migration 0008) puts old_category_id back only where the charge still
+  // has new_category_id, so both follow a merge: Undo after a merge restores the surviving category.
+  { table: 'category_move_items', column: 'new_category_id' },
   { table: 'category_move_items', column: 'old_category_id' },
   { table: 'category_moves', column: 'fix_category_id' },
   { table: 'goals', column: 'category_id' },

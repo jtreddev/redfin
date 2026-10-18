@@ -161,6 +161,56 @@ describe('searching activity', () => {
     expect((await api(env, 'GET', '/transactions?categoryId=x')).status).toBe(400);
   });
 
+  it('with sub-categories: a parent covers its children (charges and split parts) alongside other picked categories', async () => {
+    const shopping = cat('Shopping');
+    const groceries = cat('Groceries');
+    const res = await api(env, 'POST', '/categories', { parentId: shopping, name: 'Clothes' });
+    expect(res.status).toBe(201);
+    const clothes = ((await res.json()) as { id: number }).id;
+    const inParent = add({ name: 'TARGET', cents: -2000, categoryId: shopping });
+    const inChild = add({ name: 'GAP', cents: -4000, categoryId: clothes });
+    const other = add({ name: 'KROGER', cents: -6000, categoryId: groceries });
+    add({ name: 'SHELL', cents: -3000, categoryId: cat('Gas') });
+    const split = add({ name: 'COSTCO', cents: -9000 });
+    db.exec('UPDATE transactions SET is_split = 1 WHERE id = ?', split);
+    db.exec('INSERT INTO splits (transaction_id, category_id, amount_cents) VALUES (?, ?, -9000)', split, clothes);
+
+    expect(ids(await search(`categoryId=${shopping}`))).toEqual([inParent, inChild, split]);
+    expect(ids(await search(`categoryId=${clothes}`))).toEqual([inChild, split]);
+    expect(ids(await search(`categoryId=${shopping},${groceries}`))).toEqual([inParent, inChild, other, split]);
+    expect(ids(await search(`categoryId=${shopping}&categoryId=${clothes}`))).toEqual([inParent, inChild, split]);
+    expect((await search(`categoryId=${shopping},${groceries}`)).totals).toEqual({ count: 4, outCents: 21000, inCents: 0 });
+
+    // Bulk set to the child: the parent's filter finds them, the child's too.
+    const loose = add({ name: 'OLD NAVY', cents: -1500 });
+    const bulked = await api(env, 'POST', '/transactions/bulk', { ids: [loose, other], set: { categoryId: clothes } });
+    expect(bulked.status).toBe(200);
+    expect(ids(await search(`categoryId=${clothes}`))).toEqual([inChild, other, loose, split].sort((x, y) => x - y));
+    expect(ids(await search(`categoryId=${shopping}`))).toEqual([inParent, inChild, other, loose, split].sort((x, y) => x - y));
+  });
+
+  it('with sub-categories: the similar-count preview and "also file" agree for a child category', async () => {
+    const shopping = cat('Shopping');
+    const res = await api(env, 'POST', '/categories', { parentId: shopping, name: 'Clothes' });
+    const clothes = ((await res.json()) as { id: number }).id;
+    const picked = add({ name: 'UNIQLO 0412', merchant: 'Uniqlo', cents: -2500 });
+    const others = [add({ name: 'UNIQLO 0413', merchant: 'Uniqlo', cents: -3500 }), add({ name: 'UNIQLO 0414', merchant: 'Uniqlo', cents: -4500, categoryId: shopping })];
+    add({ name: 'UNIQLO 0415', merchant: 'Uniqlo', cents: -1500, categoryId: clothes });
+
+    const preview = await api(env, 'GET', `/transactions/${picked}/similar?categoryId=${clothes}`);
+    expect(preview.status).toBe(200);
+    expect(await preview.json()).toMatchObject({ count: 2 });
+
+    // A one-off pick moves just the one; "also file" then moves the two the preview counted.
+    expect((await api(env, 'PATCH', `/transactions/${picked}`, { categoryId: clothes })).status).toBe(200);
+    expect(db.rows<{ n: number }>('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?', clothes)[0]!.n).toBe(2);
+    const fixed = await api(env, 'PATCH', `/transactions/${picked}`, { categoryId: clothes, alsoSimilar: true });
+    expect(fixed.status).toBe(200);
+    expect(((await fixed.json()) as { move: { moved: number } | null }).move).toMatchObject({ moved: 2 });
+    for (const id of others) expect(db.rows<{ c: number }>('SELECT category_id AS c FROM transactions WHERE id = ?', id)[0]!.c).toBe(clothes);
+    expect(ids(await search(`categoryId=${shopping}`))).toHaveLength(4);
+  });
+
   it('totals cover the whole result, not just the page', async () => {
     for (let i = 0; i < 5; i++) add({ name: 'SHELL OIL', cents: -1000 - i, date: `2026-10-0${i + 1}` });
     add({ name: 'SHELL REWARDS', cents: 500 });

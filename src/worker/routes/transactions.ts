@@ -32,8 +32,8 @@ const TRENDS_GROUP_SECTION = new Map<string, string>(GROUP_ORDER.map((g) => [g.k
 const MAX_FILTER_IDS = 100;
 
 /**
- * The categories a category filter covers. Today that is just the ones picked; once categories have
- * sub-categories (categories.parent_id, migration 0007), a parent's children belong here too.
+ * The categories a category filter names: the ones picked, once each. The query adds a parent's
+ * sub-categories (categories.parent_id, migration 0007).
  */
 function expandCategoryIds(ids: number[]): number[] {
   return [...new Set(ids)];

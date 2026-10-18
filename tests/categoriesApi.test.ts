@@ -292,7 +292,7 @@ describe('categories API', () => {
       db.exec("INSERT INTO planned_costs (id, name, start_month) VALUES (1, 'P', '2026-10')");
       db.exec('INSERT INTO planned_cost_categories (planned_cost_id, category_id) VALUES (1, ?)', from);
       db.exec('INSERT INTO category_moves (id, member_id, fix_category_id) VALUES (1, ?, ?)', youId, from);
-      db.exec('INSERT INTO category_move_items (move_id, transaction_id, old_category_id) VALUES (1, ?, ?)', txn, from);
+      db.exec('INSERT INTO category_move_items (move_id, transaction_id, old_category_id, new_category_id) VALUES (1, ?, ?, ?)', txn, from, from);
       return { txn, split };
     }
 
@@ -341,7 +341,58 @@ describe('categories API', () => {
       expect(db.rows('SELECT budget_cents FROM kid_budgets WHERE category_id = ?', into)).toEqual([{ budget_cents: 1000 }]);
       expect(db.rows('SELECT category_id FROM planned_cost_categories')).toEqual([{ category_id: into }]);
       expect(db.rows('SELECT fix_category_id AS id FROM category_moves')).toEqual([{ id: into }]);
-      expect(db.rows('SELECT old_category_id AS id FROM category_move_items')).toEqual([{ id: into }]);
+      expect(db.rows('SELECT old_category_id AS o, new_category_id AS n FROM category_move_items')).toEqual([{ o: into, n: into }]);
+    });
+
+    describe('a bulk change made before the merge', () => {
+      const state = (id: number) =>
+        db.rows<{ category_id: number | null; category_source: string | null; kid_id: number | null; is_ignored: number }>(
+          'SELECT category_id, category_source, kid_id, is_ignored FROM transactions WHERE id = ?',
+          id,
+        )[0]!;
+      const bulk = async (ids: number[], set: Record<string, unknown>) => {
+        const res = await api(env, 'POST', '/transactions/bulk', { ids, set });
+        expect(res.status).toBe(200);
+        return (await res.json()) as { updated: number; moveId: number };
+      };
+      const undo = async (moveId: number) => {
+        const res = await api(env, 'POST', `/category-moves/${moveId}/undo`, {});
+        expect(res.status).toBe(200);
+        return ((await res.json()) as { restored: number }).restored;
+      };
+
+      it('set to the merged category: Undo still finds the charges and puts back what they had', async () => {
+        const from = category('Fun & Wants', 'Shopping');
+        const into = category('Fun & Wants', 'Gifts');
+        const groceries = category('Everyday', 'Groceries');
+        const filed = charge(groceries, -2000, { category_source: 'auto' });
+        const empty = charge(null, -3000);
+        const before = [filed, empty].map(state);
+
+        const { moveId, updated } = await bulk([filed, empty], { categoryId: from });
+        expect(updated).toBe(2);
+        expect((await api(env, 'POST', `/categories/${from}/merge`, { intoId: into })).status).toBe(200);
+        expect(state(filed).category_id).toBe(into);
+
+        expect(await undo(moveId)).toBe(2);
+        expect([filed, empty].map(state)).toEqual(before);
+      });
+
+      it('moved off the merged category: Undo puts them in the surviving one, not the archived one', async () => {
+        const from = category('Fun & Wants', 'Shopping');
+        const into = category('Fun & Wants', 'Gifts');
+        const groceries = category('Everyday', 'Groceries');
+        const a = charge(from, -2000, { category_source: 'auto' });
+        const b = charge(from, -3000, { category_source: 'user' });
+
+        const { moveId } = await bulk([a, b], { categoryId: groceries });
+        expect((await api(env, 'POST', `/categories/${from}/merge`, { intoId: into })).status).toBe(200);
+
+        expect(await undo(moveId)).toBe(2);
+        expect(state(a)).toMatchObject({ category_id: into, category_source: 'auto' });
+        expect(state(b)).toMatchObject({ category_id: into, category_source: 'user' });
+        expect(db.rows('SELECT id FROM transactions WHERE category_id = ?', from)).toEqual([]);
+      });
     });
 
     it('when both are in planned costs, the merged one’s link is dropped', async () => {
