@@ -315,7 +315,7 @@ async function syncItem(env: Env, item: ItemRow, trigger: 'cron' | 'manual' | 'l
     const removed = await applyRemoved(db, page.removed.map((r) => r.transaction_id));
 
     const dates = [...page.added, ...page.modified].map((t) => t.date).sort();
-    if (dates.length) await matchTransfers(db, dates[0] as ISODate, dates[dates.length - 1] as ISODate);
+    if (dates.length) await matchTransfers(db, dates[0] as ISODate, dates[dates.length - 1] as ISODate, ctx);
 
     // Right after linking, the bank may still be preparing data; don't count that as synced.
     const updateStatus = page.transactions_update_status;

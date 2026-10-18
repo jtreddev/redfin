@@ -19,7 +19,7 @@ import {
   reqStr,
 } from '../lib/http';
 import { loadIngestContext, type IngestContext } from '../services/context';
-import { enforceFunMoney, insertTransactions, STORED_SELECT, type Classification, type StoredTxn } from '../services/ingest';
+import { enforceFunMoney, insertTransactions, rederive, STORED_SELECT, type Classification, type StoredTxn } from '../services/ingest';
 import { learnFromFix, undoMove } from '../services/learn';
 
 export const transactions = new Hono<AppEnv>();
@@ -362,6 +362,7 @@ transactions.delete('/transactions/:id', async (c) => {
     stmt(db, 'UPDATE transactions SET deleted_at = ?, transfer_pair_id = NULL WHERE id = ?', now, row.id),
     stmt(db, 'UPDATE transactions SET transfer_pair_id = NULL WHERE transfer_pair_id = ?', row.id),
   ]);
+  if (row.transferPairId) await rederive(db, [row.transferPairId]);
   return c.json({ ok: true, deleted: true });
 });
 
@@ -425,6 +426,8 @@ transactions.post('/transactions/:id/unlink-transfer', async (c) => {
     stmt(db, 'INSERT OR IGNORE INTO transfer_unlinks (a_id, b_id) VALUES (?, ?)', a, b),
     stmt(db, 'UPDATE transactions SET transfer_pair_id = NULL, updated_at = ? WHERE id IN (?, ?)', nowIso(), a, b),
   ]);
+  // No longer a transfer: the app sorts both halves again.
+  await rederive(db, [a, b]);
   return c.json({ ok: true });
 });
 
@@ -442,5 +445,6 @@ transactions.post('/transactions/:id/link-transfer', async (c) => {
     stmt(db, 'UPDATE transactions SET transfer_pair_id = ?, updated_at = ? WHERE id = ?', row.id, now, other.id),
     stmt(db, 'DELETE FROM transfer_unlinks WHERE (a_id = ? AND b_id = ?) OR (a_id = ? AND b_id = ?)', row.id, other.id, other.id, row.id),
   ]);
+  await rederive(db, [row.id, other.id]);
   return c.json({ ok: true });
 });

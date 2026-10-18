@@ -4,8 +4,8 @@ import { matchPaycheck } from '../../shared/paychecks';
 import { categorize, type AutoSubject } from '../../shared/autoCategory';
 import { findRule, normalizeMerchant, ruleAppliesToAccount, ruleMatches, type CategorySource, type Rule } from '../../shared/rules';
 import { looksLikeTransfer } from '../../shared/transfers';
-import { batchAll, nowIso, stmt } from '../lib/db';
-import type { IngestContext } from './context';
+import { allByIds, batchAll, nowIso, stmt } from '../lib/db';
+import { loadIngestContext, type IngestContext } from './context';
 
 export interface IncomingTxn {
   accountId: number;
@@ -45,12 +45,16 @@ export interface Classification {
 type Classifiable = Pick<
   IncomingTxn,
   'accountId' | 'date' | 'amountCents' | 'name' | 'merchantName' | 'memo' | 'plaidCategory' | 'plaidCategoryDetailed'
->;
+> & {
+  /** The other half when this is a matched transfer between your own accounts. */
+  transferPairId?: number | null;
+};
 
 const PAYCHECK_REASON = 'Matches your paycheck';
 const isSharedLearned = (rule: Rule) => !!rule.learned && rule.action.privateMemberId == null;
 const CARD_PAYMENT_REASON = 'Card payment';
 const PERSONAL_CARD_REASON = 'Your personal card';
+const PAIRED_TRANSFER_REASON = 'Moved between your accounts';
 
 /**
  * Decides category, kid, privacy and ignore for a transaction. Anything a person set
@@ -71,6 +75,7 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
     normalizedMerchant: normalizeMerchant(txn.merchantName || txn.name),
   };
 
+  const paired = txn.transferPairId != null;
   const paycheck = matchPaycheck(ctx.paySources, txn);
   if (paycheck) {
     out.incomeSourceId = paycheck.sourceId;
@@ -134,7 +139,7 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
     const billOnly = categorize(subject, { rules: [], bills: ctx.bills, cutoffCents: ctx.cutoffCents, categoryIdOf: () => null });
     if (paycheck && ctx.paychecksCategoryId) {
       Object.assign(out, { categoryId: ctx.paychecksCategoryId, categorySource: source, categoryReason: PAYCHECK_REASON });
-    } else if (privateOwner !== undefined && txn.amountCents < 0 && out.privateMemberId === null && billOnly.categoryId === null) {
+    } else if (!paired && privateOwner !== undefined && txn.amountCents < 0 && out.privateMemberId === null && billOnly.categoryId === null) {
       Object.assign(out, { privateMemberId: privateOwner, categorySource: source, categoryReason: PERSONAL_CARD_REASON });
     } else if (auto.categoryId !== null) {
       Object.assign(out, { categoryId: auto.categoryId, categorySource: source, categoryReason: auto.reason });
@@ -152,6 +157,16 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
   if (final.categoryId !== out.categoryId) {
     // Moved into someone's fun money: the reason is why it's private, not what the bank thought.
     final.categoryReason = privateByRule ? ruleReason : PERSONAL_CARD_REASON;
+  }
+  // Half of a matched transfer is never spending, income or debt: only Transfers (kid tag and ignore stay).
+  if (paired && !final.isIgnored && ctx.cardPaymentCategoryId && final.categoryId !== ctx.cardPaymentCategoryId) {
+    Object.assign(final, {
+      categoryId: ctx.cardPaymentCategoryId,
+      categorySource: 'auto',
+      categoryReason: PAIRED_TRANSFER_REASON,
+      ruleId: null,
+      privateMemberId: null,
+    });
   }
   return final;
 }
@@ -274,13 +289,15 @@ export interface StoredTxn {
   incomeSourceId: number | null;
   payDate: ISODate | null;
   normalizedMerchant: string | null;
+  transferPairId: number | null;
 }
 
 export const STORED_SELECT = `SELECT t.id, t.account_id AS accountId, t.date, t.amount_cents AS amountCents, t.name,
   t.merchant_name AS merchantName, t.memo, t.category_id AS categoryId, t.category_source AS categorySource,
   t.category_reason AS categoryReason, t.is_split AS isSplit, t.plaid_category AS plaidCategory,
   t.plaid_category_detailed AS plaidCategoryDetailed, t.rule_id AS ruleId, t.kid_id AS kidId, t.private_member_id AS privateMemberId, t.is_ignored AS isIgnored,
-  t.income_source_id AS incomeSourceId, t.pay_date AS payDate, t.normalized_merchant AS normalizedMerchant
+  t.income_source_id AS incomeSourceId, t.pay_date AS payDate, t.normalized_merchant AS normalizedMerchant,
+  t.transfer_pair_id AS transferPairId
   FROM transactions t`;
 
 /** Re-runs classification over stored rows (after rules change). Split rows are left alone. Returns rows updated. */
@@ -333,4 +350,11 @@ export async function reclassify(db: D1Database, ctx: IngestContext, rows: reado
   }
   await batchAll(db, statements);
   return statements.length;
+}
+
+/** Re-derives automatic choices for these rows, e.g. after they were paired or unpaired as a transfer. */
+export async function rederive(db: D1Database, ids: readonly number[], ctx?: IngestContext): Promise<number> {
+  if (!ids.length) return 0;
+  const rows = await allByIds<StoredTxn>(db, (list) => `${STORED_SELECT} WHERE t.deleted_at IS NULL AND t.id IN (${list})`, ids);
+  return reclassify(db, ctx ?? (await loadIngestContext(db)), rows);
 }

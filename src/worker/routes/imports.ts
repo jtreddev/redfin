@@ -5,7 +5,7 @@ import type { AppEnv } from '../env';
 import { all, batchAll, chunk, first, placeholders, run, stmt } from '../lib/db';
 import { badRequest, notFound, oneOf, optInt, optStr, paramId, readBody, reqDate, reqInt, reqStr } from '../lib/http';
 import { loadIngestContext } from '../services/context';
-import { insertTransactions, type IncomingTxn } from '../services/ingest';
+import { insertTransactions, rederive, type IncomingTxn } from '../services/ingest';
 import { matchTransfers } from '../services/transfers';
 
 /**
@@ -181,6 +181,14 @@ imports.delete('/import/batches/:id', async (c) => {
   const db = c.env.DB;
   const batchId = paramId(c);
   const rows = await all<{ id: number }>(db, `SELECT id FROM transactions WHERE import_batch_id = ? AND source = 'import'`, batchId);
+  const partners = await all<{ id: number }>(
+    db,
+    `SELECT id FROM transactions
+      WHERE transfer_pair_id IN (SELECT id FROM transactions WHERE import_batch_id = ? AND source = 'import')
+        AND (import_batch_id IS NOT ? OR source != 'import')`,
+    batchId,
+    batchId,
+  );
   await batchAll(db, [
     stmt(
       db,
@@ -191,6 +199,8 @@ imports.delete('/import/batches/:id', async (c) => {
     stmt(db, `DELETE FROM transactions WHERE import_batch_id = ? AND source = 'import'`, batchId),
     stmt(db, 'DELETE FROM import_batches WHERE id = ?', batchId),
   ]);
+  // Their other halves are no longer transfers: sort them again.
+  await rederive(db, partners.map((p) => p.id));
   return c.json({ removed: rows.length });
 });
 

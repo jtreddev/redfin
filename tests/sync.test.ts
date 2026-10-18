@@ -530,6 +530,82 @@ describe('automatic categories on synced charges', () => {
     expect(row('t1')).toMatchObject({ categoryId: catId('Transfers', 'Transfers'), source: 'auto', reason: 'Card payment' });
   });
 
+  describe('paired transfers', () => {
+    const loan = { primary: 'LOAN_PAYMENTS', detailed: 'LOAN_PAYMENTS_OTHER_PAYMENT' };
+    const transferIn = { primary: 'TRANSFER_IN', detailed: 'TRANSFER_IN_ACCOUNT_TRANSFER' };
+    const shopping = { primary: 'GENERAL_MERCHANDISE', detailed: 'GENERAL_MERCHANDISE_OTHER_GENERAL_MERCHANDISE' };
+    const paired = () =>
+      db.rows<{ plaidTxnId: string; pairedWith: string | null; kind: string | null; source: string | null }>(
+        `SELECT t.plaid_txn_id AS plaidTxnId, p.plaid_txn_id AS pairedWith, c.kind, t.category_source AS source
+           FROM transactions t LEFT JOIN transactions p ON p.id = t.transfer_pair_id LEFT JOIN categories c ON c.id = t.category_id
+          ORDER BY t.id`,
+      );
+
+    async function syncPair(checkingCategory: { primary: string; detailed: string }) {
+      const checking = await seedBank(db, env, 'chime');
+      const card = await seedBank(db, env, 'capone');
+      db.exec(`UPDATE accounts SET type = 'credit' WHERE id = ?`, card.accountId);
+      stubPlaid({
+        chime: [page([plaidTxn('chime', 'out', '2026-10-01', 250, { name: 'ONLINE PAYMENT TO CARD 4417', personal_finance_category: checkingCategory })])],
+        capone: [page([plaidTxn('capone', 'in', '2026-10-02', -250, { name: 'PAYMENT RECEIVED', personal_finance_category: transferIn })])],
+      });
+      await syncStep(env, { itemId: checking.itemId, trigger: 'manual' });
+      await syncStep(env, { itemId: card.itemId, trigger: 'manual' });
+    }
+
+    it('both halves of a synced card payment land in Transfers, even when the bank calls one a loan payment', async () => {
+      await syncPair(loan);
+      expect(paired()).toEqual([
+        { plaidTxnId: 'out', pairedWith: 'in', kind: 'transfer', source: 'auto' },
+        { plaidTxnId: 'in', pairedWith: 'out', kind: 'transfer', source: 'auto' },
+      ]);
+    });
+
+    it('a half the bank filed as spending still pairs', async () => {
+      await syncPair(shopping);
+      expect(paired()).toEqual([
+        { plaidTxnId: 'out', pairedWith: 'in', kind: 'transfer', source: 'auto' },
+        { plaidTxnId: 'in', pairedWith: 'out', kind: 'transfer', source: 'auto' },
+      ]);
+    });
+
+    it('recategorize-all keeps paired halves in Transfers, leaves hand-set ones, and unlinking re-sorts them', async () => {
+      const { accountId } = await seedBank(db, env, 'chime');
+      db.exec(`INSERT INTO accounts (name, type) VALUES ('Card', 'credit')`);
+      const cardId = db.rows<{ id: number }>('SELECT MAX(id) AS id FROM accounts')[0]!.id;
+      const loans = catId('Bills', 'Loans');
+      const add = (account: number, cents: number, name: string, primary: string, categoryId: number | null, source: string | null) => {
+        db.exec(
+          `INSERT INTO transactions (account_id, date, amount_cents, name, source, plaid_category, category_id, category_source)
+           VALUES (?, '2026-10-01', ?, ?, 'plaid', ?, ?, ?)`,
+          account, cents, name, primary, categoryId, source,
+        );
+        return db.rows<{ id: number }>('SELECT MAX(id) AS id FROM transactions')[0]!.id;
+      };
+      const out = add(accountId, -25000, 'ONLINE PAYMENT TO CARD 4417', 'LOAN_PAYMENTS', loans, 'auto');
+      const inflow = add(cardId, 25000, 'PAYMENT RECEIVED', 'TRANSFER_IN', null, null);
+      const handOut = add(accountId, -9000, 'AUTO LOAN PAYMENT', 'LOAN_PAYMENTS', loans, 'user');
+      const handIn = add(cardId, 9000, 'PAYMENT RECEIVED', 'TRANSFER_IN', null, null);
+      db.exec('UPDATE transactions SET transfer_pair_id = ? WHERE id = ?', inflow, out);
+      db.exec('UPDATE transactions SET transfer_pair_id = ? WHERE id = ?', out, inflow);
+      db.exec('UPDATE transactions SET transfer_pair_id = ? WHERE id = ?', handIn, handOut);
+      db.exec('UPDATE transactions SET transfer_pair_id = ? WHERE id = ?', handOut, handIn);
+
+      await api(env, 'POST', '/categorize/all', {});
+      const kindOf = (id: number) =>
+        db.rows<{ kind: string | null; source: string | null }>(
+          'SELECT c.kind, t.category_source AS source FROM transactions t LEFT JOIN categories c ON c.id = t.category_id WHERE t.id = ?',
+          id,
+        )[0]!;
+      expect(kindOf(out)).toEqual({ kind: 'transfer', source: 'auto' });
+      expect(kindOf(inflow)).toEqual({ kind: 'transfer', source: 'auto' });
+      expect(kindOf(handOut)).toEqual({ kind: 'debt', source: 'user' });
+
+      expect((await api(env, 'POST', `/transactions/${out}/unlink-transfer`, {})).status).toBe(200);
+      expect(kindOf(out)).toEqual({ kind: 'debt', source: 'auto' });
+    });
+  });
+
   it('a rule with a category wins, with its reason', async () => {
     const { itemId } = await seedBank(db, env, 'chime');
     const gasCat = catId('Everyday', 'Gas');

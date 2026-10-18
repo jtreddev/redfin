@@ -451,6 +451,18 @@ describe('what a fix learns', () => {
     expect(row(b).category_id).toBe(groceries);
   });
 
+  it('never re-files half of a matched transfer', async () => {
+    const transfers = db.rows<{ id: number }>(`SELECT id FROM categories WHERE kind = 'transfer' AND archived = 0`)[0]!.id;
+    const out = charge(4000, { categoryId: transfers, source: 'auto' });
+    db.exec(`INSERT INTO accounts (name, type) VALUES ('Savings', 'savings')`);
+    const inflow = charge(-4000, { categoryId: transfers, source: 'auto', account: db.rows<{ id: number }>('SELECT MAX(id) AS id FROM accounts')[0]!.id });
+    db.exec('UPDATE transactions SET transfer_pair_id = ? WHERE id = ?', inflow, out);
+    db.exec('UPDATE transactions SET transfer_pair_id = ? WHERE id = ?', out, inflow);
+    const body = await fix(charge(4000), cat('Gas'));
+    expect(body.move?.moved).toBe(0);
+    expect(row(out)).toMatchObject({ category_id: transfers, category_source: 'auto' });
+  });
+
   it('re-files whole-word matches only', async () => {
     const gas = cat('Gas');
     const shellfish = charge(4000, { merchant: 'Shellfish Shack' });
