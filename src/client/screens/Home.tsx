@@ -34,7 +34,7 @@ function store(key: string, value: unknown) {
 
 interface HomeData {
   home: HomeResponse;
-  /** The last 3 full months and this one, for the ribbon; null when it couldn't load (a quiet extra). */
+  /** This month and "usual" (the server always averages the last 3 full months), for the ribbon; null when it couldn't load. */
   trends: TrendsResponse | null;
 }
 
@@ -49,7 +49,7 @@ export function Home() {
     try {
       const [data, trends] = await Promise.all([
         api<HomeResponse>('/home'),
-        api<TrendsResponse>('/trends?months=4').catch((error: unknown) => {
+        api<TrendsResponse>('/trends?months=3').catch((error: unknown) => {
           if (error instanceof ApiError && error.status === 0) throw error;
           return null;
         }),

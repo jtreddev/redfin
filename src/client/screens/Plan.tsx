@@ -355,7 +355,14 @@ function WeeksView({ month }: { month: string }) {
                   <StatusDot status={week.status} />
                   <Money cents={week.endBalance} whole className="big" tone={week.status === 'negative' ? 'bad' : week.status === 'low' ? 'warn' : undefined} />
                 </div>
-                <div className="muted small">at week’s end</div>
+                <div className="muted small">
+                  {week.status === 'low' ? (
+                    <span className="tone-warn week-state">low, </span>
+                  ) : week.status === 'negative' ? (
+                    <span className="tone-bad week-state">short, </span>
+                  ) : null}
+                  at week’s end
+                </div>
               </div>
             </div>
             <div className="grid-2 small">
