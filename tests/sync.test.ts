@@ -335,6 +335,47 @@ describe('automatic categories on synced charges', () => {
     expect(row('t1')).toMatchObject({ categoryId: null, source: null, isSplit: 1 });
   });
 
+  it('a pending split that posts stays a split with no automatic category', async () => {
+    const { itemId, accountId } = await seedBank(db, env, 'chime');
+    db.exec(
+      `INSERT INTO transactions (account_id, date, amount_cents, name, source, plaid_txn_id, pending, is_split)
+       VALUES (?, '2026-10-01', -641, 'SHELL OIL 57444', 'plaid', 'p1', 1, 1)`,
+      accountId,
+    );
+    const pendingId = db.rows<{ id: number }>("SELECT id FROM transactions WHERE plaid_txn_id = 'p1'")[0]!.id;
+    db.exec('INSERT INTO splits (transaction_id, amount_cents) VALUES (?, -300), (?, -341)', pendingId, pendingId);
+    stubPlaid({ chime: [page([shell('posted-1', 6.41, { pending_transaction_id: 'p1' })])] });
+
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(row('posted-1')).toMatchObject({ isSplit: 1, categoryId: null, source: null, reason: null });
+    expect(db.rows("SELECT rule_id AS ruleId FROM transactions WHERE plaid_txn_id = 'posted-1'")).toEqual([{ ruleId: null }]);
+    expect(
+      db.rows("SELECT s.amount_cents AS a FROM splits s JOIN transactions t ON t.id = s.transaction_id WHERE t.plaid_txn_id = 'posted-1' ORDER BY s.id"),
+    ).toEqual([{ a: -300 }, { a: -341 }]);
+  });
+
+  it('a hand-set pending category merged into an imported copy drops the old reason', async () => {
+    const { itemId, accountId } = await seedBank(db, env, 'chime');
+    const groceries = catId('Everyday', 'Groceries');
+    db.exec(
+      `INSERT INTO transactions (account_id, date, amount_cents, name, source, plaid_txn_id, pending, category_id, category_source)
+       VALUES (?, '2026-10-01', -641, 'SHELL OIL 57444', 'plaid', 'p1', 1, ?, 'user')`,
+      accountId,
+      groceries,
+    );
+    insertImported(accountId, '2026-10-01', -641, 'SHELL OIL 57444');
+    db.exec(
+      `UPDATE transactions SET category_id = ?, category_source = 'auto', category_reason = 'Under $25 at a gas station' WHERE source = 'import'`,
+      catId('Habits', 'Habits'),
+    );
+    stubPlaid({ chime: [page([shell('posted-1', 6.41, { pending_transaction_id: 'p1' })])] });
+
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(row('posted-1')).toMatchObject({ categoryId: groceries, source: 'user', reason: null });
+  });
+
   it('charges on a personal card stay private, even when a built-in pattern matches', async () => {
     const { itemId, accountId } = await seedBank(db, env, 'chime');
     db.exec(`INSERT INTO members (id, email, name, default_private_account_id) VALUES (7, 'jo@example.com', 'Jo', ?)`, accountId);

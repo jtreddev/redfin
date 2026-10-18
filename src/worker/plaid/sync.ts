@@ -442,7 +442,7 @@ async function applyAdded(
         followUps.push(
           stmt(
             db,
-            `UPDATE transactions SET category_id = ?, category_source = 'user', kid_id = ?, private_member_id = ?, is_ignored = ?
+            `UPDATE transactions SET category_id = ?, category_source = 'user', category_reason = NULL, kid_id = ?, private_member_id = ?, is_ignored = ?
               WHERE id = ? AND COALESCE(category_source, '') != 'user'`,
             pending.categoryId,
             pending.kidId,
@@ -483,7 +483,13 @@ async function applyAdded(
             pending.id,
             t.transaction_id,
           ),
-          stmt(db, 'UPDATE transactions SET is_split = 1 WHERE plaid_txn_id = ?', t.transaction_id),
+          // Split rows carry no category of their own; automation never fills one in.
+          stmt(
+            db,
+            `UPDATE transactions SET is_split = 1, category_id = NULL, category_source = NULL, category_reason = NULL, rule_id = NULL
+              WHERE plaid_txn_id = ?`,
+            t.transaction_id,
+          ),
         );
       }
       followUps.push(stmt(db, 'DELETE FROM transactions WHERE id = ?', pending.id));
