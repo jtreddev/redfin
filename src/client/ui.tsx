@@ -1,10 +1,11 @@
-import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react';
+import { useEffect, useId, useRef, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { addMonths } from '../shared/dates';
 import { centsToInput, inputToCents, money, monthLabel } from './format';
 import { categoryTree, pickerOptions } from './categoryTree';
 import { Icon } from './icons';
 import { KidFormSheet, NewCategorySheet } from './quickAdd';
+import { NEW_VALUE, selectStep, type SelectEvent, type SelectState } from './selectCommit';
 import { useApp } from './state';
 import type { Category } from './types';
 
@@ -134,7 +135,9 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
   if (!open) return null;
   // In a portal, so a sheet opened from inside a <label> (a picker's "＋ New") isn't part of that label.
   return createPortal(
-    <div className="sheet-backdrop" onClick={onClose}>
+    // A form in a sheet opened from inside another form (a picker's "＋ New" in the bill editor) must not
+    // submit that outer form: React bubbles events through the portal, so stop them here.
+    <div className="sheet-backdrop" onClick={onClose} onSubmit={(e) => e.stopPropagation()}>
       <div
         ref={dialog}
         className="sheet"
@@ -279,7 +282,31 @@ export function AmountInput({
   );
 }
 
-const NEW = '__new';
+const NEW = NEW_VALUE;
+
+/**
+ * Handlers for a native select that saves on choice: a click or tap commits at once, arrow-key steps
+ * wait for Enter or for focus to leave, and "＋ New" opens only on a real choice (see selectCommit.ts).
+ * A commit of the value already shown does nothing.
+ */
+export function useCommitSelect(value: number | null, commit: (v: string) => void) {
+  const state = useRef<SelectState>({ pending: null, keyNav: false });
+  const [pending, setPending] = useState<string | null>(null);
+  const current = value === null ? '' : String(value);
+  const run = (event: SelectEvent) => {
+    const r = selectStep(state.current, event);
+    state.current = r.state;
+    setPending(r.state.pending);
+    if (r.commit !== null && r.commit !== current) commit(r.commit);
+  };
+  return {
+    value: pending ?? current,
+    onKeyDown: (e: ReactKeyboardEvent<HTMLSelectElement>) => run({ type: 'key', key: e.key }),
+    onPointerDown: () => run({ type: 'pointer' }),
+    onChange: (e: ChangeEvent<HTMLSelectElement>) => run({ type: 'change', value: e.target.value }),
+    onBlur: () => run({ type: 'blur' }),
+  };
+}
 /** A sub-category's option reads "Habits › Snacks" (an optgroup can't nest, and the closed select shows it whole). */
 export function optionLabel(category: Category, categories: readonly Category[]): string {
   const parent = category.parentId === null ? undefined : categories.find((c) => c.id === category.parentId);
@@ -312,6 +339,7 @@ export function CategorySelect({
 }) {
   const { categories, sections, me } = useApp();
   const [creating, setCreating] = useState(false);
+  const select = useCommitSelect(value, (v) => (v === NEW ? setCreating(true) : onChange(v ? Number(v) : null)));
   const groups = pickerOptions(
     categoryTree(
       sections,
@@ -326,16 +354,7 @@ export function CategorySelect({
         id={id}
         ref={selectRef}
         disabled={disabled}
-        value={value ?? ''}
-        onChange={(e) => {
-          if (e.target.value === NEW) {
-            // Leave the select showing the current value; the form picks the new one on save.
-            e.target.value = value === null ? '' : String(value);
-            setCreating(true);
-            return;
-          }
-          onChange(e.target.value ? Number(e.target.value) : null);
-        }}
+        {...select}
       >
         <option value="">{noneLabel}</option>
         {groups.map((g) => (
@@ -380,20 +399,13 @@ export function KidSelect({
 }) {
   const { me } = useApp();
   const [adding, setAdding] = useState(false);
+  const select = useCommitSelect(value, (v) => (v === NEW ? setAdding(true) : onChange(v ? Number(v) : null)));
   if (!me.kids.length && !allowAdd) return null;
   return (
     <>
       <select
         id={id}
-        value={value ?? ''}
-        onChange={(e) => {
-          if (e.target.value === NEW) {
-            e.target.value = value === null ? '' : String(value);
-            setAdding(true);
-            return;
-          }
-          onChange(e.target.value ? Number(e.target.value) : null);
-        }}
+        {...select}
       >
         <option value="">{noneLabel}</option>
         {me.kids.map((k) => (

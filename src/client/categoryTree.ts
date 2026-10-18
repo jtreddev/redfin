@@ -103,7 +103,7 @@ export function categoryRules(c: Category, all: readonly Category[]): CategoryRu
         ? `${c.name} has sub-categories, so it can’t become one.`
         : null,
     merge: special ? `The app relies on ${c.name}, so it can’t be merged away.` : null,
-    hide: null,
+    hide: special ? `The app relies on ${c.name}, so it can’t be hidden.` : null,
   };
 }
 

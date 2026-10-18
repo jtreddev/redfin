@@ -2418,7 +2418,7 @@ h2.h3,
 }
 
 .removable-chip button:hover {
-  background: rgb(63 74 166 / 10%);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .removable-chip .icon {
@@ -2689,11 +2689,6 @@ kbd {
   height: 18px;
 }
 
-@media (prefers-color-scheme: dark) {
-  .removable-chip button:hover {
-    background: rgb(143 152 236 / 14%);
-  }
-}
 
 @media (prefers-reduced-motion: no-preference) {
   .row.is-target {
@@ -2710,4 +2705,19 @@ body:has(.bulk-bar) .toast {
   body:has(.bulk-bar) .toast {
     bottom: 100px;
   }
+}
+
+.inline-field {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.inline-field > .field-label {
+  flex: none;
+}
+
+.inline-field > select {
+  flex: 1 1 auto;
+  max-width: 280px;
 }

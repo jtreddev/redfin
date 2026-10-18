@@ -214,7 +214,8 @@ describe('categories API', () => {
     });
 
     it('hiding a parent hides its children; a child can’t be shown while its parent is hidden', async () => {
-      const habits = category('Habits', 'Habits');
+      // Habits itself can't be hidden (the app relies on it), so a plain parent stands in.
+      const habits = category('Everyday', 'Household & Personal');
       const snacks = (await add({ parentId: habits, name: 'Snacks' })).body.id;
       await patch(habits, { archived: true });
       expect(row(snacks).archived).toBe(1);

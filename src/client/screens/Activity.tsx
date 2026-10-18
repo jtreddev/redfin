@@ -10,6 +10,7 @@ import {
 } from '../../shared/activityQuery';
 import { GROUP_ORDER } from '../../shared/trends';
 import { api, del, errorMessage, patch, post } from '../api';
+import { capSelection, MAX_BULK } from '../bulk';
 import { categoryTree } from '../categoryTree';
 import { transactionsCsv } from '../csvExport';
 import { monthLabel, plural, weekdayDate } from '../format';
@@ -19,7 +20,7 @@ import { describeSearch, resultSummary } from '../searchHelp';
 import { SHORTCUTS, shortcutFor, step } from '../shortcuts';
 import { categoryName, useApp } from '../state';
 import type { Transaction } from '../types';
-import { AmountInput, Button, CategorySelect, Empty, ErrorNote, Field, KidSelect, Loading, Money, PageHeader, Segmented, Sheet, Toggle } from '../ui';
+import { AmountInput, Button, CategorySelect, Empty, ErrorNote, Field, KidSelect, Loading, Money, PageHeader, Segmented, Sheet, Toggle, useCommitSelect } from '../ui';
 import { TransactionSheet } from './TransactionSheet';
 
 type Totals = { count: number; outCents: number; inCents: number };
@@ -283,7 +284,7 @@ export function Activity({ params }: { params: URLSearchParams }) {
           type="search"
           aria-label="Search charges"
           aria-describedby="search-help"
-          placeholder="Search, or an amount like 45 or >100"
+          placeholder="Search or amount (45, >100)"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onKeyDown={(e) => {
@@ -382,8 +383,17 @@ export function Activity({ params }: { params: URLSearchParams }) {
 
       {selecting && (
         <div className="cluster select-tools">
-          <Button small variant="ghost" onClick={() => setSelected(new Set(items.map((t) => t.id)))} disabled={!items.length}>
-            Select all {items.length} shown
+          <Button
+            small
+            variant="ghost"
+            onClick={() => {
+              const { ids, capped } = capSelection(items.map((t) => t.id));
+              setSelected(new Set(ids));
+              if (capped) toast(`Selected the first ${MAX_BULK}. One change takes up to ${MAX_BULK} charges at a time.`);
+            }}
+            disabled={!items.length}
+          >
+            Select all {Math.min(items.length, MAX_BULK)} shown
           </Button>
           {selected.size > 0 && (
             <Button small variant="ghost" onClick={() => setSelected(new Set())}>
@@ -649,6 +659,20 @@ function BulkBar({ items, onDone, onUndone }: { items: Transaction[]; onDone: ()
   }
 
   const ids = items.map((t) => t.id);
+  const kidSelect = useCommitSelect(null, (v) => {
+    const kidId = v === 'none' ? null : Number(v);
+    void apply({ kidId }, ids, (n) => (kidId ? `${plural(n, 'charge')} tagged ${me.kids.find((k) => k.id === kidId)?.name}` : `Kid cleared on ${plural(n, 'charge')}`));
+  });
+  if (items.length > MAX_BULK) {
+    return (
+      <div className="bulk-bar" role="region" aria-label="Change the selected charges">
+        <strong>{items.length} selected</strong>
+        <p className="small" role="status">
+          One change takes up to {MAX_BULK} charges. Unselect {items.length - MAX_BULK} to go on.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="bulk-bar" role="region" aria-label="Change the selected charges">
       <strong>{plural(items.length, 'selected', 'selected')}</strong>
@@ -669,17 +693,7 @@ function BulkBar({ items, onDone, onUndone }: { items: Transaction[]; onDone: ()
             <label className="sr-only" htmlFor="bulk-kid">
               Set kid
             </label>
-            <select
-              id="bulk-kid"
-              value=""
-              disabled={busy}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (!v) return;
-                const kidId = v === 'none' ? null : Number(v);
-                void apply({ kidId }, ids, (n) => (kidId ? `${plural(n, 'charge')} tagged ${me.kids.find((k) => k.id === kidId)?.name}` : `Kid cleared on ${plural(n, 'charge')}`));
-              }}
-            >
+            <select id="bulk-kid" disabled={busy} {...kidSelect}>
               <option value="">Set kid…</option>
               {me.kids.map((k) => (
                 <option key={k.id} value={k.id}>
@@ -965,7 +979,7 @@ function AddTransactionSheet({ onClose, onAdded }: { onClose: () => void; onAdde
           <CategorySelect value={categoryId} onChange={setCategoryId} />
         </Field>
       )}
-      {me.kids.length > 0 && (
+      {(me.kids.length > 0 || direction === 'out') && (
         <Field label="For which kid?">
           <KidSelect value={kidId} onChange={setKidId} />
         </Field>

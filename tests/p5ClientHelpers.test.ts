@@ -142,7 +142,7 @@ describe('reordering and nesting categories', () => {
     expect(special.rename).toMatch(/by name/);
     expect(special.nest).toMatch(/stays a top-level/);
     expect(special.merge).toMatch(/can’t be merged/);
-    expect(special.hide).toBeNull();
+    expect(special.hide).toMatch(/can’t be hidden/);
     expect(categoryRules(kid, all).moveGroup).toMatch(/out of its parent/);
     expect(categoryRules(vape, all)).toEqual({ rename: null, moveGroup: null, nest: null, merge: null, hide: null });
     expect(categoryRules(fun, all).merge).toMatch(/Fun money/);

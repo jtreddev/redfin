@@ -44,7 +44,7 @@ export const TXN_SELECT = `SELECT t.id, t.account_id AS accountId, a.name AS acc
   t.source, t.category_id AS categoryId, t.category_source AS categorySource, t.kid_id AS kidId,
   t.private_member_id AS privateMemberId, t.income_source_id AS incomeSourceId, t.pay_date AS payDate, t.notes,
   t.category_reason AS categoryReason, t.transfer_pair_id AS transferPairId, t.is_ignored AS isIgnored, t.is_split AS isSplit,
-  t.import_batch_id AS importBatchId, t.updated_at AS updatedAt
+  t.import_batch_id AS importBatchId, t.updated_at AS updatedAt, a.owner_member_id AS accountOwnerId
   FROM transactions t JOIN accounts a ON a.id = t.account_id`;
 
 export interface TxnRow {
@@ -73,6 +73,8 @@ export interface TxnRow {
   isSplit: number;
   importBatchId: number | null;
   updatedAt: string;
+  /** The person whose own card or account this is; null for shared accounts. */
+  accountOwnerId: number | null;
 }
 
 interface SplitRow {
@@ -137,6 +139,11 @@ function readEdit(ctx: IngestContext, body: Record<string, unknown>, viewerId: n
   if (body.isPrivate !== undefined) edit.isPrivate = optBool(body.isPrivate, 'isPrivate');
   if (body.isIgnored !== undefined) edit.isIgnored = optBool(body.isIgnored, 'isIgnored');
   return edit;
+}
+
+/** Making a charge private is for your own spending: never a charge on your partner's own card or account. */
+function canMakePrivate(row: TxnRow, viewerId: number): boolean {
+  return row.accountOwnerId === null || row.accountOwnerId === viewerId;
 }
 
 /**
@@ -397,6 +404,9 @@ transactions.patch('/transactions/:id', async (c) => {
   const alsoSimilar = optBool(body.alsoSimilar, 'alsoSimilar') ?? false;
 
   const edit = readEdit(ctx, body, viewer.memberId);
+  if (edit.isPrivate === true && row.privateMemberId !== viewer.memberId && !canMakePrivate(row, viewer.memberId)) {
+    throw new HttpError(403, 'That’s on your partner’s own card, so only they can make it private.');
+  }
   if (row.isSplit === 1 && edit.categoryId !== undefined && edit.categoryId !== null) throw badRequest('Remove the split first.');
   const classificationTouched = Object.keys(edit).length > 0;
   const k = applyEdit(ctx, row, edit, viewer.memberId);
@@ -488,6 +498,7 @@ transactions.post('/transactions/bulk', async (c) => {
   );
   const changes = rows
     .filter((row) => !(filing && row.isSplit === 1))
+    .filter((row) => !(edit.isPrivate === true && !canMakePrivate(row, viewer.memberId)))
     .map((row) => {
       const k = applyEdit(ctx, row, edit, viewer.memberId);
       return { id: row.id, c: k.categoryId, k: k.kidId, p: k.privateMemberId, i: k.isIgnored ? 1 : 0 };

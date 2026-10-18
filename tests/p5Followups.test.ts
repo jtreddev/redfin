@@ -138,3 +138,54 @@ describe('Activity: only left-out charges', () => {
     expect(res.body.totals.count).toBe(2);
   });
 });
+
+describe('final review: hiding special categories', () => {
+  it('refuses to hide a category the app relies on, or fun money; others hide fine', async () => {
+    for (const name of ['Gas', 'Paychecks', 'Transfers', 'Savings & Planned Costs']) {
+      const res = await json<{ error: string }>('PATCH', `/categories/${cat(name)}`, { archived: true });
+      expect(res.status, name).toBe(400);
+    }
+    const habits = db.rows<{ id: number }>("SELECT c.id FROM categories c JOIN sections s ON s.id = c.section_id WHERE s.name = 'Habits' AND c.name = 'Habits'")[0]!.id;
+    expect((await json('PATCH', `/categories/${habits}`, { archived: true })).status).toBe(400);
+    const fun = db.rows<{ id: number }>('SELECT id FROM categories WHERE fun_member_id = ?', you)[0]!.id;
+    expect((await json('PATCH', `/categories/${fun}`, { archived: true })).status).toBe(400);
+    expect(db.rows<{ n: number }>('SELECT COUNT(*) AS n FROM categories WHERE archived = 1 AND id IN (?, ?, ?)', cat('Gas'), habits, fun)[0]!.n).toBe(0);
+    expect((await json('PATCH', `/categories/${cat('Medical')}`, { archived: true })).status).toBe(200);
+  });
+});
+
+describe('final review: mark private only on your own or shared accounts', () => {
+  function charge(accountId: number) {
+    db.exec(`INSERT INTO transactions (account_id, date, amount_cents, name, source) VALUES (?, '2026-10-05', -900, 'CHARGE', 'manual')`, accountId);
+    return db.rows<{ id: number }>('SELECT MAX(id) AS id FROM transactions')[0]!.id;
+  }
+  const privateTo = (id: number) => db.rows<{ p: number | null }>('SELECT private_member_id AS p FROM transactions WHERE id = ?', id)[0]!.p;
+
+  it('PATCH refuses a charge on the partner’s own card, allows yours and shared ones', async () => {
+    db.exec(`INSERT INTO accounts (id, name, type, owner_member_id) VALUES (2, 'Their card', 'credit', ?), (3, 'My card', 'credit', ?)`, partner, you);
+    const theirs = charge(2);
+    const mine = charge(3);
+    const shared = charge(1);
+    expect((await json('PATCH', `/transactions/${theirs}`, { isPrivate: true })).status).toBe(403);
+    expect(privateTo(theirs)).toBeNull();
+    expect((await json('PATCH', `/transactions/${mine}`, { isPrivate: true })).status).toBe(200);
+    expect((await json('PATCH', `/transactions/${shared}`, { isPrivate: true })).status).toBe(200);
+    expect(privateTo(mine)).toBe(you);
+    expect(privateTo(shared)).toBe(you);
+    // The partner can still make their own card's charge private.
+    expect((await json('PATCH', `/transactions/${theirs}`, { isPrivate: true }, PARTNER)).status).toBe(200);
+  });
+
+  it('bulk skips charges on the partner’s own card', async () => {
+    db.exec(`INSERT INTO accounts (id, name, type, owner_member_id) VALUES (2, 'Their card', 'credit', ?)`, partner);
+    const theirs = charge(2);
+    const shared = charge(1);
+    const res = await json<{ updated: number; skipped: number }>('POST', '/transactions/bulk', { ids: [theirs, shared], set: { isPrivate: true } });
+    expect(res.body).toMatchObject({ updated: 1, skipped: 1 });
+    expect(privateTo(theirs)).toBeNull();
+    expect(privateTo(shared)).toBe(you);
+    // Other bulk changes still reach that charge.
+    const left = await json<{ updated: number }>('POST', '/transactions/bulk', { ids: [theirs], set: { isIgnored: true } });
+    expect(left.body.updated).toBe(1);
+  });
+});

@@ -353,14 +353,17 @@ function CategorySheet({ category: c, onClose }: { category: Category; onClose: 
     }
   }
 
+  // Only the latest target's preview counts: an answer for an earlier pick is dropped.
+  const previewFor = useRef(0);
   async function checkMerge(id: number) {
+    previewFor.current = id;
     setPreview(null);
     if (!id) return;
     try {
       const res = await post<{ counts: MergeCounts; needsConfirm: boolean }>(`/categories/${c.id}/merge?preview=1`, { intoId: id });
-      setPreview(res);
+      if (previewFor.current === id) setPreview(res);
     } catch (error) {
-      toast(errorMessage(error), 'error');
+      if (previewFor.current === id) toast(errorMessage(error), 'error');
     }
   }
 
@@ -565,7 +568,7 @@ function CategorySheet({ category: c, onClose }: { category: Category; onClose: 
       </section>
 
       {c.funMemberId === null && (
-        <Button variant="ghost" onClick={() => go('activity', { categoryId: c.id })}>
+        <Button variant="ghost" onClick={() => go('activity', { categoryId: c.id, month: 'all' })}>
           See its charges
         </Button>
       )}

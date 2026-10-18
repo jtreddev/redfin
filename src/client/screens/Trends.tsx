@@ -255,7 +255,7 @@ function CategoryCard({ t, months, slice, partialIndex }: ChartCardProps) {
             <a className="edit-link small" href={`#/more/categories?id=${row.id}`}>
               Edit category
             </a>
-            <Button small variant="ghost" onClick={() => go('activity', { categoryId: row.id })}>
+            <Button small variant="ghost" onClick={() => go('activity', { categoryId: row.id, month: 'all' })}>
               See transactions
             </Button>
           </span>

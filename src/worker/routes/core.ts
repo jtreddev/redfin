@@ -352,6 +352,8 @@ core.patch('/categories/:id', async (c) => {
     }
   }
 
+  if (archived === true && category.funMemberId != null) throw badRequest('Fun money follows its person, so it stays.');
+  if (archived === true && isSpecial(category)) throw badRequest(`The app relies on ${category.name}, so it can’t be hidden.`);
   if (archived === false && parent?.archived) throw badRequest(`Show ${parent.name} first.`);
 
   const updates = new Updates()

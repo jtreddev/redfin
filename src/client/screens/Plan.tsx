@@ -600,16 +600,16 @@ function BillsView({ month }: { month: string }) {
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
-      <Segmented<BillStatus>
-        value={status}
-        onChange={setStatus}
-        options={[
-          { value: 'all', label: 'All' },
-          { value: 'suggested', label: 'Suggested' },
-          { value: 'confirmed', label: 'Confirmed' },
-          { value: 'dismissed', label: 'Dismissed' },
-        ]}
-      />
+      {/* A select, not tabs: four statuses don't fit side by side at 360px. */}
+      <label className="inline-field">
+        <span className="field-label">Show</span>
+        <select value={status} onChange={(e) => setStatus(e.target.value as BillStatus)}>
+          <option value="all">All bills</option>
+          <option value="suggested">Suggested</option>
+          <option value="confirmed">Confirmed</option>
+          <option value="dismissed">Dismissed</option>
+        </select>
+      </label>
       {recurring.error && <ErrorNote message={recurring.error} onRetry={() => void recurring.reload()} />}
       {!recurring.data ? (
         !recurring.error && <Loading />
@@ -703,7 +703,7 @@ function BillEditor({ bill, onCancel, onSaved }: { bill: RecurringBill; onCancel
         expectedAmountCents: sign * (cents ?? 0),
         cadence,
         ...(nextDate ? { nextDate } : {}),
-        ...(categoryId ? { categoryId } : {}),
+        categoryId,
       });
       toast(`${name.trim()} saved`);
       await onSaved();

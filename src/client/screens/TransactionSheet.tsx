@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { alsoFileOnTick } from '../alsoFile';
 import { api, del, errorMessage, patch, post, put } from '../api';
 import { money, plural, weekdayDate } from '../format';
 import { useApp } from '../state';
@@ -27,6 +28,8 @@ export function TransactionSheet({
   const [splitting, setSplitting] = useState(false);
   const [similar, setSimilar] = useState<{ count: number; merchant: string } | null>(null);
   const [alsoFile, setAlsoFile] = useState(false);
+  /** A category was picked in this sheet (ticking "Also file" then files the others at once). */
+  const [pickedThisSession, setPickedThisSession] = useState(false);
   const [similarTick, setSimilarTick] = useState(0);
   const categoryRef = useRef<HTMLSelectElement>(null);
 
@@ -55,6 +58,7 @@ export function TransactionSheet({
     setNotes(txn.notes ?? '');
     setSplitting(false);
     setAlsoFile(false);
+    setPickedThisSession(false);
     if (txn.transferPairId) {
       api<Transaction>(`/transactions/${txn.id}`)
         .then(setT)
@@ -162,7 +166,10 @@ export function TransactionSheet({
               selectRef={categoryRef}
               value={t.categoryId}
               // One charge only, unless "Also file…" is ticked.
-              onChange={(id) => void update(id === null ? { categoryId: null } : { categoryId: id, alsoSimilar: alsoFile })}
+              onChange={(id) => {
+                if (id !== null) setPickedThisSession(true);
+                void update(id === null ? { categoryId: null } : { categoryId: id, alsoSimilar: alsoFile });
+              }}
             />
           </Field>
           {similar && similar.count > 0 && (
@@ -174,8 +181,10 @@ export function TransactionSheet({
                 onChange={(e) => {
                   const on = e.target.checked;
                   setAlsoFile(on);
-                  // Ticked after a category is picked: file the others now. Before: it applies with the pick.
-                  if (on && t.categoryId !== null) void update({ categoryId: t.categoryId, alsoSimilar: true });
+                  // Right after a pick here: file the others now. Otherwise it rides along with the next pick.
+                  if (alsoFileOnTick({ checked: on, pickedThisSession, categoryId: t.categoryId }) === 'learn-now') {
+                    void update({ categoryId: t.categoryId, alsoSimilar: true });
+                  }
                 }}
               />
               <span>
@@ -194,7 +203,8 @@ export function TransactionSheet({
 
       {t.amountCents < 0 && !t.pending && <BillToggle txnId={t.id} />}
 
-      {me.kids.length > 0 && !t.isSplit && (
+      {/* With no kids yet, a money-out charge still offers "＋ Add a kid". */}
+      {!t.isSplit && (me.kids.length > 0 || t.amountCents < 0) && (
         <Field label="For which kid?">
           <KidSelect value={t.kidId} onChange={(id) => void update({ kidId: id })} />
         </Field>

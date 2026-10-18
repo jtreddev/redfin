@@ -60,6 +60,7 @@ export function NewCategorySheet({
         className="stack-sm"
         onSubmit={(e) => {
           e.preventDefault();
+          e.stopPropagation();
           void save();
         }}
       >
@@ -159,6 +160,7 @@ export function KidFormSheet({
         className="stack-sm"
         onSubmit={(e) => {
           e.preventDefault();
+          e.stopPropagation();
           void save();
         }}
       >
