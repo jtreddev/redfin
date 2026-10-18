@@ -1,6 +1,7 @@
 import type { MonthKey } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
-import { money } from '../format';
+import { useMoneyText } from '../amounts';
+import { Money } from '../ui';
 import { Axes, bands, LAYOUT, monthTitle, svgHeight, useActiveMonth, useHatch, useWidth } from './frame';
 import { barPath, dollarsShort, labelsFit, niceMax, stackLayout, ticks } from './scale';
 import { Tooltip } from './Tooltip';
@@ -38,6 +39,7 @@ export function StackedBars({
   const focus = useActiveMonth(count, Math.max(0, latest));
   const { active } = focus;
   const hatch = useHatch();
+  const money = useMoneyText();
 
   const totals = months.map((_, i) => series.reduce((sum, s) => sum + (s.values[i] ?? 0), 0));
   const tallest = Math.max(0, ...months.map((_, i) => series.reduce((sum, s) => sum + Math.max(0, s.values[i] ?? 0), 0)));
@@ -133,7 +135,7 @@ export function StackedBars({
               );
             })}
             {latest >= 0 && latestTotal > 0 && labelsFit({ width: band, height: LAYOUT.top + latestTop }, totalLabel) && (
-              <text className="chart-label" x={center(latest)} y={LAYOUT.top + latestTop - 6} textAnchor="middle" aria-hidden="true">
+              <text className="chart-label chart-amount" x={center(latest)} y={LAYOUT.top + latestTop - 6} textAnchor="middle" aria-hidden="true">
                 {totalLabel}
               </text>
             )}
@@ -153,7 +155,7 @@ export function StackedBars({
             <span key={s.key} className="chart-legend-item">
               <span className="chart-swatch" style={{ background: `var(${s.colorVar})` }} aria-hidden="true" />
               <span>{s.name}</span>
-              <span className="money muted">{money(s.values[latest] ?? 0, { whole: true })}</span>
+              <Money cents={s.values[latest] ?? 0} whole className="muted" />
             </span>
           ))}
         </div>

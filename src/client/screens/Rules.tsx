@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api, del, errorMessage, patch, post } from '../api';
 import { ruleRangeLabel } from '../../shared/rules';
-import { money, plural, shortDate } from '../format';
+import { plural, shortDate } from '../format';
 import { useApp, useLoad } from '../state';
-import { Button, CategorySelect, Empty, ErrorNote, Field, KidSelect, Loading, Segmented, Sheet, Toggle } from '../ui';
+import { Button, CategorySelect, Empty, ErrorNote, Field, KidSelect, Loading, Money, Segmented, Sheet, Toggle } from '../ui';
 import { SubHeader } from './More';
 
 interface RuleItem {
@@ -215,7 +215,7 @@ function RuleSheet({ rule, onClose, onSaved }: { rule: RuleItem | null; onClose:
             </strong>
             {(power ? preview.sample : preview.sample.slice(0, 3)).map((ex) => (
               <span key={ex.id} className="muted">
-                {shortDate(ex.date)} · {ex.name} · {money(ex.amountCents)}
+                {shortDate(ex.date)} · {ex.name} · <Money cents={ex.amountCents} />
               </span>
             ))}
             {power && preview.wouldChange === 0 && preview.count > 0 && <span className="muted">They’re already filed this way, or set by hand.</span>}

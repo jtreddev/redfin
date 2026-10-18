@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { alsoFileOnTick } from '../alsoFile';
+import { useMoneyText } from '../amounts';
 import { api, del, errorMessage, patch, post, put } from '../api';
-import { money, plural, weekdayDate } from '../format';
+import { plural, weekdayDate } from '../format';
 import { useApp } from '../state';
 import type { CategoryMove, Split, Transaction } from '../types';
 import { AmountInput, Button, CategorySelect, Field, KidSelect, Money, Sheet, Toggle } from '../ui';
@@ -294,6 +295,7 @@ const CADENCES: { value: Cadence; label: string }[] = [
 /** Marks this charge's merchant as a bill, for bills "Find them" misses. */
 function BillToggle({ txnId }: { txnId: number }) {
   const { toast } = useApp();
+  const moneyText = useMoneyText();
   const [bill, setBill] = useState<Bill | null>(null);
   const [guess, setGuess] = useState<BillGuess | null>(null);
   const [editing, setEditing] = useState(false);
@@ -341,7 +343,7 @@ function BillToggle({ txnId }: { txnId: number }) {
         label="This is a bill"
         hint={
           isBill && bill && !editing
-            ? `${CADENCES.find((c) => c.value === bill.cadence)?.label ?? ''}, about ${money(bill.amountCents)}. Shows in Plan › Bills and upcoming bills.`
+            ? `${CADENCES.find((c) => c.value === bill.cadence)?.label ?? ''}, about ${moneyText(bill.amountCents)}. Shows in Plan › Bills and upcoming bills.`
             : 'It repeats, like rent, a utility, or a subscription.'
         }
       />
@@ -415,7 +417,7 @@ function SplitEditor({ txn, onCancel, onSaved }: { txn: Transaction; onCancel: (
       <div className="spread">
         <h3>Split</h3>
         <span className={left === 0 ? 'muted small' : 'tone-warn small'}>
-          {left === 0 ? 'All assigned' : `${money(left)} ${left > 0 ? 'left' : 'too much'}`}
+          {left === 0 ? 'All assigned' : <><Money cents={left} /> {left > 0 ? 'left' : 'too much'}</>}
         </span>
       </div>
       {parts.map((part, i) => (

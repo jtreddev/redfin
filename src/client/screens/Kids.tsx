@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { monthEnd, monthOf, monthStart } from '../../shared/dates';
 import { api, errorMessage, patch, post, put } from '../api';
-import { money } from '../format';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import type { Kid } from '../types';
@@ -81,7 +80,7 @@ export function Kids() {
               {report.data.untaggedCount > 0 && (
                 <div className="banner banner-warn">
                   <span>
-                    {money(report.data.untaggedCents, { whole: true })} of kids spending isn’t tagged to a kid yet.
+                    <Money cents={report.data.untaggedCents} whole /> of kids spending isn’t tagged to a kid yet.
                   </span>
                   <Button small onClick={() => go('activity', { month })}>
                     Tag
@@ -99,7 +98,7 @@ export function Kids() {
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <Money cents={kid.totalCents} whole className="big" />
-                      {kid.budgetCents > 0 && <div className="muted small">of {money(kid.budgetCents, { whole: true })}</div>}
+                      {kid.budgetCents > 0 && <div className="muted small">of <Money cents={kid.budgetCents} whole /></div>}
                     </div>
                   </div>
                   {kid.budgetCents > 0 && <Progress value={kid.totalCents} max={kid.budgetCents} />}
@@ -111,8 +110,8 @@ export function Kids() {
                         <div key={String(c.categoryId)} className="spread small">
                           <span>{c.name}</span>
                           <span>
-                            {money(c.cents, { whole: true })}
-                            {c.budgetCents > 0 && <span className="muted"> / {money(c.budgetCents, { whole: true })}</span>}
+                            <Money cents={c.cents} whole />
+                            {c.budgetCents > 0 && <span className="muted"> / <Money cents={c.budgetCents} whole /></span>}
                           </span>
                         </div>
                       ))

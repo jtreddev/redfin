@@ -2,9 +2,9 @@ import { useState } from 'react';
 import type { PaycheckSuggestion } from '../../shared/paycheckFinder';
 import type { PayFrequency } from '../../shared/paySchedule';
 import { api, del, errorMessage, patch, post } from '../api';
-import { money, shortDate } from '../format';
+import { shortDate } from '../format';
 import { useApp, useLoad } from '../state';
-import { AmountInput, Button, Card, Empty, ErrorNote, Field, Loading, Sheet, Toggle } from '../ui';
+import { AmountInput, Button, Card, Empty, ErrorNote, Field, Loading, Money, Sheet, Toggle } from '../ui';
 import { SubHeader } from './More';
 
 interface IncomeSource {
@@ -90,7 +90,7 @@ export function Income() {
                   {s.nextPayDates.length > 0 && ` · next ${s.nextPayDates.map(shortDate).join(', ')}`}
                 </div>
               </div>
-              <strong>{money(s.netPayCents, { whole: true })}</strong>
+              <strong><Money cents={s.netPayCents} whole /></strong>
             </button>
           ))}
         </div>
@@ -104,7 +104,7 @@ export function Income() {
               <div key={`${s.merchant}-${s.netPayCents}`} className="row">
                 <div className="row-main">
                   <div className="row-title">
-                    {titleCase(s.merchant)} · {money(s.netPayCents)}
+                    {titleCase(s.merchant)} · <Money cents={s.netPayCents} />
                   </div>
                   <div className="row-sub">
                     {FREQUENCIES.find((f) => f.value === s.frequency)?.label.toLowerCase()}

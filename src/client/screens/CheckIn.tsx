@@ -3,7 +3,7 @@ import type { MonthSummary, OverspendDecision } from '../../shared/checkin';
 import { addMonths, monthOf } from '../../shared/dates';
 import type { GoalProgress } from '../../shared/goals';
 import { api, errorMessage, patch, post } from '../api';
-import { money, monthLabel, shortDate } from '../format';
+import { monthLabel, shortDate } from '../format';
 import { useApp, useLoad } from '../state';
 import { AmountInput, Button, Card, ErrorNote, Field, Loading, Money, MonthPicker, Progress, Segmented } from '../ui';
 import { SubHeader } from './More';
@@ -116,14 +116,14 @@ export function CheckIn({ params }: { params: URLSearchParams }) {
                   <span>Money in</span>
                   <span>
                     <Money cents={d.summary.incomeActualCents} whole tone="good" />{' '}
-                    <span className="muted small">of {money(d.summary.incomeBudgetCents, { whole: true })}</span>
+                    <span className="muted small">of <Money cents={d.summary.incomeBudgetCents} whole /></span>
                   </span>
                 </div>
                 <div className="spread">
                   <span>Spent & saved</span>
                   <span>
                     <Money cents={d.summary.spendActualCents} whole />{' '}
-                    <span className="muted small">of {money(d.summary.spendBudgetCents, { whole: true })}</span>
+                    <span className="muted small">of <Money cents={d.summary.spendBudgetCents} whole /></span>
                   </span>
                 </div>
                 <div className="spread">
@@ -133,7 +133,14 @@ export function CheckIn({ params }: { params: URLSearchParams }) {
               </div>
               {d.summary.unbudgeted.length > 0 && (
                 <p className="muted small">
-                  Not in the plan: {d.summary.unbudgeted.map((l) => `${l.name} (${money(l.actualCents, { whole: true })})`).join(', ')}.
+                  Not in the plan:{' '}
+                  {d.summary.unbudgeted.map((l, i) => (
+                    <span key={l.name}>
+                      {i > 0 && ', '}
+                      {l.name} (<Money cents={l.actualCents} whole />)
+                    </span>
+                  ))}
+                  .
                 </p>
               )}
             </Card>
@@ -149,7 +156,7 @@ export function CheckIn({ params }: { params: URLSearchParams }) {
                   {d.summary.wins.map((w) => (
                     <div key={w.categoryId} className="spread">
                       <span>{w.name}</span>
-                      <span className="tone-good">{money(w.underCents, { whole: true })} under</span>
+                      <span className="tone-good"><Money cents={w.underCents} whole /> under</span>
                     </div>
                   ))}
                 </div>
@@ -176,10 +183,10 @@ export function CheckIn({ params }: { params: URLSearchParams }) {
                       <div key={line.categoryId} className="stack-sm">
                         <div className="spread">
                           <strong>{line.name}</strong>
-                          <span className="tone-bad">{money(line.overCents, { whole: true })} over</span>
+                          <span className="tone-bad"><Money cents={line.overCents} whole /> over</span>
                         </div>
                         <div className="muted small">
-                          Spent {money(line.actualCents, { whole: true })} of {money(line.budgetCents, { whole: true })}
+                          Spent <Money cents={line.actualCents} whole /> of <Money cents={line.budgetCents} whole />
                         </div>
                         {line.categoryId > 0 && !d.frozen && (
                           <>
@@ -190,7 +197,7 @@ export function CheckIn({ params }: { params: URLSearchParams }) {
                               }
                               options={[
                                 { value: 'keep', label: 'One-off' },
-                                { value: 'raise', label: `Raise to ${money(line.actualCents, { whole: true })}` },
+                                { value: 'raise', label: <>Raise to <Money cents={line.actualCents} whole /></> },
                                 { value: 'set', label: 'New amount' },
                               ]}
                             />
@@ -219,13 +226,13 @@ export function CheckIn({ params }: { params: URLSearchParams }) {
                       <div className="spread">
                         <strong>{g.name}</strong>
                         <span className="small">
-                          {money(g.savedCents, { whole: true })} / {money(g.targetCents, { whole: true })}
+                          <Money cents={g.savedCents} whole /> / <Money cents={g.targetCents} whole />
                         </span>
                       </div>
                       <Progress value={g.savedCents} max={g.targetCents} tone="good" />
                       {g.progress.monthlyNeededCents !== null && g.progress.status !== 'done' && (
                         <div className="muted small">
-                          Needs {money(g.progress.monthlyNeededCents, { whole: true })}/month · {g.progress.status === 'behind' ? 'behind' : 'on track'}
+                          Needs <Money cents={g.progress.monthlyNeededCents} whole />/month · {g.progress.status === 'behind' ? 'behind' : 'on track'}
                         </div>
                       )}
                     </div>

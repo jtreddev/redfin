@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { addMonths, monthOf } from '../../shared/dates';
+import { subscriptionCost } from '../../shared/subscriptions';
+import { WithAmounts } from '../amounts';
 import { api, del, errorMessage, patch, post, put } from '../api';
-import { money, plural, shortDate } from '../format';
+import { plural, shortDate } from '../format';
 import { budgetState } from '../budgetState';
 import { Icon } from '../icons';
 import { go } from '../router';
@@ -25,6 +27,7 @@ import {
   StatusDot,
   Toggle,
 } from '../ui';
+import { IncreaseActions, IncreaseText } from './BillIncreases';
 import { Goals } from './Goals';
 
 type Tab = 'budget' | 'weeks' | 'bills';
@@ -100,19 +103,19 @@ function BudgetView({ month }: { month: string }) {
         <div className="figures">
           <div className="figure">
             <Money cents={b.totals.incomeActualCents} whole className="big" />
-            <div className="label">income, of {money(b.totals.incomeBudgetCents, { whole: true })} expected</div>
+            <div className="label">income, of <Money cents={b.totals.incomeBudgetCents} whole /> expected</div>
           </div>
           <div className="figure">
             <Money cents={b.totals.outActualCents} whole className="big" />
-            <div className="label">spending and saving, of {money(b.totals.outBudgetCents, { whole: true })} planned</div>
+            <div className="label">spending and saving, of <Money cents={b.totals.outBudgetCents} whole /> planned</div>
           </div>
         </div>
         <p className={left < 0 ? 'tone-bad' : 'muted'}>
           {left === 0
             ? 'Every dollar has a job.'
             : left > 0
-              ? `${money(left, { whole: true })} of expected income isn’t planned yet.`
-              : `The plan spends ${money(-left, { whole: true })} more than you expect to earn.`}
+              ? <><Money cents={left} whole /> of expected income isn’t planned yet.</>
+              : <>The plan spends <Money cents={-left} whole /> more than you expect to earn.</>}
         </p>
       </Card>
 
@@ -133,7 +136,7 @@ function BudgetView({ month }: { month: string }) {
       {b.uncategorized.count > 0 && (
         <div className="banner banner-warn">
           <span>
-            {plural(b.uncategorized.count, 'transaction')} ({money(b.uncategorized.outCents, { whole: true })} out) not in a category yet.
+            {plural(b.uncategorized.count, 'transaction')} (<Money cents={b.uncategorized.outCents} whole /> out) not in a category yet.
           </span>
           <Button small onClick={() => go('activity', { needs: 1, month })}>
             Sort
@@ -153,7 +156,7 @@ function BudgetView({ month }: { month: string }) {
             <div className="section-title">
               <h3>{section}</h3>
               <span className="muted small">
-                {money(actual, { whole: true })} / {money(planned, { whole: true })}
+                <Money cents={actual} whole /> / <Money cents={planned} whole />
               </span>
             </div>
             <div className="list">
@@ -176,7 +179,7 @@ function BudgetView({ month }: { month: string }) {
                         <span className="row-title">{row.name}</span>
                         <span className="small">
                           <Money cents={row.actualCents} whole tone={row.kind !== 'income' && row.budgetCents > 0 && row.actualCents > row.budgetCents ? 'bad' : undefined} />
-                          <span className="muted"> / {money(row.budgetCents, { whole: true })}</span>
+                          <span className="muted"> / <Money cents={row.budgetCents} whole /></span>
                         </span>
                       </div>
                       <Progress value={row.actualCents} max={row.budgetCents} tone={row.kind === 'income' ? 'good' : undefined} />
@@ -203,7 +206,7 @@ function BudgetView({ month }: { month: string }) {
                   <div key={row.categoryId} className="setaside-planrow">
                     {line}
                     <button type="button" className="setaside-planlink" onClick={() => go('plan', { view: 'goals' })}>
-                      Includes {money(row.plannedCostsCents, { whole: true })} for planned costs
+                      Includes <Money cents={row.plannedCostsCents} whole /> for planned costs
                       <Icon name="forward" />
                     </button>
                   </div>
@@ -247,7 +250,7 @@ function ChildRow({ row, parent, onClick }: { row: BudgetRow; parent: BudgetRow;
           </span>
           <span className="small">
             <Money cents={row.actualCents} whole tone={hasLine && row.kind !== 'income' && row.actualCents > row.budgetCents ? 'bad' : undefined} />
-            {hasLine && <span className="muted"> / {money(row.budgetCents, { whole: true })}</span>}
+            {hasLine && <span className="muted"> / <Money cents={row.budgetCents} whole /></span>}
           </span>
         </div>
         {hasLine && <Progress value={row.actualCents} max={row.budgetCents} tone={row.kind === 'income' ? 'good' : undefined} />}
@@ -265,7 +268,7 @@ function BudgetState({ row }: { row: BudgetRow }) {
   return (
     <div className={`row-state tone-${state.tone}`}>
       <Icon name={state.tone === 'bad' ? 'alert' : 'gauge'} />
-      {state.text}
+      <WithAmounts text={state.text} />
     </div>
   );
 }
@@ -306,7 +309,7 @@ function LineSheet({ month, row, onClose, onSaved }: { month: string; row: Budge
   return (
     <Sheet open onClose={onClose} title={row.name}>
       <p className="muted">
-        So far: {money(row.actualCents)} {row.kind === 'income' ? 'received' : 'spent'} this month
+        So far: <Money cents={row.actualCents} /> {row.kind === 'income' ? 'received' : 'spent'} this month
         {row.actualCents !== row.ownActualCents && `, including its sub-categories`}.
       </p>
       {row.computed === 'children' && (
@@ -320,7 +323,7 @@ function LineSheet({ month, row, onClose, onSaved }: { month: string; row: Budge
       </Field>
       {row.computed === 'planned_costs' && (
         <div className="setaside-suggest">
-          <span className="muted small">Plus {money(row.plannedCostsCents, { whole: true })} for planned costs, added on top.</span>
+          <span className="muted small">Plus <Money cents={row.plannedCostsCents} whole /> for planned costs, added on top.</span>
           <Button variant="ghost" onClick={() => go('plan', { view: 'goals' })}>
             See planned costs
           </Button>
@@ -498,6 +501,8 @@ interface RecurringBill {
   categoryId: number | null;
   categoryName: string | null;
   status: 'suggested' | 'confirmed' | 'dismissed';
+  /** The latest charge, when it went up (see BillIncreases). */
+  increase: { latestCents: number; date: string } | null;
 }
 
 type Cadence = 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';
@@ -519,9 +524,13 @@ function BillsView({ month }: { month: string }) {
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState<BillStatus>('all');
+  const [subscriptions, setSubscriptions] = useState(false);
   const recurring = useLoad(
-    () => api<RecurringBill[]>(`/recurring?${new URLSearchParams({ status, ...(query ? { q: query } : {}) })}`),
-    [status, query],
+    () =>
+      api<RecurringBill[]>(
+        `/recurring?${new URLSearchParams({ ...(subscriptions ? { subscriptions: '1' } : { status }), ...(query ? { q: query } : {}) })}`,
+      ),
+    [status, subscriptions, query],
   );
   const [detecting, setDetecting] = useState(false);
   const [editing, setEditing] = useState<number | null>(null);
@@ -558,6 +567,7 @@ function BillsView({ month }: { month: string }) {
 
   const list = recurring.data ?? [];
   const groups = (['suggested', 'confirmed', 'dismissed'] as const).map((s) => ({ status: s, bills: list.filter((b) => b.status === s) })).filter((g) => g.bills.length);
+  const yearTotal = subscriptions ? list.reduce((sum, b) => sum + subscriptionCost(b).yearCents, 0) : 0;
 
   return (
     <>
@@ -600,19 +610,53 @@ function BillsView({ month }: { month: string }) {
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
-      {/* A select, not tabs: four statuses don't fit side by side at 360px. */}
-      <label className="inline-field">
-        <span className="field-label">Show</span>
-        <select value={status} onChange={(e) => setStatus(e.target.value as BillStatus)}>
-          <option value="all">All bills</option>
-          <option value="suggested">Suggested</option>
-          <option value="confirmed">Confirmed</option>
-          <option value="dismissed">Dismissed</option>
-        </select>
-      </label>
+      <div className="bill-filters">
+        {/* A select, not tabs: four statuses don't fit side by side at 360px. Subscriptions are confirmed bills, so it steps aside. */}
+        <label className="inline-field">
+          <span className="field-label">Show</span>
+          <select value={status} onChange={(e) => setStatus(e.target.value as BillStatus)} disabled={subscriptions}>
+            <option value="all">All bills</option>
+            <option value="suggested">Suggested</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="dismissed">Dismissed</option>
+          </select>
+        </label>
+        <button type="button" className={`filter-chip ${subscriptions ? 'active' : ''}`} aria-pressed={subscriptions} onClick={() => setSubscriptions(!subscriptions)}>
+          Subscriptions
+        </button>
+      </div>
       {recurring.error && <ErrorNote message={recurring.error} onRetry={() => void recurring.reload()} />}
       {!recurring.data ? (
         !recurring.error && <Loading />
+      ) : subscriptions ? (
+        <section className="stack-sm" aria-label="Subscriptions">
+          <h4 className="bill-group">
+            {plural(list.length, 'subscription')} <span className="muted">· <Money cents={yearTotal} whole /> a year</span>
+          </h4>
+          {list.length === 0 ? (
+            <p className="muted small">
+              {query ? 'No subscriptions match.' : 'Confirmed bills of $50 or less, monthly or yearly, outside rent, utilities, phone, internet, insurance, loans and childcare.'}
+            </p>
+          ) : (
+            <div className="list">
+              {list.map((bill) => {
+                const cost = subscriptionCost(bill);
+                return (
+                  <div key={bill.id} className="row">
+                    <div className="row-main">
+                      <div className="row-title">{bill.name}</div>
+                      <div className="row-sub">
+                        <Money cents={cost.monthCents} whole={cost.monthCents % 100 === 0} /> a month · <Money cents={cost.yearCents} whole /> a year
+                        {bill.lastDate && ` · last charged ${shortDate(bill.lastDate)}`}
+                        {bill.increase && <span className="chip chip-warn">Went up</span>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
       ) : groups.length === 0 ? (
         <p className="muted small">
           {query || status !== 'all' ? 'No bills match.' : 'Tap “Find them” after a few months of transactions are in.'}
@@ -646,6 +690,7 @@ function BillsView({ month }: { month: string }) {
                         {cadenceLabel(bill.cadence)}
                         {bill.nextDate && bill.status !== 'dismissed' && ` · next ${shortDate(bill.nextDate)}`}
                         {bill.categoryName && ` · ${bill.categoryName}`}
+                        {bill.increase && <span className="chip chip-warn">Went up</span>}
                       </div>
                     </div>
                     <Money cents={Math.abs(bill.expectedAmountCents)} whole />
@@ -721,6 +766,15 @@ function BillEditor({ bill, onCancel, onSaved }: { bill: RecurringBill; onCancel
         void save();
       }}
     >
+      {bill.increase && (
+        <div className="increase-note stack-sm">
+          <p>
+            <IncreaseText increase={{ name: bill.name, usualCents: Math.abs(bill.expectedAmountCents), latestCents: bill.increase.latestCents }} /> on{' '}
+            {shortDate(bill.increase.date)}.
+          </p>
+          <IncreaseActions billId={bill.id} name={bill.name} latestCents={bill.increase.latestCents} onDone={onSaved} />
+        </div>
+      )}
       <Field label="Name">
         <input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} autoFocus />
       </Field>

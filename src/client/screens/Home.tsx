@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { GROUP_ORDER } from '../../shared/trends';
+import { useMoneyText } from '../amounts';
 import { api, ApiError, errorMessage, patch } from '../api';
-import { money, monthLabel, plural, shortDate, timeAgo, weekdayDate } from '../format';
+import { monthLabel, plural, shortDate, timeAgo, weekdayDate } from '../format';
 import { Icon } from '../icons';
 import { ribbonLayout, usableCachedRibbon } from '../ribbon';
 import { go } from '../router';
@@ -9,6 +10,7 @@ import { useApp, useLoad } from '../state';
 import { syncAllBanks } from '../sync';
 import type { HomeResponse, Transaction, TrendsResponse } from '../types';
 import { Button, Card, ErrorNote, Loading, Money, PageHeader } from '../ui';
+import { BillIncreasesCard } from './BillIncreases';
 import { TransactionSheet } from './TransactionSheet';
 
 const CACHE_KEY = 'fin.home';
@@ -124,6 +126,7 @@ export function Home() {
           </div>
 
           <NeedsLookCard h={h} onOpen={setOpen} />
+          <BillIncreasesCard items={h.billIncreases} onChanged={() => home.reload()} />
           <WeeksCard h={h} />
           <BillsCard h={h} />
           <FunMoneyCard h={h} />
@@ -171,11 +174,12 @@ function MonthRibbon({ t }: { t: TrendsResponse }) {
     usual,
   );
   const shown = groups.filter((g) => g.value > 0);
+  const moneyText = useMoneyText();
   const filled = layout.widths.reduce((a, b) => a + b, 0);
   const summary =
-    `${money(layout.total, { whole: true })} spent so far this month` +
-    (usual > 0 ? `; a usual month is ${money(usual, { whole: true })}. ` : '. ') +
-    shown.map((g) => `${g.name} ${money(g.value, { whole: true })}`).join(', ') +
+    `${moneyText(layout.total, { whole: true })} spent so far this month` +
+    (usual > 0 ? `; a usual month is ${moneyText(usual, { whole: true })}. ` : '. ') +
+    shown.map((g) => `${g.name} ${moneyText(g.value, { whole: true })}`).join(', ') +
     '. Opens Trends.';
   return (
     <button type="button" className="ribbon" onClick={() => go('trends')} aria-label={summary}>
@@ -228,7 +232,7 @@ function SafeToSpend({ h }: { h: HomeResponse }) {
       <h2 id="safe-label" className="sr-only">
         Safe to spend this week
       </h2>
-      <div className={`hero-amount ${safe.safeCents < 0 ? 'tone-bad' : ''}`}>{money(safe.safeCents, { whole: true })}</div>
+      <div className={`hero-amount ${safe.safeCents < 0 ? 'tone-bad' : ''}`}><Money cents={safe.safeCents} whole /></div>
       <div className="hero-label" aria-hidden="true">
         safe to spend this week
       </div>
@@ -242,11 +246,11 @@ function SafeToSpend({ h }: { h: HomeResponse }) {
       )}
       {safe.cushionCents < 0 ? (
         <p className="hero-note tone-warn">
-          Heads up: the plan dips below your {money(h.lowBalanceCents, { whole: true })} cushion later this month, so this
+          Heads up: the plan dips below your <Money cents={h.lowBalanceCents} whole /> cushion later this month, so this
           week’s number is held back.
         </p>
       ) : safe.extraRoomCents > 0 && !noPlan ? (
-        <p className="hero-note muted">Beyond the plan, the month has {money(safe.extraRoomCents, { whole: true })} of extra room.</p>
+        <p className="hero-note muted">Beyond the plan, the month has <Money cents={safe.extraRoomCents} whole /> of extra room.</p>
       ) : null}
     </section>
   );

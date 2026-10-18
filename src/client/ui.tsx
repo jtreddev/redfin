@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { addMonths } from '../shared/dates';
+import { amountContent, HideAmountsButton, useAmounts } from './amounts';
 import { centsToInput, inputToCents, money, monthLabel } from './format';
 import { categoryTree, pickerOptions } from './categoryTree';
 import { Icon } from './icons';
@@ -22,8 +23,12 @@ export function Money({
   tone?: 'auto' | 'good' | 'bad' | 'warn' | 'muted';
   className?: string;
 }) {
+  const { hidden } = useAmounts();
   const resolved = tone === 'auto' ? (cents < 0 ? 'bad' : cents > 0 ? 'good' : 'muted') : tone;
-  return <span className={`money ${resolved ? `tone-${resolved}` : ''} ${className}`}>{money(cents, { whole, signed })}</span>;
+  const text = money(cents, { whole, signed });
+  return (
+    <span className={`money ${resolved ? `tone-${resolved}` : ''} ${className}`}>{amountContent(text, hidden)}</span>
+  );
 }
 
 /**
@@ -60,7 +65,10 @@ export function PageHeader({ title, subtitle, action }: { title: string; subtitl
         <h1>{title}</h1>
         {subtitle && <p className="muted">{subtitle}</p>}
       </div>
-      {action}
+      <div className="page-header-actions">
+        {action}
+        <HideAmountsButton className="header-eye" />
+      </div>
     </header>
   );
 }
@@ -183,7 +191,7 @@ export function Toggle({ checked, onChange, label, hint }: { checked: boolean; o
   );
 }
 
-export function Segmented<T extends string>({ value, options, onChange }: { value: T; options: { value: T; label: string }[]; onChange: (v: T) => void }) {
+export function Segmented<T extends string>({ value, options, onChange }: { value: T; options: { value: T; label: ReactNode }[]; onChange: (v: T) => void }) {
   return (
     <div className="segmented" role="tablist">
       {options.map((o) => (

@@ -24,6 +24,9 @@ export function inputToCents(text: string): number | null {
   return parseMoney(text);
 }
 
+/** A sentence split around its dollar amounts: odd entries are the amounts ("$1,412.60", "-$5"). */
+export const splitAmounts = (text: string) => text.split(/(-?\$\d[\d,]*(?:\.\d{2})?)/);
+
 export function timeAgo(iso: string | null | undefined): string {
   if (!iso) return 'never';
   const seconds = Math.round((Date.now() - new Date(iso).getTime()) / 1000);

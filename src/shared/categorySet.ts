@@ -18,6 +18,9 @@ export const SPECIAL = {
   savings: ['Saving', 'Savings & Planned Costs'],
 } as const;
 
+/** The household's core bills (Bills group): never counted as subscriptions, nor are their sub-categories. */
+export const CORE_BILLS = ['Housing', 'Utilities', 'Phone', 'Internet', 'Insurance', 'Loans', 'Childcare'] as const;
+
 /** The kind a new category in this group gets. */
 export function kindForGroup(group: string): 'income' | 'expense' | 'savings' | 'transfer' {
   if (group === GROUPS.income) return 'income';

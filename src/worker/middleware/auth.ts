@@ -73,7 +73,7 @@ export const requireViewer: MiddlewareHandler<AppEnv> = async (c, next) => {
   // Access decides who reaches the app; this list is a second lock in case that policy is ever loosened.
   // Without a list, only people already in the household get in.
   const allowed = env.ALLOWED_EMAILS?.split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
-  const existing = await first<ViewerRow>(env.DB, 'SELECT id AS memberId, email, name, hide_setup AS hideSetup, power_tools AS powerTools FROM members WHERE email = ?', email);
+  const existing = await first<ViewerRow>(env.DB, 'SELECT id AS memberId, email, name, hide_setup AS hideSetup, power_tools AS powerTools, hide_amounts AS hideAmounts FROM members WHERE email = ?', email);
   if (!env.DEV_AUTH_BYPASS && (allowed ? !allowed.includes(email) : !existing)) {
     return c.json({ error: 'This email isn’t part of this household. Ask to be added to ALLOWED_EMAILS.' }, 403);
   }
@@ -94,8 +94,8 @@ export const requireViewer: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
-type ViewerRow = Omit<Viewer, 'hideSetup' | 'powerTools'> & { hideSetup: number; powerTools: number };
-const toViewer = (row: ViewerRow): Viewer => ({ ...row, hideSetup: row.hideSetup === 1, powerTools: row.powerTools === 1 });
+type ViewerRow = Omit<Viewer, 'hideSetup' | 'powerTools' | 'hideAmounts'> & { hideSetup: number; powerTools: number; hideAmounts: number };
+const toViewer = (row: ViewerRow): Viewer => ({ ...row, hideSetup: row.hideSetup === 1, powerTools: row.powerTools === 1, hideAmounts: row.hideAmounts === 1 });
 
 /** First sign-in for someone Access let through: add them and give them a fun money category. */
 async function createMember(db: D1Database, email: string): Promise<ViewerRow> {
@@ -104,7 +104,7 @@ async function createMember(db: D1Database, email: string): Promise<ViewerRow> {
   const colors = ['#3b6fd8', '#c2467a', '#2e9e6b', '#8a5cd6'];
   const count = (await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM members'))?.n ?? 0;
   await run(db, 'INSERT OR IGNORE INTO members (email, name, color) VALUES (?, ?, ?)', email, name, colors[count % colors.length]);
-  const member = await first<ViewerRow>(db, 'SELECT id AS memberId, email, name, hide_setup AS hideSetup, power_tools AS powerTools FROM members WHERE email = ?', email);
+  const member = await first<ViewerRow>(db, 'SELECT id AS memberId, email, name, hide_setup AS hideSetup, power_tools AS powerTools, hide_amounts AS hideAmounts FROM members WHERE email = ?', email);
   if (!member) throw new Error('Could not create member');
   await run(
     db,

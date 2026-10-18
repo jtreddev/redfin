@@ -1,4 +1,4 @@
-import { money } from '../format';
+import { Money } from '../ui';
 
 export interface TooltipRow {
   key: string;
@@ -44,14 +44,14 @@ export function Tooltip({
       <div className="tt-title">{title}</div>
       {total !== undefined && (
         <div className="tt-total">
-          <strong className="money">{money(total, { whole: true })}</strong> <span className="muted">total</span>
+          <strong><Money cents={total} whole /></strong> <span className="muted">total</span>
         </div>
       )}
       {rows.map((row) => {
         const body = (
           <>
             {row.colorVar && <span className="tt-key" style={{ background: `var(${row.colorVar})` }} aria-hidden="true" />}
-            <strong className="tt-value money">{money(row.value, { whole: true })}</strong>
+            <strong className="tt-value"><Money cents={row.value} whole /></strong>
             <span className="tt-name">{row.name}</span>
           </>
         );

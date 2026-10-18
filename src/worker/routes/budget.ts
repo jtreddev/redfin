@@ -21,6 +21,7 @@ import {
   reqMonth,
   reqStr,
 } from '../lib/http';
+import { loadBillIncreases } from '../services/billIncreases';
 import { INCOME_SOURCE_SELECT, loadCategories, loadIngestContext, scheduleOf, type IncomeSourceRow } from '../services/context';
 import { reclassify, STORED_SELECT, type StoredTxn } from '../services/ingest';
 import { buildPlanner, forecastJson, funMoneyBalances, loadMonth, upcomingBills } from '../services/planner';
@@ -186,6 +187,7 @@ budget.get('/home', async (c) => {
   const bills = await upcomingBills(db, planner, today, viewer.memberId);
   const position = planner.forecast.currentWeekPosition;
   const week = position === null ? null : planner.forecast.weeks[position] ?? null;
+  const billIncreases = await loadBillIncreases(db, today, viewer.memberId);
 
   return c.json({
     today,
@@ -197,6 +199,7 @@ budget.get('/home', async (c) => {
     startingBalance: planner.startingBalance,
     extraPaychecks: planner.forecast.extraPaychecks,
     bills: bills.slice(0, 5),
+    billIncreases,
     fun: fun.map((f) =>
       f.isViewer
         ? f
