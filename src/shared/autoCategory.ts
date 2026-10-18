@@ -69,24 +69,39 @@ export const billAppliesToAccount = (bill: AutoBill, accountOwner: number | null
 
 export function categorize(subject: AutoSubject, ctx: AutoContext): AutoResult {
   const rule = findRule(ctx.rules, subject);
-  if (rule) {
-    return {
-      categoryId: rule.action.categoryId ?? null,
-      ruleId: rule.id,
-      source: 'rule',
-      reason: rule.learned ? LEARNED_REASON : `Your rule: ${rule.matchText}`,
-      action: rule.action,
-    };
-  }
+  return rule ? ruleResult(rule) : autoLayers(subject, ctx);
+}
 
-  if (subject.amountCents < 0) {
-    // Two bills from one merchant (Netflix plans) can both be within range: take the closest amount.
-    const gap = (b: { cents: number }) => Math.abs(Math.abs(b.cents) - Math.abs(subject.amountCents));
-    const bill = ctx.bills
-      .filter((b) => b.categoryId != null && billAppliesToAccount(b, subject.accountOwner ?? null) && billKeyMatches(b.merchant, subject.merchant) && sameBill(b.cents, subject.amountCents))
-      .sort((a, b) => gap(a) - gap(b))[0];
-    if (bill) return { categoryId: bill.categoryId, ruleId: null, source: 'auto', reason: `Matches your bill ${bill.name}` };
+/** What a matched rule decides. */
+export function ruleResult(rule: Rule): AutoResult {
+  return {
+    categoryId: rule.action.categoryId ?? null,
+    ruleId: rule.id,
+    source: 'rule',
+    reason: rule.learned ? LEARNED_REASON : `Your rule: ${rule.matchText}`,
+    action: rule.action,
+  };
+}
+
+/** The saved bill a charge pays, if any (spending only, filed under a category, on the right person's account). */
+export function billFor(subject: AutoSubject, bills: readonly AutoBill[]): AutoBill | null {
+  if (subject.amountCents >= 0) return null;
+  // Two bills from one merchant (Netflix plans) can both be within range: take the closest amount.
+  const gap = (b: { cents: number }) => Math.abs(Math.abs(b.cents) - Math.abs(subject.amountCents));
+  const owner = subject.accountOwner ?? null;
+  let best: AutoBill | null = null;
+  for (const b of bills) {
+    if (b.categoryId == null || !billAppliesToAccount(b, owner) || !billKeyMatches(b.merchant, subject.merchant)) continue;
+    if (!sameBill(b.cents, subject.amountCents)) continue;
+    if (!best || gap(b) < gap(best)) best = b;
   }
+  return best;
+}
+
+/** Every layer after rules: saved bills, built-in patterns, then the bank's category. */
+export function autoLayers(subject: AutoSubject, ctx: Omit<AutoContext, 'rules'>): AutoResult {
+  const bill = billFor(subject, ctx.bills);
+  if (bill) return { categoryId: bill.categoryId, ruleId: null, source: 'auto', reason: `Matches your bill ${bill.name}` };
 
   const builtin = builtinCategory(subject, ctx.cutoffCents);
   const builtinId = builtin && ctx.categoryIdOf(builtin.ref);

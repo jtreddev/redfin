@@ -1,8 +1,8 @@
 import type { ISODate } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import { matchPaycheck } from '../../shared/paychecks';
-import { categorize, type AutoSubject } from '../../shared/autoCategory';
-import { findRule, normalizeMerchant, ruleAppliesToAccount, ruleMatches, type CategorySource, type Rule } from '../../shared/rules';
+import { autoLayers, billFor, ruleResult, type AutoSubject } from '../../shared/autoCategory';
+import { findPreparedRule, matchTextOf, normalizeMerchant, preparedMatches, type CategorySource, type Rule } from '../../shared/rules';
 import { looksLikeTransfer } from '../../shared/transfers';
 import { allByIds, batchAll, nowIso, stmt } from '../lib/db';
 import { loadIngestContext, type IngestContext } from './context';
@@ -108,17 +108,19 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
     accountOwner,
   };
 
-  let rules = ctx.rules.filter((rule) => ruleAppliesToAccount(rule, accountOwner));
+  // Each charge's text is normalized once, and the rules were prepared once per context.
+  const text = matchTextOf(subject);
+  const rules = ctx.rulesFor(accountOwner);
+  let rule = findPreparedRule(rules, text);
   // A shared learned rule never takes over a charge your own private rule files: it would un-private it.
-  const first = findRule(rules, subject);
-  if (first && isSharedLearned(first) && rules.some((r) => !r.learned && r.action.privateMemberId != null && ruleMatches(r, subject))) {
-    rules = rules.filter((r) => !isSharedLearned(r));
+  if (rule && isSharedLearned(rule) && rules.some((p) => !p.rule.learned && p.rule.action.privateMemberId != null && preparedMatches(p, text))) {
+    rule = findPreparedRule(rules.filter((p) => !isSharedLearned(p.rule)), text);
   }
-  let auto = categorize(subject, { ...ctx, rules });
   let ruleReason: string | null = null;
   let privateByRule = false;
-  if (auto.source === 'rule') {
-    const action = auto.action ?? {};
+  if (rule) {
+    const auto = ruleResult(rule);
+    const action = rule.action;
     out.categoryId = action.categoryId ?? null;
     out.categoryReason = auto.reason;
     out.kidId = action.kidId ?? null;
@@ -128,18 +130,24 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
     out.categorySource = 'rule';
     ruleReason = auto.reason;
     privateByRule = out.privateMemberId !== null;
-    // A kid-only or private-only rule doesn't pick a category, so the other layers still can.
-    if (out.categoryId === null && !out.isIgnored) auto = categorize(subject, { ...ctx, rules: [] });
+    // A kid-only or private-only rule doesn't pick a category, so the other layers below still can.
   }
 
   if (out.categoryId === null && !out.isIgnored) {
     const source = out.categorySource ?? 'auto';
     const privateOwner = ctx.privateAccountOwner.get(txn.accountId);
-    // Saved bills come before the personal-card default; built-in patterns and the bank's category after it.
-    const billOnly = categorize(subject, { rules: [], bills: ctx.bills, cutoffCents: ctx.cutoffCents, categoryIdOf: () => null });
+    // Bills, built-in patterns and the bank's category, worked out once.
+    const auto = autoLayers(subject, ctx);
     if (paycheck && ctx.paychecksCategoryId) {
       Object.assign(out, { categoryId: ctx.paychecksCategoryId, categorySource: source, categoryReason: PAYCHECK_REASON });
-    } else if (!paired && privateOwner !== undefined && txn.amountCents < 0 && out.privateMemberId === null && billOnly.categoryId === null) {
+    } else if (
+      !paired &&
+      privateOwner !== undefined &&
+      txn.amountCents < 0 &&
+      out.privateMemberId === null &&
+      // Saved bills come before the personal-card default; built-in patterns and the bank's category after it.
+      billFor(subject, ctx.bills) === null
+    ) {
       Object.assign(out, { privateMemberId: privateOwner, categorySource: source, categoryReason: PERSONAL_CARD_REASON });
     } else if (auto.categoryId !== null) {
       Object.assign(out, { categoryId: auto.categoryId, categorySource: source, categoryReason: auto.reason });

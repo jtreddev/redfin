@@ -134,28 +134,69 @@ function learnedPattern(needle: string): RegExp {
   return pattern;
 }
 
-export function ruleMatches(rule: Rule, subject: RuleSubject): boolean {
-  if (rule.accountId != null && rule.accountId !== subject.accountId) return false;
-  if (subject.amountCents != null) {
-    const cents = Math.abs(subject.amountCents);
+/** A rule ready to match many charges: its text normalized (and, for a learned rule, compiled) once. */
+export interface PreparedRule {
+  rule: Rule;
+  needle: string;
+  /** Whole-word pattern for learned rules; null means a plain substring match. */
+  pattern: RegExp | null;
+}
+
+/** A charge's text normalized once, to match against many rules. */
+export interface MatchText {
+  name: string;
+  merchant: string;
+  accountId: number;
+  amountCents?: number;
+}
+
+export function matchTextOf(subject: RuleSubject): MatchText {
+  return {
+    name: normalizeText(subject.name),
+    merchant: normalizeText(subject.merchantName),
+    accountId: subject.accountId,
+    amountCents: subject.amountCents,
+  };
+}
+
+export function prepareRule(rule: Rule): PreparedRule {
+  const needle = normalizeText(rule.matchText);
+  // Learned rules match whole words; rules people typed match anywhere, as before.
+  return { rule, needle, pattern: rule.learned && needle ? learnedPattern(needle) : null };
+}
+
+/** Rules in matching order (position, then id), prepared once for many charges. */
+export function prepareRules(rules: readonly Rule[]): PreparedRule[] {
+  return [...rules].sort((a, b) => a.position - b.position || a.id - b.id).map(prepareRule);
+}
+
+export function preparedMatches({ rule, needle, pattern }: PreparedRule, text: MatchText): boolean {
+  if (!needle) return false;
+  if (rule.accountId != null && rule.accountId !== text.accountId) return false;
+  if (text.amountCents != null) {
+    const cents = Math.abs(text.amountCents);
     if (rule.amountMin != null && cents < rule.amountMin) return false;
     if (rule.amountMax != null && cents > rule.amountMax) return false;
   }
-  const needle = normalizeText(rule.matchText);
-  if (!needle) return false;
-  const name = normalizeText(subject.name);
-  const merchant = normalizeText(subject.merchantName);
-  // Learned rules match whole words; rules people typed match anywhere, as before.
-  const pattern = rule.learned ? learnedPattern(needle) : null;
-  const found = (text: string) => (pattern ? pattern.test(text) : text.includes(needle));
+  const found = (haystack: string) => (pattern ? pattern.test(haystack) : haystack.includes(needle));
   switch (rule.matchField) {
     case 'name':
-      return found(name);
+      return found(text.name);
     case 'merchant':
-      return found(merchant);
+      return found(text.merchant);
     default:
-      return found(name) || found(merchant);
+      return found(text.name) || found(text.merchant);
   }
+}
+
+/** First prepared rule (already in order) that matches. */
+export function findPreparedRule(prepared: readonly PreparedRule[], text: MatchText): Rule | null {
+  for (const p of prepared) if (preparedMatches(p, text)) return p.rule;
+  return null;
+}
+
+export function ruleMatches(rule: Rule, subject: RuleSubject): boolean {
+  return preparedMatches(prepareRule(rule), matchTextOf(subject));
 }
 
 /**
@@ -169,10 +210,9 @@ export function ruleAppliesToAccount(rule: Rule, accountOwner: number | null): b
   return (rule.action.privateMemberId ?? null) === accountOwner;
 }
 
-/** First matching rule by position. */
+/** First matching rule by position. For many charges, prepare the rules once (see prepareRules). */
 export function findRule(rules: readonly Rule[], subject: RuleSubject): Rule | null {
-  const ordered = [...rules].sort((a, b) => a.position - b.position || a.id - b.id);
-  return ordered.find((rule) => ruleMatches(rule, subject)) ?? null;
+  return findPreparedRule(prepareRules(rules), matchTextOf(subject));
 }
 
 /**

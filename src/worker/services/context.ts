@@ -4,7 +4,7 @@ import { SPECIAL } from '../../shared/categorySet';
 import type { ISODate } from '../../shared/dates';
 import type { IncomeSourceMatcher } from '../../shared/paychecks';
 import type { PayFrequency, PaySchedule } from '../../shared/paySchedule';
-import type { Rule } from '../../shared/rules';
+import { prepareRules, ruleAppliesToAccount, type PreparedRule, type Rule } from '../../shared/rules';
 import { all, first } from '../lib/db';
 
 export interface RuleRow {
@@ -110,6 +110,8 @@ export function findSpecialCategory(categories: readonly CategoryRow[], section:
 /** Everything the classifier needs, loaded once per import chunk or sync step. */
 export interface IngestContext extends AutoContext {
   rules: Rule[];
+  /** The rules that apply on an account with this owner (see ruleAppliesToAccount), in order and prepared once. */
+  rulesFor: (accountOwner: number | null) => readonly PreparedRule[];
   paySources: IncomeSourceMatcher[];
   accountType: Map<number, string>;
   /** Account → member whose private fun money it defaults to. */
@@ -152,8 +154,21 @@ export async function loadIngestContext(db: D1Database): Promise<IngestContext> 
   const live = categories.filter((c) => !c.archived);
   const categoryIdOf = (ref: CategoryRef) => findSpecialCategory(live, ...ref);
 
+  const rules = ruleRows.map(toRule);
+  const prepared = prepareRules(rules);
+  const byOwner = new Map<number | null, PreparedRule[]>();
+  const rulesFor = (accountOwner: number | null) => {
+    let list = byOwner.get(accountOwner);
+    if (!list) {
+      list = prepared.filter((p) => ruleAppliesToAccount(p.rule, accountOwner));
+      byOwner.set(accountOwner, list);
+    }
+    return list;
+  };
+
   return {
-    rules: ruleRows.map(toRule),
+    rules,
+    rulesFor,
     bills,
     cutoffCents: household?.habitCutoffCents ?? 2500,
     categoryIdOf,
