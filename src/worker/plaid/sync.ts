@@ -622,7 +622,8 @@ async function upsertDebts(db: D1Database, response: LiabilitiesResponse, accoun
     const accountId = accountIdFor.get(entry.plaidAccountId);
     const account = balances.get(entry.plaidAccountId);
     if (accountId === undefined || !account) continue;
-    const balance = dollarsOrNull(account.balances.current) ?? 0;
+    // A negative card balance is money the bank owes you, not debt.
+    const balance = Math.max(0, dollarsOrNull(account.balances.current) ?? 0);
     const minPayment = dollarsOrNull(entry.minPayment) ?? 0;
     const dueDay = entry.dueDate ? Number(entry.dueDate.slice(8, 10)) : null;
     const existing = await first<{ id: number }>(db, 'SELECT id FROM debts WHERE account_id = ?', accountId);

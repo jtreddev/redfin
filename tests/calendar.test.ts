@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { distribute, allocateLine } from '../src/shared/allocation';
 import { addMonthsToDate, monthsBetween, previousWeekday, todayIn } from '../src/shared/dates';
-import { formatCents, parseMoney } from '../src/shared/money';
+import { describeBalance, formatCents, parseMoney } from '../src/shared/money';
 import { extraPaychecks, nearestPayDate, payDatesInMonth } from '../src/shared/paySchedule';
 import { monthWeeks, weekIndexOfDay } from '../src/shared/weeks';
 
@@ -22,6 +22,17 @@ describe('money', () => {
     expect(formatCents(123456)).toBe('$1,234.56');
     expect(formatCents(-500, { whole: true })).toBe('-$5');
     expect(formatCents(500, { signed: true })).toBe('+$5.00');
+  });
+
+  it('describes balances to the cent, with credit cards as owed or credit', () => {
+    expect(describeBalance('checking', 123456)).toBe('$1,234.56');
+    expect(describeBalance('checking', -2501)).toBe('-$25.01');
+    // Plaid and manual entry store card and loan balances as the amount owed.
+    expect(describeBalance('credit', 84217)).toBe('$842.17 owed');
+    expect(describeBalance('loan', 1500000)).toBe('$15,000.00 owed');
+    // A negative card balance means the bank owes you (overpaid or refunded).
+    expect(describeBalance('credit', -4250)).toBe('$42.50 credit');
+    expect(describeBalance('credit', 0)).toBe('$0.00');
   });
 });
 

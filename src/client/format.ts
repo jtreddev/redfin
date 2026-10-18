@@ -1,6 +1,6 @@
 import { parseMoney } from '../shared/money';
 
-export { formatCents as money } from '../shared/money';
+export { describeBalance, formatCents as money } from '../shared/money';
 
 const utc = (date: string) => new Date(`${date}T12:00:00Z`);
 

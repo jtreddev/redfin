@@ -208,11 +208,11 @@ function DebtsView() {
               <div className="row-main">
                 <div className="row-title">{d.name}</div>
                 <div className="row-sub">
-                  {d.aprPercent}% APR · min {money(d.minPaymentCents, { whole: true })}
+                  {d.aprPercent}% APR · min {money(d.minPaymentCents)}
                   {d.source === 'plaid' && ' · from bank'}
                 </div>
               </div>
-              <Money cents={d.balanceCents} whole />
+              <Money cents={d.balanceCents} />
             </button>
           ))}
         </div>

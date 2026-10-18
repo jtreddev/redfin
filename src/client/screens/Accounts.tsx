@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { usePlaidLink, type PlaidLinkError, type PlaidLinkOnSuccessMetadata } from 'react-plaid-link';
 import { api, del, errorMessage, patch, post } from '../api';
-import { money, plural, timeAgo } from '../format';
+import { describeBalance, money, plural, timeAgo } from '../format';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import { syncOneBank } from '../sync';
 import type { Account } from '../types';
-import { AmountInput, Button, Card, ErrorNote, Field, Money, Sheet, Toggle } from '../ui';
+import { AmountInput, Button, Card, ErrorNote, Field, Sheet, Toggle } from '../ui';
 import { SubHeader } from './More';
 
 interface PlaidStatus {
@@ -26,6 +26,10 @@ interface PlaidStatus {
 }
 
 const LINK_STATE_KEY = 'fin.plaidLink';
+
+/** Checking and savings: the bank's "available" leaves out pending charges, which is what most bank apps show. */
+const availableDiffers = (a: Account) =>
+  a.type !== 'credit' && a.type !== 'loan' && a.availableBalanceCents != null && a.availableBalanceCents !== a.currentBalanceCents;
 
 export function Accounts() {
   const { accounts, reload, toast, me } = useApp();
@@ -236,7 +240,12 @@ export function Accounts() {
                 {a.ownerMemberId && ` · ${me.members.find((m) => m.id === a.ownerMemberId)?.name}’s`}
               </div>
             </div>
-            {a.currentBalanceCents !== null && <Money cents={a.type === 'credit' || a.type === 'loan' ? -a.currentBalanceCents : a.currentBalanceCents} whole />}
+            {a.currentBalanceCents !== null && (
+              <div className="money" style={{ textAlign: 'right' }}>
+                {describeBalance(a.type, a.currentBalanceCents)}
+                {availableDiffers(a) && <div className="muted small">{money(a.availableBalanceCents!)} available</div>}
+              </div>
+            )}
           </button>
         ))}
       </div>
@@ -422,7 +431,8 @@ function AccountSheet({ account, onClose, onSaved }: { account: Account | null; 
       )}
       {account?.balanceUpdatedAt && (
         <p className="muted small">
-          Balance {money(account.currentBalanceCents ?? 0)} as of {timeAgo(account.balanceUpdatedAt)}
+          Balance {describeBalance(account.type, account.currentBalanceCents ?? 0)}
+          {availableDiffers(account) && `, ${money(account.availableBalanceCents!)} available`} as of {timeAgo(account.balanceUpdatedAt)}
         </p>
       )}
     </Sheet>

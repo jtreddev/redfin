@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { syncStep } from '../src/worker/plaid/sync';
 import type { Env } from '../src/worker/env';
+import type { LiabilitiesResponse, PlaidAccount } from '../src/worker/plaid/client';
 import { api } from './helpers/api';
 import { TestD1 } from './helpers/d1';
 import { page, plaidTxn, seedBank, stubPlaid, testEnv } from './helpers/plaid';
@@ -36,6 +37,47 @@ function insertImported(accountId: number, date: string, amountCents: number, na
 }
 
 describe('syncStep', () => {
+  it('saves card balances to the cent, and an overpaid card is not a debt', async () => {
+    const { itemId } = await seedBank(db, env, 'card');
+    db.exec(`UPDATE plaid_items SET liabilities_updated_at = NULL WHERE id = ?`, itemId);
+    const card = (id: string, current: number): PlaidAccount => ({
+      account_id: id,
+      name: id,
+      official_name: null,
+      mask: null,
+      type: 'credit',
+      subtype: 'credit card',
+      balances: { current, available: null, limit: 5000, iso_currency_code: 'USD' },
+    });
+    const accounts = [card('owed', 842.17), card('overpaid', -42.5)];
+    const liabilities: LiabilitiesResponse = {
+      accounts,
+      liabilities: {
+        credit: accounts.map((a) => ({
+          account_id: a.account_id,
+          aprs: [{ apr_percentage: 24.99, apr_type: 'purchase_apr' }],
+          minimum_payment_amount: 35,
+          next_payment_due_date: '2026-11-05',
+          last_statement_balance: null,
+        })),
+      },
+    };
+    vi.stubGlobal('fetch', async (url: string) =>
+      Response.json(new URL(url).pathname === '/liabilities/get' ? liabilities : page([], { accounts })),
+    );
+
+    await syncStep(env, { trigger: 'cron' });
+
+    expect(db.rows(`SELECT plaid_account_id AS id, current_balance_cents AS cents FROM accounts WHERE type = 'credit' ORDER BY id`)).toEqual([
+      { id: 'overpaid', cents: -4250 },
+      { id: 'owed', cents: 84217 },
+    ]);
+    expect(db.rows(`SELECT name, balance_cents AS cents FROM debts ORDER BY name`)).toEqual([
+      { name: 'overpaid', cents: 0 },
+      { name: 'owed', cents: 84217 },
+    ]);
+  });
+
   it('stores a page of transactions', async () => {
     const { itemId } = await seedBank(db, env, 'chime');
     stubPlaid({ chime: [page([plaidTxn('chime', 't1', '2026-10-01', 12.34), plaidTxn('chime', 't2', '2026-10-02', 5)])] });
