@@ -347,6 +347,20 @@ describe('automatic categories on synced charges', () => {
     expect(row('t2')).toMatchObject({ detailed: 'FOOD_AND_DRINK_FAST_FOOD', categoryId: eatingOut, source: 'user' });
   });
 
+  it('a re-sent charge without a bank category keeps the one already stored', async () => {
+    const { itemId } = await seedBank(db, env, 'chime');
+    db.exec(`INSERT INTO transactions (account_id, date, amount_cents, name, source, plaid_txn_id, plaid_category, plaid_category_detailed)
+             VALUES ((SELECT id FROM accounts LIMIT 1), '2026-10-01', -900, 'CORNER SPOT', 'plaid', 't1', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_FAST_FOOD')`);
+    stubPlaid({ chime: [page([plaidTxn('chime', 't1', '2026-10-01', 9, { name: 'CORNER SPOT' })])] });
+
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(db.rows('SELECT plaid_category, plaid_category_detailed FROM transactions')).toEqual([
+      { plaid_category: 'FOOD_AND_DRINK', plaid_category_detailed: 'FOOD_AND_DRINK_FAST_FOOD' },
+    ]);
+    expect(row('t1').categoryId).toBe(catId('Habits', 'Coffee & Fast Food'));
+  });
+
   describe('automatic details refresh, once per bank', () => {
     const item = (itemId: number) =>
       db.rows<{ cursor: string | null; historyComplete: number; refreshedAt: string | null }>(

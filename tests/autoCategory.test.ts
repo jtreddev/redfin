@@ -242,6 +242,11 @@ describe('builtin and bank tables', () => {
     expect(builtinCategory({ merchant: 'BPX HOLDINGS', amountCents: -4000, bankDetailed: null }, 2500)).toBeNull();
     expect(builtinCategory({ merchant: 'ELEVEN', amountCents: -800, bankDetailed: null }, 2500)?.ref).toEqual(['Habits', 'Habits']);
   });
+  it('Spectrum is internet, but not a Spectrum Health medical bill', () => {
+    expect(builtinCategory({ merchant: 'SPECTRUM', amountCents: -8999, bankDetailed: null }, 2500)?.ref).toEqual(['Bills', 'Internet']);
+    expect(builtinCategory({ merchant: normalizeMerchant('SPECTRUM HEALTH 0412 GRAND RAPIDS MI'), amountCents: -12000, bankDetailed: null }, 2500)).toBeNull();
+    expect(builtinCategory({ merchant: 'SPECTRUM MEDICAL GROUP', amountCents: -12000, bankDetailed: null }, 2500)).toBeNull();
+  });
   it('bank map covers every primary', () => {
     const primaries = [
       'INCOME', 'TRANSFER_IN', 'TRANSFER_OUT', 'LOAN_PAYMENTS', 'BANK_FEES', 'ENTERTAINMENT', 'FOOD_AND_DRINK', 'GENERAL_MERCHANDISE',

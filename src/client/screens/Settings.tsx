@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { GROUPS, kindForGroup } from '../../shared/categorySet';
+import { formatCents } from '../../shared/money';
 import { errorMessage, patch, post } from '../api';
 import { go } from '../router';
 import { recategorizeAll } from '../sync';
@@ -30,8 +31,14 @@ export function Settings() {
   const [categoriesOpen, setCategoriesOpen] = useState(false);
 
   async function save() {
+    if (cutoff === null) {
+      // An empty cutoff would file every gas-station charge as Gas: keep the saved one instead.
+      setCutoff(me.household.habitCutoffCents);
+      toast('Enter a gas-station cutoff amount', 'error');
+      return;
+    }
     try {
-      await patch('/household', { name, timezone, lowBalanceCents: low ?? 0, habitCutoffCents: cutoff ?? 0, funMoneyStartDate: funStart || null });
+      await patch('/household', { name, timezone, lowBalanceCents: low ?? 0, habitCutoffCents: cutoff, funMoneyStartDate: funStart || null });
       await reload();
       toast('Saved');
     } catch (error) {
@@ -52,6 +59,7 @@ export function Settings() {
     }
   }
 
+  const cutoffShown = cutoff ?? me.household.habitCutoffCents;
   const zones = US_TIME_ZONES.includes(timezone) ? US_TIME_ZONES : [timezone, ...US_TIME_ZONES];
   return (
     <div className="stack">
@@ -77,7 +85,9 @@ export function Settings() {
           <Field label="Fun money counts from" hint="Allowances build up from this date.">
             <input type="date" value={funStart} onChange={(e) => setFunStart(e.target.value)} />
           </Field>
-          <Field label="Small gas-station charges count as Habits under $__" hint="Bigger fill-ups are Gas. Save, then recategorize to apply it to past charges.">
+          <Field
+            label={`Small gas-station charges count as Habits under ${formatCents(cutoffShown, { whole: cutoffShown % 100 === 0 })}`}
+            hint="Bigger fill-ups are Gas. Save, then recategorize to apply it to past charges.">
             <AmountInput cents={cutoff} onChange={setCutoff} />
           </Field>
           <Button variant="primary" onClick={() => void save()}>

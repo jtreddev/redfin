@@ -13,7 +13,7 @@ export const GAS_STATIONS: readonly string[] = [
   'ELEVEN', 'SEVEN ELEVEN', 'WAWA', 'SHEETZ', 'HOLIDAY', 'THORNTONS',
 ];
 
-const KNOWN_NAMES: readonly { ref: CategoryRef; label: string; tokens: readonly string[] }[] = [
+const KNOWN_NAMES: readonly { ref: CategoryRef; label: string; tokens: readonly string[]; unless?: readonly string[] }[] = [
   {
     ref: ['Bills', 'Subscriptions'],
     label: 'a subscription',
@@ -51,12 +51,13 @@ const KNOWN_NAMES: readonly { ref: CategoryRef; label: string; tokens: readonly 
   { ref: ['Bills', 'Loans'], label: 'a loan', tokens: ['AIDVANTAGE', 'NELNET', 'MOHELA', 'BRIDGECREST', 'AUTO LOAN', 'STUDENT LOAN'] },
   { ref: ['Bills', 'Insurance'], label: 'insurance', tokens: ['GEICO', 'PROGRESSIVE', 'STATE FARM', 'ALLSTATE'] },
   { ref: ['Bills', 'Phone'], label: 'a phone bill', tokens: ['T MOBILE', 'TMOBILE', 'VERIZON', 'AT&T WIRELESS'] },
-  { ref: ['Bills', 'Internet'], label: 'internet', tokens: ['XFINITY', 'COMCAST', 'SPECTRUM'] },
+  // Spectrum Health is a hospital system, not the cable company.
+  { ref: ['Bills', 'Internet'], label: 'internet', tokens: ['XFINITY', 'COMCAST', 'SPECTRUM'], unless: ['HEALTH', 'MEDICAL'] },
 ];
 
 
 const GAS_PATTERN = wholeWordPattern(GAS_STATIONS);
-const KNOWN_PATTERNS = KNOWN_NAMES.map((k) => ({ ...k, pattern: wholeWordPattern(k.tokens) }));
+const KNOWN_PATTERNS = KNOWN_NAMES.map((k) => ({ ...k, pattern: wholeWordPattern(k.tokens), unlessPattern: k.unless ? wholeWordPattern(k.unless) : null }));
 
 const dollars = (cents: number) => (cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`);
 
@@ -76,6 +77,6 @@ export function builtinCategory(
       ? { ref: SPECIAL.habits, reason: `Under ${dollars(cutoffCents)} at a gas station` }
       : { ref: SPECIAL.gas, reason: 'Gas station' };
   }
-  const known = KNOWN_PATTERNS.find((k) => k.pattern.test(subject.merchant));
+  const known = KNOWN_PATTERNS.find((k) => k.pattern.test(subject.merchant) && !k.unlessPattern?.test(subject.merchant));
   return known ? { ref: known.ref, reason: `Looks like ${known.label}` } : null;
 }

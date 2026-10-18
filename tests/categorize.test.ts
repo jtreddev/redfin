@@ -69,5 +69,8 @@ describe('POST /categorize/all', () => {
     expect((await api(env, 'PATCH', '/household', { habitCutoffCents: 100001 })).status).toBe(400);
     expect((await api(env, 'PATCH', '/household', { habitCutoffCents: -1 })).status).toBe(400);
     expect((await api(env, 'POST', '/categorize/all', { afterId: -3 })).status).toBe(400);
+    // An empty cutoff never saves as $0.
+    expect((await api(env, 'PATCH', '/household', { name: 'Home', habitCutoffCents: null })).status).toBe(200);
+    expect((await me()).household.habitCutoffCents).toBe(2500);
   });
 });

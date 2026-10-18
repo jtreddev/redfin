@@ -416,7 +416,9 @@ async function refreshStored(
     resent.map((t) =>
       stmt(
         db,
-        'UPDATE transactions SET plaid_category = ?, plaid_category_detailed = ?, updated_at = ? WHERE plaid_txn_id = ?',
+        // A re-send without a bank category never wipes the one already stored.
+        `UPDATE transactions SET plaid_category = COALESCE(?, plaid_category),
+           plaid_category_detailed = COALESCE(?, plaid_category_detailed), updated_at = ? WHERE plaid_txn_id = ?`,
         t.personal_finance_category?.primary ?? null,
         t.personal_finance_category?.detailed ?? null,
         now,
