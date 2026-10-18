@@ -1,4 +1,4 @@
-import { ledgerEntries, monthActuals, type CategoryKind } from '../../shared/actuals';
+import { ledgerEntries, monthActuals, type CategoryKind, type LedgerTxn } from '../../shared/actuals';
 import type { Timing } from '../../shared/allocation';
 import { SPECIAL } from '../../shared/categorySet';
 import {
@@ -15,13 +15,14 @@ import { latestCharges, type IncreaseCharge } from '../../shared/billIncrease';
 import { buildForecast, type Forecast, type ForecastLine } from '../../shared/forecast';
 import type { Cents } from '../../shared/money';
 import { payDatesBetween, payDatesInMonth } from '../../shared/paySchedule';
+import { plannedMonthTotal, type AmountRow } from '../../shared/plannedCosts';
 import { funMoneyBalance, PRIVACY_SQL } from '../../shared/privacy';
 import { nextOccurrence, type Cadence } from '../../shared/recurring';
 import { safeToSpend, type SafeToSpend } from '../../shared/safeToSpend';
 import { monthWeeks } from '../../shared/weeks';
 import type { HouseholdSettings } from '../env';
 import { all, first } from '../lib/db';
-import { loadCategories, loadIncomeSources, scheduleOf, type IncomeSourceRow } from './context';
+import { loadCategories, loadIncomeSources, scheduleOf, type CategoryRow, type IncomeSourceRow } from './context';
 import { loadLedger } from './ledger';
 import { plannedCostsForMonth } from './plannedCosts';
 
@@ -88,8 +89,21 @@ export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthD
     loadLedger(db, monthStart(month), monthEnd(month)),
     plannedCostsForMonth(db, month),
   ]);
+  return buildMonth(month, { categories, lines, sources, members, ledger, plannedCostsCents });
+}
 
-  const actuals = monthActuals(ledgerEntries(ledger), month);
+interface MonthSources {
+  categories: readonly CategoryRow[];
+  lines: readonly LineRow[];
+  sources: IncomeSourceRow[];
+  members: readonly { id: number; funAllowanceCents: number }[];
+  ledger: readonly LedgerTxn[];
+  plannedCostsCents: Cents | null;
+}
+
+/** loadMonth's rows from what it loaded (or, for later months, from what one load shares across months). */
+function buildMonth(month: MonthKey, { categories, lines, sources, members, ledger, plannedCostsCents }: MonthSources): MonthData {
+  const actuals = monthActuals(ledgerEntries([...ledger]), month);
   const weeks = monthWeeks(month);
   const zeros = () => weeks.map(() => 0);
   const lineByCategory = new Map(lines.map((l) => [l.categoryId, l]));
@@ -411,6 +425,52 @@ export async function laterMonthRows(db: D1Database, planner: Planner, month: Mo
   return budgeted?.n ? (await loadMonth(db, month)).rows : planner.data.rows;
 }
 
+/**
+ * Every later month's budget rows from `from` through `to`, in a fixed number of queries however many of them
+ * have a budget (D1 allows 50 queries a request on the free plan). A month with no budget carries this month's.
+ * Later months haven't happened, so their actuals are left empty.
+ */
+export async function loadLaterMonths(
+  db: D1Database,
+  planner: Planner,
+  from: MonthKey,
+  to: MonthKey,
+  plannedCosts: readonly { startMonth: MonthKey; amounts: readonly AmountRow[] }[],
+  categories: readonly CategoryRow[],
+): Promise<Map<MonthKey, readonly BudgetRow[]>> {
+  const [lines, members] = await Promise.all([
+    all<LineRow & { month: MonthKey }>(
+      db,
+      `SELECT id, month, category_id AS categoryId, budget_cents AS budgetCents, timing, due_day AS dueDay, notes
+         FROM budget_lines WHERE month BETWEEN ? AND ?`,
+      from,
+      to,
+    ),
+    all<{ id: number; funAllowanceCents: number }>(db, 'SELECT id, fun_allowance_cents AS funAllowanceCents FROM members'),
+  ]);
+  const out = new Map<MonthKey, readonly BudgetRow[]>();
+  for (let month = from; month <= to; month = addMonths(month, 1)) {
+    const own = lines.filter((l) => l.month === month);
+    if (!own.length) {
+      out.set(month, planner.data.rows);
+      continue;
+    }
+    const started = plannedCosts.filter((c) => c.startMonth <= month);
+    out.set(
+      month,
+      buildMonth(month, {
+        categories,
+        lines: own,
+        sources: planner.data.sources,
+        members,
+        ledger: [],
+        plannedCostsCents: started.length ? plannedMonthTotal(started, month) : null,
+      }).rows,
+    );
+  }
+  return out;
+}
+
 /** A row that is a planned line of its own (typed, or the planned-costs line), not one counted in its parent's. */
 export function ownLineRows(rows: readonly BudgetRow[]): BudgetRow[] {
   const byId = new Map(rows.map((r) => [r.categoryId, r]));
@@ -505,6 +565,8 @@ export async function upcomingBills(
     return categoryId == null ? [] : parentId == null ? [categoryId] : [categoryId, parentId];
   };
   const budgetCategories = new Set(bills.map((b) => b.categoryId));
+  // A line on a sub-category is covered by a bill on its parent too (not by a sibling's bill).
+  const budgetParents = new Set(bills.flatMap((b) => (b.categoryId == null ? [] : [parentOf.get(b.categoryId) ?? null])).filter((id) => id !== null));
   for (const r of recurring) {
     if (r.nextDate == null) continue;
     let date = r.nextDate;
@@ -518,7 +580,8 @@ export async function upcomingBills(
       date = nextOccurrence(date, r.cadence);
     }
     for (let guard = 0; date <= until && guard < 60; guard++, date = nextOccurrence(date, r.cadence)) {
-      if (!(lineCategories(r.categoryId).some((id) => budgetCategories.has(id)) && monthOf(date) === planner.month)) {
+      const covered = lineCategories(r.categoryId).some((id) => budgetCategories.has(id)) || (r.categoryId !== null && budgetParents.has(r.categoryId));
+      if (!(covered && monthOf(date) === planner.month)) {
         bills.push({
           name: r.name,
           date,
@@ -537,9 +600,12 @@ export async function upcomingBills(
   if (typeof horizon !== 'number' && horizon.laterMonths) {
     for (let month = addMonths(planner.month, 1); month <= monthOf(until); month = addMonths(month, 1)) {
       const rows = await (horizon.monthRows ?? ((m: MonthKey) => laterMonthRows(db, planner, m)))(month);
-      const billed = new Set<number | null>(bills.filter((b) => b.source === 'recurring' && monthOf(b.date) === month).flatMap((b) => lineCategories(b.categoryId)));
+      const monthBills = bills.filter((b) => b.source === 'recurring' && monthOf(b.date) === month);
+      const billed = new Set<number | null>(monthBills.flatMap((b) => lineCategories(b.categoryId)));
+      const billedOwn = new Set(monthBills.map((b) => b.categoryId));
       for (const line of dueDayLines(rows, month)) {
-        if (line.date <= until && !billed.has(line.categoryId)) bills.push(line);
+        const parent = line.categoryId === null ? null : (parentOf.get(line.categoryId) ?? null);
+        if (line.date <= until && !billed.has(line.categoryId) && !(parent !== null && billedOwn.has(parent))) bills.push(line);
       }
     }
   }

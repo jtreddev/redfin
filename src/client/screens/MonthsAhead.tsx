@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from 'react';
+import { Fragment, useId, useMemo, useState } from 'react';
 import { addMonths, monthOf } from '../../shared/dates';
 import {
   HORIZONS,
@@ -15,7 +15,7 @@ import { api } from '../api';
 import { Bars, type BarDetails } from '../charts/Bars';
 import { GROUP_COLOR, useTableToggle } from '../charts/cards';
 import { StackedBars, type Series } from '../charts/StackedBars';
-import { monthLabel, monthShortLabel } from '../format';
+import { monthLabel } from '../format';
 import { Icon } from '../icons';
 import { useApp, useLoad } from '../state';
 import { AmountInput, Button, Card, ErrorNote, Loading, Money, Segmented } from '../ui';
@@ -146,7 +146,11 @@ function monthDetails(m: MonthAhead, cushion: number): BarDetails {
     rows: [
       { key: 'end', name: 'Cash at month end', colorVar: '--accent', value: m.endCents },
       { key: 'in', name: m.extraPay ? `Money in (${m.payDays} paydays)` : 'Money in', value: m.inCents },
-      ...GROUP_ORDER.filter((g) => m.byGroup[g.key] !== 0).map((g) => ({ key: g.key, name: g.name, colorVar: GROUP_COLOR[g.key], value: -m.byGroup[g.key] })),
+      ...GROUP_ORDER.filter((g) => m.byGroup[g.key] !== 0).flatMap((g) => [
+        { key: g.key, name: g.name, colorVar: GROUP_COLOR[g.key], value: -m.byGroup[g.key] },
+        // Inside Bills: what history says goes out beyond the known bills (P6b-R17).
+        ...(g.key === 'bills' && m.otherBillsCents > 0 ? [{ key: 'other-bills', name: 'of it, other bills', value: -m.otherBillsCents }] : []),
+      ]),
       ...(m.addedCents ? [{ key: 'added', name: 'Added costs', value: -m.addedCents }] : []),
       { key: 'left', name: 'Left over', value: m.leftOverCents },
       ...m.bigItems.map((b, i) => ({ key: `big-${i}`, name: `Includes ${b.name}${b.note ? `, ${b.note}` : ''}`, value: -b.amountCents })),
@@ -232,9 +236,10 @@ function WhereCard({ result }: { result: Result }) {
               <tr>
                 <th scope="col">Month</th>
                 {series.map((s) => (
-                  <th key={s.key} scope="col">
-                    {s.name}
-                  </th>
+                  <Fragment key={s.key}>
+                    <th scope="col">{s.name}</th>
+                    {s.key === 'bills' && <th scope="col">of it, other bills</th>}
+                  </Fragment>
                 ))}
                 <th scope="col">Money in</th>
               </tr>
@@ -244,9 +249,16 @@ function WhereCard({ result }: { result: Result }) {
                 <tr key={m.month}>
                   <th scope="row">{m.label}</th>
                   {series.map((s) => (
-                    <td key={s.key}>
-                      <Money cents={s.values[i]!} whole />
-                    </td>
+                    <Fragment key={s.key}>
+                      <td>
+                        <Money cents={s.values[i]!} whole />
+                      </td>
+                      {s.key === 'bills' && (
+                        <td className="muted">
+                          <Money cents={m.otherBillsCents} whole />
+                        </td>
+                      )}
+                    </Fragment>
                   ))}
                   <td>
                     <Money cents={m.inCents} whole />
@@ -331,7 +343,7 @@ function SetAsidesCard({ result, today }: { result: Result; today: string }) {
             <strong>{c.name}</strong>: <Money cents={c.balanceNowCents} whole /> now,{' '}
             {c.lowestCents < 0 ? (
               <>
-                about <Money cents={c.lowestCents} whole /> after {monthShortLabel(c.lowestMonth).replace(/ \d{4}$/, '')}
+                about <Money cents={c.lowestCents} whole /> after {monthName(c.lowestMonth, today)}
                 <span className="ahead-flag tone-warn">
                   <Icon name="alert" /> Runs short
                 </span>
@@ -389,16 +401,18 @@ function WhatIfCard({ input, horizon, base, today }: { input: MonthsAheadInput; 
   const [payChangeCents, setPayChangeCents] = useState<number | null>(null);
   const ids = { habits: useId(), everyday: useId(), month: useId() };
 
+  // A month picked at a longer horizon falls back to the last month shown, so the one-off never drops silently.
+  const oneOff = base.months.some((m) => m.month === oneOffMonth) ? oneOffMonth : base.months.at(-1)!.month;
   const whatIf: MonthsWhatIf = useMemo(
     () => ({
       habitsFactor: HABITS[habits],
       everydayFactor: EVERYDAY[everyday],
       monthlyCents: monthlyCents ?? 0,
       oneOffCents: oneOffCents ?? 0,
-      oneOffMonth,
+      oneOffMonth: oneOff,
       payChangeCents: payChangeCents ?? 0,
     }),
-    [habits, everyday, monthlyCents, oneOffCents, oneOffMonth, payChangeCents],
+    [habits, everyday, monthlyCents, oneOffCents, oneOff, payChangeCents],
   );
   const result = useMemo(() => projectMonths(input, horizon, whatIf), [input, horizon, whatIf]);
   const diff = result.endCents - base.endCents;
@@ -464,7 +478,7 @@ function WhatIfCard({ input, horizon, base, today }: { input: MonthsAheadInput; 
             </label>
             <label className="what-if-control" htmlFor={ids.month}>
               <span className="field-label">In</span>
-              <select id={ids.month} value={oneOffMonth} onChange={(e) => setOneOffMonth(e.target.value)}>
+              <select id={ids.month} value={oneOff} onChange={(e) => setOneOffMonth(e.target.value)}>
                 {base.months.map((m) => (
                   <option key={m.month} value={m.month}>
                     {m.label}

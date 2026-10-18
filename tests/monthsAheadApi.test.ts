@@ -195,6 +195,95 @@ describe('GET /api/forecast/months', () => {
     });
   });
 
+  describe('other bills', () => {
+    let utilities: number;
+    beforeEach(() => {
+      utilities = category('Bills', "AND c.name = 'Utilities'");
+    });
+
+    it('averages a Bills category over 12 months, less its confirmed quarterly bill, with no double count', async () => {
+      // Electric varies and was never confirmed: $50 a month. Water is a confirmed $120 bill each quarter.
+      for (let i = 0; i < 12; i++) {
+        const month = `${2025 + Math.floor((9 + i) / 12)}-${String(((9 + i) % 12) + 1).padStart(2, '0')}`;
+        charge(`${month}-08`, -5000, { category_id: utilities });
+        if (i % 3 === 1) charge(`${month}-10`, -12000, { category_id: utilities });
+      }
+      bill('Water', '2026-11-10', 12000, { cadence: 'quarterly', categoryId: utilities });
+      const body = await months();
+      // (12 × 50 + 4 × 120) / 12 = 90 a month, less water's 40 a month: 50.
+      expect(body.input.otherBillsCents).toBe(5000);
+      const by = (month: string) => body.projection.months.find((m) => m.month === month)!;
+      expect(by('2026-11').byGroup.bills).toBe(5000 + 12000);
+      expect(by('2026-12').byGroup.bills).toBe(5000);
+      expect(by('2026-11').otherBillsCents).toBe(5000);
+      // Over the year: 12 × 50 + 4 × 120 = what went out last year.
+      const year = body.projection.months.slice(1).reduce((sum, m) => sum + m.byGroup.bills, 0);
+      expect(year).toBe(12 * 5000 + 4 * 12000);
+    });
+
+    it('averages over the months there are, and leaves out due-day lines and planned-cost categories', async () => {
+      const insurance = category('Bills', "AND c.name = 'Insurance'");
+      for (const month of ['2026-07', '2026-08', '2026-09']) {
+        charge(`${month}-08`, -6000, { category_id: utilities });
+        charge(`${month}-09`, -20000, { category_id: insurance });
+      }
+      await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: utilities, budgetCents: 4000, timing: 'due_day', dueDay: 28 });
+      expect((await api(env, 'POST', '/planned-costs', { name: 'Insurance', monthlyCents: 20000, categoryIds: [insurance] })).status).toBe(201);
+      // Utilities: 60 a month, 40 of it in the line.
+      expect((await months()).input.otherBillsCents).toBe(2000);
+    });
+  });
+
+  it('takes a due-day line in Everyday out of everyday’s usual', async () => {
+    const everyday = category('Everyday');
+    for (const month of ['2026-07', '2026-08', '2026-09']) charge(`${month}-05`, -30400, { category_id: everyday });
+    await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: everyday, budgetCents: 30000, timing: 'due_day', dueDay: 5 });
+    const nov = (await months()).projection.months[1]!;
+    expect(nov.byGroup.everyday).toBe(400);
+    expect(nov.byGroup.bills).toBe(30000);
+  });
+
+  it('counts a line on a sub-category once when the bill is on its parent', async () => {
+    const parent = category('Bills');
+    const child = ((await (await api(env, 'POST', '/categories', { parentId: parent, name: 'Rent' })).json()) as { id: number }).id;
+    await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: child, budgetCents: 150000, timing: 'due_day', dueDay: 25 });
+    bill('Landlord', '2026-10-25', 150000, { categoryId: parent });
+    expect((await months()).projection.months.map((m) => m.byGroup.bills)).toEqual(Array(13).fill(150000));
+  });
+
+  it('keeps to a bounded number of D1 queries, however many later months have a budget', async () => {
+    seedHousehold();
+    const rent = category('Bills');
+    const savings = category('Saving', "AND c.name = 'Savings & Planned Costs'");
+    expect((await api(env, 'POST', '/planned-costs', { name: 'Car repairs', monthlyCents: 10000 })).status).toBe(201);
+    await api(env, 'POST', '/goals', { name: 'Emergency fund', targetCents: 200000 });
+    for (const month of ['2026-10', '2026-11', '2026-12', '2027-01']) {
+      await api(env, 'PUT', '/budget/lines', { month, categoryId: rent, budgetCents: 150000, timing: 'due_day', dueDay: 1 });
+      await api(env, 'PUT', '/budget/lines', { month, categoryId: savings, budgetCents: 30000, timing: 'even' });
+    }
+    const proto = Object.getPrototypeOf(db.prepare('SELECT 1')) as { execute: (...a: unknown[]) => unknown };
+    const execute = proto.execute;
+    let queries = 0;
+    proto.execute = function (this: unknown, ...a: unknown[]) {
+      queries++;
+      return execute.apply(this, a);
+    };
+    try {
+      const count = async (path: string) => {
+        queries = 0;
+        expect((await api(env, 'GET', path, undefined, YOU)).status).toBe(200);
+        return queries;
+      };
+      expect(await count('/forecast/months')).toBeLessThanOrEqual(30);
+      expect(await count('/forecast')).toBeLessThanOrEqual(30);
+    } finally {
+      proto.execute = execute;
+    }
+    // Later months' own budgets still count.
+    const body = await months();
+    expect(body.projection.months.slice(1, 4).map((m) => m.byGroup.saving)).toEqual([30000, 30000, 30000]);
+  });
+
   it('projects a goal from its recent contributions', async () => {
     const res = await api(env, 'POST', '/goals', { name: 'Emergency fund', targetCents: 200000 });
     const id = ((await res.json()) as { id: number }).id;

@@ -40,10 +40,12 @@ export interface PlannedCostInput {
   balanceNowCents: Cents;
   startMonth: MonthKey;
   amounts: readonly AmountRow[];
-  /** Shared spending in its categories by month (positive = out): at least the last 12 full months. */
+  /** Shared spending in its categories by month (positive = out): the last 12 full months and this month so far. */
   spendByMonth: Readonly<Record<MonthKey, Cents>>;
   /** Its categories' usual month (less its own confirmed bills): taken out of its group's usual. */
   usualCents: Cents;
+  /** Its own shared confirmed bills as a monthly amount: the set-aside's share that the bills themselves take. */
+  ownBillsMonthlyCents: Cents;
 }
 
 export interface GoalAheadInput {
@@ -70,6 +72,11 @@ export interface MonthsAheadInput {
   /** The household's first month with any transaction. */
   historyStart: MonthKey | null;
   goals: readonly GoalAheadInput[];
+  /**
+   * Bills-section spending no confirmed bill or due-day line covers (utilities that vary, even-timing lines),
+   * as a monthly amount: counted in Bills each month (P6b-R17).
+   */
+  otherBillsCents: Cents;
 }
 
 export interface MonthsWhatIf {
@@ -106,6 +113,8 @@ export interface MonthAhead {
   extraPay: boolean;
   inCents: Cents;
   byGroup: ByGroup;
+  /** The part of byGroup.bills that is "other bills" (P6b-R17). */
+  otherBillsCents: Cents;
   /** What-if costs. */
   addedCents: Cents;
   outCents: Cents;
@@ -150,12 +159,26 @@ const short = (month: MonthKey) => MONTH_SHORT[parseMonth(month).m - 1]!;
 const zeros = (): ByGroup => ({ bills: 0, everyday: 0, habits: 0, fun: 0, saving: 0 });
 const SPREAD_GROUPS = ['everyday', 'habits', 'fun'] as const;
 
-/** Expected spending for a planned cost in a month, before its own bills come off. */
-function expectedSpend(cost: PlannedCostInput, month: MonthKey, current: MonthKey, hasYear: boolean): { cents: Cents; likeLast: boolean } {
+/**
+ * Expected spending for a planned cost in a month, before its own bills that month come off (like last year),
+ * or with them already off as a monthly rate (from the set-aside: P6b-R18). The rest of this month is last
+ * year's month less what's gone out so far, or the set-aside × the share of days left.
+ */
+function expectedSpend(
+  cost: PlannedCostInput,
+  month: MonthKey,
+  current: MonthKey,
+  hasYear: boolean,
+  shareLeft: number,
+): { cents: Cents; likeLast: boolean } {
   const lastYear = addMonths(month, -12);
   // This month isn't over, so a year from now falls back to the set-aside (P6b-R2).
-  if (hasYear && lastYear < current) return { cents: Math.max(0, cost.spendByMonth[lastYear] ?? 0), likeLast: true };
-  return { cents: monthlyFor(cost.amounts, month), likeLast: false };
+  if (hasYear && lastYear < current) {
+    const soFar = month === current ? (cost.spendByMonth[current] ?? 0) : 0;
+    return { cents: Math.max(0, (cost.spendByMonth[lastYear] ?? 0) - soFar), likeLast: true };
+  }
+  const share = month === current ? shareLeft : 1;
+  return { cents: Math.round(Math.max(0, monthlyFor(cost.amounts, month) - cost.ownBillsMonthlyCents) * share), likeLast: false };
 }
 
 export function projectMonths(input: MonthsAheadInput, horizon: Horizon = 12, whatIf: MonthsWhatIf = {}): MonthsAhead {
@@ -202,12 +225,14 @@ export function projectMonths(input: MonthsAheadInput, horizon: Horizon = 12, wh
       if (b.amountCents >= BIG_ITEM_CENTS && (b.cadence === 'quarterly' || b.cadence === 'yearly')) bigItems.push({ name: b.name, amountCents: b.amountCents, note: null });
     }
     for (const g of SPREAD_GROUPS) byGroup[g] += Math.round(usual[g] * share * factor[g]);
+    const otherBillsCents = Math.round(input.otherBillsCents * share);
+    byGroup.bills += otherBillsCents;
     byGroup.saving += input.saving[month] ?? 0;
 
     input.plannedCosts.forEach((cost, k) => {
-      const expected = expectedSpend(cost, month, current, hasYear);
+      const expected = expectedSpend(cost, month, current, hasYear, shareLeft);
       const ownBills = bills.filter((b) => b.plannedCostId === cost.id).reduce((sum, b) => sum + b.amountCents, 0);
-      const cents = Math.round(Math.max(0, expected.cents - ownBills) * share);
+      const cents = expected.likeLast ? Math.max(0, expected.cents - ownBills) : expected.cents;
       byGroup[cost.group] += cents;
       if (expected.likeLast && cents >= BIG_ITEM_CENTS) bigItems.push({ name: cost.name, amountCents: cents, note: `like last ${short(month)}` });
       // This month's set-aside is already in today's balance. Its own bills are paid from it too.
@@ -230,6 +255,7 @@ export function projectMonths(input: MonthsAheadInput, horizon: Horizon = 12, wh
       extraPay,
       inCents,
       byGroup,
+      otherBillsCents,
       addedCents,
       outCents,
       leftOverCents: inCents - outCents,

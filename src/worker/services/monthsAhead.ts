@@ -3,11 +3,11 @@ import type { Cents } from '../../shared/money';
 import type { MonthBill, MonthsAheadInput, PlannedCostInput } from '../../shared/monthsAhead';
 import { costBalance, spendByCategoryMonth, spendIn, withSubcategories, type SpendMap } from '../../shared/plannedCosts';
 import { monthlyEquivalent } from '../../shared/projection';
-import { GROUP_ORDER, usualOf, type GroupKey } from '../../shared/trends';
+import { GROUP_ORDER, usualOf, type GroupKey, type TrendsInput } from '../../shared/trends';
 import type { HouseholdSettings } from '../env';
 import { first } from '../lib/db';
 import { loadForecastInputs, withoutSetAside, type ForecastInputs } from './forecastInputs';
-import { laterMonthRows, ownLineRows, upcomingBills, type BudgetRow } from './planner';
+import { loadLaterMonths, ownLineRows, upcomingBills, type BudgetRow } from './planner';
 import { addOlderSpend, loadPlannedCosts, type PlannedCostRow } from './plannedCosts';
 
 /** Whole months ahead the inputs cover; the client shows 3, 6 or 12 of them. */
@@ -17,6 +17,8 @@ const LEDGER_MONTHS = 13;
 
 export interface MonthsAheadInputs {
   input: MonthsAheadInput;
+  /** The ledger already loaded (13 months to today's month), for goals to reuse. */
+  ledger: { from: ISODate; entries: TrendsInput['entries'] };
   hasBalance: boolean;
   hasIncome: boolean;
 }
@@ -40,13 +42,9 @@ export async function loadMonthsAheadInput(
   ]);
   const { planner } = inputs;
 
-  // Later months' rows are wanted twice (their due-day lines, their saving lines): load each once.
-  const rowsByMonth = new Map<MonthKey, Promise<readonly BudgetRow[]>>();
-  const monthRows = (month: MonthKey) => {
-    let rows = rowsByMonth.get(month);
-    if (!rows) rowsByMonth.set(month, (rows = laterMonthRows(db, planner, month)));
-    return rows;
-  };
+  // Later months' rows (their due-day lines, their saving lines) in a fixed number of queries.
+  const later = await loadLaterMonths(db, planner, addMonths(current, 1), addMonths(current, MONTHS_AHEAD), costs, inputs.categories);
+  const monthRows = async (month: MonthKey) => later.get(month) ?? planner.data.rows;
   const upcoming = await upcomingBills(db, planner, today, viewerId, { until, repeat: true, laterMonths: true, monthRows });
 
   // Saving: every savings line, any timing, without its set-aside (P6-R5). This month counts what's left.
@@ -74,6 +72,15 @@ export async function loadMonthsAheadInput(
   for (const cost of plannedCosts) for (const id of cost.coveredIds) costOf.set(id, cost.input.id);
 
   const parentOf = new Map(inputs.trendsInput.categories.map((c) => [c.id, c.parentId ?? null]));
+  const historyStart = history?.first ? monthOf(history.first) : null;
+  const groupOf = groupsOf(inputs);
+  // Due-day lines come out as bills; one filed in Everyday, Habits or Fun mustn't be in that group's usual too.
+  const linesInUsual = dueDayOwnLines(planner.data.rows).flatMap((r) => {
+    const group = groupOf.get(r.categoryId);
+    return group === 'everyday' || group === 'habits' || group === 'fun'
+      ? [{ group, cadence: 'monthly' as const, amountCents: r.budgetCents - r.plannedCostsCents }]
+      : [];
+  });
   const kindOf = new Map(planner.data.rows.map((r) => [r.categoryId, r.kind]));
   const bills: MonthBill[] = upcoming
     // A savings line (or a bill standing in for one) is counted in saving.
@@ -103,16 +110,57 @@ export async function loadMonthsAheadInput(
       income: inputs.sources,
       bills,
       usual: inputs.trends.usual,
-      billsInUsual: inputs.confirmed,
+      billsInUsual: [...inputs.confirmed, ...linesInUsual],
       saving,
       plannedCosts: plannedCosts.map((c) => c.input),
-      historyStart: history?.first ? monthOf(history.first) : null,
+      historyStart,
       // The route adds them (from Goals' own progress).
       goals: [],
+      otherBillsCents: otherBills(inputs, historyStart, new Set(costOf.keys())),
     },
+    ledger: { from: monthStart(addMonths(current, 1 - LEDGER_MONTHS)), entries: inputs.trendsInput.entries },
     hasBalance: inputs.cash.counted > 0,
     hasIncome: inputs.sources.length > 0,
   };
+}
+
+/** This month's due-day spending lines of their own (as dueDayLines counts them), at their hand amount. */
+function dueDayOwnLines(rows: readonly BudgetRow[]): BudgetRow[] {
+  return ownLineRows(rows).filter(
+    (r) => r.timing === 'due_day' && r.dueDay != null && (r.kind === 'expense' || r.kind === 'debt') && r.funMemberId == null && r.budgetCents - r.plannedCostsCents > 0,
+  );
+}
+
+/**
+ * "Other bills" (P6b-R17): for each top-level Bills category, its average month over the last 12 full months
+ * (or those since history began), less what's already projected for it — its shared confirmed bills as monthly
+ * amounts and this month's due-day lines — floored at 0 per category, then added up. Sub-categories linked to a
+ * planned cost are projected as the cost, so their money is left out; a category linked itself is skipped.
+ * Twelve months keep a quarterly or yearly charge to its monthly share. Private charges are already in fun.
+ */
+function otherBills(inputs: ForecastInputs, historyStart: MonthKey | null, inCost: ReadonlySet<number>): Cents {
+  const { trends, trendsInput, planner } = inputs;
+  if (historyStart === null) return 0;
+  const full = trends.months.map((m, i) => ({ m, i })).filter(({ m }) => m < trends.partialMonth && m >= historyStart);
+  if (!full.length) return 0;
+  const average = (byMonth: readonly Cents[]) => full.reduce((sum, { i }) => sum + (byMonth[i] ?? 0), 0) / full.length;
+  const rowOf = new Map(trends.categories.map((c) => [c.id, c]));
+  const childrenOf = new Map<number, number[]>();
+  for (const c of trendsInput.categories) if (c.parentId != null) childrenOf.set(c.parentId, [...(childrenOf.get(c.parentId) ?? []), c.id]);
+  const lines = dueDayOwnLines(planner.data.rows);
+
+  let total = 0;
+  for (const row of trends.categories) {
+    if (row.group !== 'bills' || row.parentId !== null || inCost.has(row.id)) continue;
+    const linked = (childrenOf.get(row.id) ?? []).filter((id) => inCost.has(id));
+    const ids = new Set([row.id, ...(childrenOf.get(row.id) ?? [])].filter((id) => !inCost.has(id)));
+    const spent = average(row.byMonth) - linked.reduce((sum, id) => sum + average(rowOf.get(id)?.byMonth ?? []), 0);
+    const covered =
+      inputs.confirmed.filter((b) => b.privateMemberId === null && ids.has(b.categoryId)).reduce((sum, b) => sum + monthlyEquivalent(Math.abs(b.amountCents), b.cadence), 0) +
+      lines.filter((r) => ids.has(r.categoryId)).reduce((sum, r) => sum + r.budgetCents - r.plannedCostsCents, 0);
+    total += Math.max(0, spent - covered);
+  }
+  return Math.round(total);
 }
 
 /** The spending-group of each category. */
@@ -150,7 +198,7 @@ function plannedCostInputs(
       const coveredIds = withSubcategories(cost.categoryIds, categories, linkedAnywhere);
       const covered = new Set(coveredIds);
       const spendByMonth: Record<MonthKey, Cents> = {};
-      for (const month of lastYear) spendByMonth[month] = spendIn(spendShared, coveredIds, month, month);
+      for (const month of [...lastYear, current]) spendByMonth[month] = spendIn(spendShared, coveredIds, month, month);
 
       // Its group: where most of last year's spending went, else its first category's (P6b-R4).
       const byGroup = new Map<GroupKey, Cents>();
@@ -178,6 +226,7 @@ function plannedCostInputs(
           amounts: cost.amounts,
           spendByMonth,
           usualCents: Math.max(0, usual - ownBills),
+          ownBillsMonthlyCents: ownBills,
         },
       };
     });

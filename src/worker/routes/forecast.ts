@@ -85,10 +85,9 @@ forecast.get('/forecast', async (c) => {
 forecast.get('/forecast/months', async (c) => {
   const db = c.env.DB;
   const today = c.get('today');
-  const [goals, { input, hasBalance, hasIncome }] = await Promise.all([
-    goalsWithProgress(db, today),
-    loadMonthsAheadInput(db, today, c.get('viewer').memberId, c.get('household')),
-  ]);
+  const { input, ledger, hasBalance, hasIncome } = await loadMonthsAheadInput(db, today, c.get('viewer').memberId, c.get('household'));
+  // Goals reuse the ledger just loaded when it reaches back far enough (fewer D1 queries).
+  const goals = await goalsWithProgress(db, today, false, ledger);
   input.goals = goals.map((g) => ({ name: g.name, remainingCents: g.progress.remainingCents, recentAverageCents: g.progress.recentAverageCents }));
   return c.json({ today, input, projection: projectMonths(input, 12), hasBalance, hasIncome });
 });

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { ledgerEntries } from '../../shared/actuals';
+import { ledgerEntries, type LedgerEntry } from '../../shared/actuals';
 import { draftNextBudget, summarizeMonth, type CheckinLine, type OverspendDecision } from '../../shared/checkin';
 import { GROUPS } from '../../shared/categorySet';
 import { addMonths, minDate, monthEnd, monthOf, monthStart, type ISODate, type MonthKey } from '../../shared/dates';
@@ -392,7 +392,13 @@ interface GoalRow {
   createdAt: string;
 }
 
-export async function goalsWithProgress(db: D1Database, today: ISODate, includeArchived = false) {
+/** `loaded`: ledger entries a caller already has from `from` to today, used when they reach back far enough. */
+export async function goalsWithProgress(
+  db: D1Database,
+  today: ISODate,
+  includeArchived = false,
+  loaded?: { from: ISODate; entries: readonly LedgerEntry[] },
+) {
   const goals = await all<GoalRow>(
     db,
     `SELECT g.id, g.name, g.target_cents AS targetCents, g.target_date AS targetDate, g.category_id AS categoryId,
@@ -406,7 +412,10 @@ export async function goalsWithProgress(db: D1Database, today: ISODate, includeA
   const currentMonth = monthOf(today);
   const months: MonthKey[] = [-3, -2, -1, 0].map((n) => addMonths(currentMonth, n));
   const from = goals.reduce((earliest, g) => minDate(earliest, g.createdAt.slice(0, 10)), monthStart(months[0] ?? currentMonth));
-  const entries = ledgerEntries(await loadLedger(db, from, today));
+  const entries =
+    loaded && loaded.from <= from
+      ? loaded.entries.filter((e) => e.date >= from && e.date <= today)
+      : ledgerEntries(await loadLedger(db, from, today));
 
   return goals.map((g) => {
     const mine = g.categoryId === null ? [] : entries.filter((e) => e.categoryId === g.categoryId);

@@ -172,10 +172,10 @@ Each one says what was decided, why, and what it costs if it's wrong.
 - **P6b-R6 Expected spending counts shared charges only.** A partner's private charges never appear as
   "like last Dec". Today's balance counts every charge, matching the Planned Costs screen. *Cost:* a
   private purchase in a planned-cost category isn't expected again.
-- **P6b-R7 This month a year from now uses the set-aside, and the rest of this month is pro-rated.**
-  October is still running, so October next year has no full "last October" to go on. The rest of this
-  month takes its expected spending × the share of days left. *Cost:* a cost that peaks in the current
-  month is underestimated a year out.
+- **P6b-R7 This month a year from now uses the set-aside.** October is still running, so October next year
+  has no full "last October" to go on. For the rest of this month, a set-aside is × the share of days left,
+  and "like last year" is last year's month less what has gone out so far this month (fix round 1). *Cost:*
+  a cost that peaks in the current month is underestimated a year out.
 - **P6b-R8 Big items.** Big items are quarterly and yearly bills of $100 or more, and "like last <Mon>"
   planned-cost spends of $100 or more. Weekly and biweekly bills aren't. *Cost:* a large weekly bill is
   never called out.
@@ -199,3 +199,31 @@ Each one says what was decided, why, and what it costs if it's wrong.
   month, the same rule as Planned Costs' "coming up".
 - **P6b-R16 The Past/Ahead switch replaces the URL** instead of adding a history entry, as filters do.
   With no cash balance, Ahead still runs from $0 with a note.
+
+### Fix round 1
+
+- **P6b-R17 Other bills.** Bills-section money that no confirmed bill or due-day line covers is counted.
+  - The amount is worked out per top-level Bills category: its average month over the last 12 full months
+    (or the full months since history began), less its shared confirmed bills as monthly amounts and less
+    this month's due-day lines in it. Each category is floored at 0, then they're added up.
+  - Sub-categories linked to a planned cost are left out, and so is a category linked to one itself.
+  - It goes into Bills each month (× the share of days left this month). It shows as "of it, other bills"
+    in the cash tooltip and the Where it goes table.
+  - *Cost:* a one-off big Bills charge last year raises every month by 1/12 of it, and a bill that ended
+    still counts until it ages out of the 12 months.
+- **P6b-R18 A planned cost's own bills under a set-aside come off as a monthly rate.** With under 12 months
+  of history, expected spending is the set-aside less its own confirmed bills' monthly amount, floored at
+  0. Each bill still comes out of the cost's balance when it falls due. This replaces subtracting the bill
+  only in the month it falls, which counted it twice. *Cost:* none known.
+- **P6b-R19 A due-day line filed in Everyday, Habits or Fun comes out of that group's usual.** It's counted
+  as a bill, so it isn't counted again in usual. *Cost:* if the line is budgeted above what is really
+  spent, the group's usual is understated.
+- **P6b-R20 A bill on a parent category covers a due-day line on its sub-category.** This holds in every
+  month, Until payday included. A sibling's bill doesn't. *Cost:* a parent bill and a child line that
+  really are different money count once.
+- **P6b-R21 A bounded D1 query count.**
+  - Later months' budgets load in a fixed number of queries, whatever how many months have a budget.
+  - Categories are loaded once.
+  - Goals reuse the 13-month ledger when it reaches back far enough.
+  - Measured: `/forecast/months` takes 29 queries and `/forecast` 22, middleware included, with 3 future
+    months budgeted. The test bound is 30. Workers Free allows 50.

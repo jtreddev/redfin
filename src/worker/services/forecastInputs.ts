@@ -5,7 +5,7 @@ import type { Cadence } from '../../shared/recurring';
 import { buildTrends, GROUP_ORDER, type GroupKey, type Trends, type TrendsInput } from '../../shared/trends';
 import type { HouseholdSettings } from '../env';
 import { all, first } from '../lib/db';
-import { loadIncomeSources, scheduleOf } from './context';
+import { loadCategories, loadIncomeSources, scheduleOf, type CategoryRow } from './context';
 import { buildPlanner, CASH_ACCOUNTS_WHERE, type Planner, type UpcomingBill } from './planner';
 import { loadTrendsInput, monthsBack } from './trends';
 
@@ -28,6 +28,8 @@ export interface ForecastInputs {
   trends: Trends;
   /** The viewer's visible confirmed bills (a partner's private ones are left out). */
   confirmed: ConfirmedBill[];
+  /** Every category, as loadCategories gives them (shared, so it's loaded once). */
+  categories: CategoryRow[];
   /** Planned-cost set-asides on this month's savings line, by category: they stay in the account (P6-R5). */
   setAside: Map<number, Cents>;
 }
@@ -43,7 +45,8 @@ export async function loadForecastInputs(
   household: HouseholdSettings,
   opts: { payUntil: ISODate; trendsMonths: number },
 ): Promise<ForecastInputs> {
-  const [cash, sources, received, planner, trendsInput, confirmed] = await Promise.all([
+  const categories = loadCategories(db);
+  const [cash, sources, received, planner, trendsInput, confirmed, categoryRows] = await Promise.all([
     first<{ total: number; counted: number }>(
       db,
       `SELECT COALESCE(SUM(current_balance_cents), 0) AS total, COUNT(current_balance_cents) AS counted FROM accounts WHERE ${CASH_ACCOUNTS_WHERE}`,
@@ -57,7 +60,7 @@ export async function loadForecastInputs(
       opts.payUntil,
     ),
     buildPlanner(db, monthOf(today), household, today),
-    loadTrendsInput(db, monthsBack(today, opts.trendsMonths), today),
+    loadTrendsInput(db, monthsBack(today, opts.trendsMonths), today, categories),
     all<{ categoryId: number; cadence: Cadence; amountCents: number; privateMemberId: number | null }>(
       db,
       `SELECT category_id AS categoryId, cadence, expected_amount_cents AS amountCents, private_member_id AS privateMemberId
@@ -66,6 +69,7 @@ export async function loadForecastInputs(
           AND (private_member_id IS NULL OR private_member_id = ?)`,
       viewerId,
     ),
+    categories,
   ]);
 
   const groupOf = new Map(GROUP_ORDER.map((g) => [g.section, g.key]));
@@ -79,6 +83,7 @@ export async function loadForecastInputs(
       receivedPayDates: received.filter((r) => r.sourceId === s.id).map((r) => r.payDate),
     })),
     planner,
+    categories: categoryRows,
     trendsInput,
     trends: buildTrends(trendsInput),
     confirmed: confirmed.map((b) => ({

@@ -23,6 +23,7 @@ function input(overrides: Partial<MonthsAheadInput> = {}): MonthsAheadInput {
     plannedCosts: [],
     historyStart: '2026-01',
     goals: [],
+    otherBillsCents: 0,
     ...overrides,
   };
 }
@@ -49,6 +50,7 @@ function cost(overrides: Partial<PlannedCostInput> = {}): PlannedCostInput {
     amounts: [{ month: '2026-01', monthlyCents: 5_000 }],
     spendByMonth: {},
     usualCents: 0,
+    ownBillsMonthlyCents: 0,
     ...overrides,
   };
 }
@@ -141,7 +143,8 @@ describe('projectMonths', () => {
   it('expects a planned cost’s spending like last year once there are 12 months of history', () => {
     const holidays = cost({ spendByMonth: { '2025-10': 3_100, '2025-11': 0, '2025-12': 54_000, '2026-01': 2_000 } });
     const r = projectMonths(input({ historyStart: '2025-06', plannedCosts: [holidays] }), 3);
-    expect(r.months.map((m) => m.byGroup.fun)).toEqual([1_300, 0, 54_000, 2_000]); // October × 13/31
+    // The rest of October: last October less what's gone out so far this month (nothing yet).
+    expect(r.months.map((m) => m.byGroup.fun)).toEqual([3_100, 0, 54_000, 2_000]);
     expect(r.months[2]!.bigItems).toEqual([{ name: 'Holidays & gifts', amountCents: 54_000, note: 'like last Dec' }]);
     expect(r.months[3]!.bigItems).toEqual([]);
   });
@@ -168,6 +171,36 @@ describe('projectMonths', () => {
     const balance = r.plannedCosts[0]!;
     expect(balance.lowestMonth).toBe('2027-03');
     expect(balance.lowestCents).toBe(31_000 + 5 * 5_000 - 70_000);
+  });
+
+  it('takes this month’s spending so far off last year’s same month', () => {
+    const holidays = cost({ spendByMonth: { '2025-10': 3_100, '2026-10': 2_000 } });
+    expect(projectMonths(input({ historyStart: '2025-06', plannedCosts: [holidays] }), 3).months[0]!.byGroup.fun).toBe(1_100);
+    const spent = cost({ spendByMonth: { '2025-10': 3_100, '2026-10': 4_000 } });
+    expect(projectMonths(input({ historyStart: '2025-06', plannedCosts: [spent] }), 3).months[0]!.byGroup.fun).toBe(0);
+  });
+
+  it('with a set-aside, takes a cost’s own bills off as a monthly rate, so the bill isn’t counted twice', () => {
+    // $51 a month set aside for a $612 yearly bill; under a year of history.
+    const car = cost({
+      id: 7,
+      name: 'Car',
+      group: 'everyday',
+      balanceNowCents: 30_600,
+      amounts: [{ month: '2026-01', monthlyCents: 5_100 }],
+      ownBillsMonthlyCents: 5_100,
+    });
+    const r = projectMonths(input({ historyStart: '2026-03', plannedCosts: [car], bills: [bill('Car insurance', '2027-05-04', 61_200, 'yearly', 7)] }), 12);
+    const out = r.months.reduce((sum, m) => sum + m.byGroup.bills + m.byGroup.everyday, 0);
+    expect(out).toBe(61_200);
+    // 30,600 + 7 × 5,100 − 61,200 = 5,100 in May: never short.
+    expect(r.plannedCosts[0]).toMatchObject({ lowestCents: 5_100, lowestMonth: '2027-05', fixMonthlyCents: 0 });
+  });
+
+  it('adds other bills each month, in Bills', () => {
+    const r = projectMonths(input({ otherBillsCents: 9_300 }), 3);
+    expect(r.months.map((m) => m.byGroup.bills)).toEqual([3_900, 9_300, 9_300, 9_300]); // October × 13/31
+    expect(r.months.map((m) => m.otherBillsCents)).toEqual([3_900, 9_300, 9_300, 9_300]);
   });
 
   it('counts each month’s saving lines', () => {
