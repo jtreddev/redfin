@@ -2002,3 +2002,14 @@ code {
 .list + .card {
   border-top-color: transparent;
 }
+
+@media (max-width: 380px) {
+  /* Five week amounts across a small phone: a little less gap, a little tighter figures. */
+  .weeks {
+    gap: 4px;
+  }
+
+  .week-pill .money {
+    letter-spacing: -0.02em;
+  }
+}
