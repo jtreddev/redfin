@@ -45,11 +45,14 @@ export interface Category {
   id: number;
   sectionId: number;
   sectionName: string;
+  /** The category this is a sub-category of (one level, same group). */
+  parentId: number | null;
   name: string;
   kind: CategoryKind;
   kidScoped: boolean;
   funMemberId: number | null;
   archived: boolean;
+  sort: number;
 }
 
 export interface Account {
@@ -131,10 +134,16 @@ export interface BudgetRow {
   timing: Timing;
   dueDay: number | null;
   notes: string | null;
+  /** Set on a sub-category; its money is also in the parent's actualCents. */
+  parentId: number | null;
+  /** Own plus sub-categories'. */
   actualCents: number;
   byWeek: number[];
-  /** planned_costs: budgetCents is the typed line plus plannedCostsCents. */
-  computed: 'paychecks' | 'fun_money' | 'planned_costs' | null;
+  /** Without sub-categories. */
+  ownActualCents: number;
+  ownByWeek: number[];
+  /** planned_costs: budgetCents is the typed line plus plannedCostsCents. children: the sum of sub-categories' lines. */
+  computed: 'paychecks' | 'fun_money' | 'planned_costs' | 'children' | null;
   plannedCostsCents: number;
 }
 

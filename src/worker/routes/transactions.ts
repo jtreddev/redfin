@@ -132,8 +132,10 @@ transactions.get('/transactions', async (c) => {
   }
   if (q.categoryId) {
     const id = reqInt(q.categoryId, 'categoryId');
-    where.push('(t.category_id = ? OR EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id AND s.category_id = ?))');
-    params.push(id, id);
+    // A parent includes its sub-categories.
+    const ids = 'SELECT id FROM categories WHERE id = ? OR parent_id = ?';
+    where.push(`(t.category_id IN (${ids}) OR EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id AND s.category_id IN (${ids})))`);
+    params.push(id, id, id, id);
   }
   if (q.group) {
     // The Trends groups, counted the way Trends counts them: your private charges are your fun money.

@@ -13,6 +13,7 @@ import {
   suggestionMonths,
   suggestMonthly,
   withStarter,
+  withSubcategories,
   type SpendMap,
   type YearlyBill,
 } from '../../shared/plannedCosts';
@@ -98,7 +99,7 @@ export async function seedDefaults(
       const ids = d.categoryIds;
       if (!ids.length) return;
       const suggested = withStarter(
-        months.length ? suggestMonthly(spendIn(spend, ids, months[0]!, months[months.length - 1]!), months.length) : null,
+        months.length ? suggestMonthly(spendIn(spend, withSubcategories(ids, categories), months[0]!, months[months.length - 1]!), months.length) : null,
         d.fallbackMonthlyCents,
       );
       statements.push(
@@ -161,12 +162,17 @@ plannedCosts.get('/planned-costs', async (c) => {
     await addOlderSpend(db, spend, monthStart(earliest), monthEnd(addMonths(windowStart, -1)));
   }
 
+  // A linked parent covers its sub-categories, except one linked to a cost of its own (nested after
+  // linking, or moved by a merge), so no charge comes out of two costs.
+  const linkedAnywhere = new Set(costs.flatMap((cost) => cost.categoryIds));
+  const covered = (ids: readonly number[]) => withSubcategories(ids, categories, linkedAnywhere);
   const costByCategory = new Map<number, number>();
-  for (const cost of costs) for (const id of cost.categoryIds) costByCategory.set(id, cost.id);
+  for (const cost of costs) for (const id of covered(cost.categoryIds)) costByCategory.set(id, cost.id);
 
   const defaults = defaultsHere(categories);
   const out = costs.map((cost) => {
-    const spent12Cents = spendIn(spend, cost.categoryIds, windowStart, lastFullMonth);
+    const coveredIds = covered(cost.categoryIds);
+    const spent12Cents = spendIn(spend, coveredIds, windowStart, lastFullMonth);
     return {
       id: cost.id,
       name: cost.name,
@@ -174,10 +180,10 @@ plannedCosts.get('/planned-costs', async (c) => {
       startBalanceCents: cost.startBalanceCents,
       categoryIds: cost.categoryIds,
       monthlyCents: cost.startMonth <= month ? monthlyFor(cost.amounts, month) : 0,
-      balanceCents: costBalance(cost, spend, month),
+      balanceCents: costBalance({ ...cost, categoryIds: coveredIds }, spend, month),
       spent12Cents,
       suggestedMonthlyCents: withStarter(suggestMonthly(spent12Cents, months.length), starterFor(cost.categoryIds, defaults)),
-      comingUp: comingUp({ categoryIds: cost.categoryIds, bills, spend, today, historyStart }),
+      comingUp: comingUp({ categoryIds: coveredIds, bills, spend, today, historyStart }),
     };
   });
 
@@ -191,8 +197,9 @@ plannedCosts.get('/planned-costs', async (c) => {
       id: cat.id,
       name: cat.name,
       section: cat.sectionName,
+      parentId: cat.parentId,
       plannedCostId: costByCategory.get(cat.id) ?? null,
-      spent12Cents: spendIn(spend, [cat.id], windowStart, lastFullMonth),
+      spent12Cents: spendIn(spend, covered([cat.id]), windowStart, lastFullMonth),
     })),
   });
 });
@@ -217,6 +224,10 @@ async function validCategoryIds(db: D1Database, value: unknown, costId: number |
     // Already in this cost: keep it, even if it has since been archived.
     if (link && link.costId === costId) continue;
     if (link) throw new HttpError(409, `${category.name} is already part of ${link.costName}.`);
+    // A parent and its sub-categories pay from one cost (a parent covers its children).
+    const family = categories.filter((cat) => cat.id === category.parentId || cat.parentId === id);
+    const elsewhere = links.find((l) => l.costId !== costId && family.some((cat) => cat.id === l.categoryId));
+    if (elsewhere) throw new HttpError(409, `${category.name} goes with ${elsewhere.costName}, which has its parent or sub-categories.`);
     if (category.funMemberId != null) throw badRequest('Fun Money can’t be part of a planned cost.');
     if (!isEligible(category)) throw badRequest(`${category.name} can’t be part of a planned cost.`);
   }

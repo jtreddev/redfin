@@ -660,7 +660,8 @@ async function loadCheckin(db: D1Database, month: MonthKey): Promise<CheckinRow>
 async function checkinData(db: D1Database, month: MonthKey, today: ISODate, viewerId: number | null) {
   const data = await loadMonth(db, month);
   const lines: CheckinLine[] = data.rows
-    .filter((r) => r.kind !== 'transfer' && (r.budgetCents > 0 || r.actualCents > 0))
+    // Top-level rows only: a parent's row already holds its sub-categories' money.
+    .filter((r) => r.parentId === null && r.kind !== 'transfer' && (r.budgetCents > 0 || r.actualCents > 0))
     .map((r) => ({
       categoryId: r.categoryId,
       name: r.name,

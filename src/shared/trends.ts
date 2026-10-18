@@ -16,7 +16,8 @@ export const GROUP_ORDER: readonly { key: GroupKey; section: string; name: strin
 
 export interface TrendsInput {
   entries: readonly LedgerEntry[];
-  categories: readonly { id: number; name: string; section: string; funMemberId: number | null }[];
+  /** In display order; a sub-category (parentId set) comes after its parent. */
+  categories: readonly { id: number; name: string; section: string; funMemberId: number | null; parentId?: number | null }[];
   /** Oldest → newest; the last is the current month. */
   months: readonly MonthKey[];
   today: ISODate;
@@ -31,8 +32,11 @@ export interface Trends {
   incomeByMonth: Cents[];
   /** Money out with no category ("Needs a look"). */
   uncategorizedByMonth: Cents[];
-  /** Group categories with any activity in the range. */
-  categories: { id: number; name: string; group: GroupKey; byMonth: Cents[] }[];
+  /**
+   * Group categories with any activity in the range. A parent's byMonth includes its sub-categories'
+   * (parentId set), which are listed after it.
+   */
+  categories: { id: number; name: string; group: GroupKey; parentId: number | null; byMonth: Cents[] }[];
   /**
    * Average of the last 3 full months, counting only months on or after `historyStart` (fewer when
    * history is shorter; 0 when there is no full month yet).
@@ -114,9 +118,12 @@ export function buildTrends({ entries, categories, months, today }: TrendsInput)
     const group = groupOfSection.get(category.section);
     if (!group) continue; // Transfers, or an old section left behind by the category migration.
     groupTotals.get(group)![index]! += flow;
-    let row = byCategory.get(categoryId);
-    if (!row) byCategory.set(categoryId, (row = zeros()));
-    row[index]! += flow;
+    // A sub-category's money also counts toward its parent's row.
+    for (const id of category.parentId != null ? [categoryId, category.parentId] : [categoryId]) {
+      let row = byCategory.get(id);
+      if (!row) byCategory.set(id, (row = zeros()));
+      row[index]! += flow;
+    }
   }
 
   const current = monthIndex.get(partialMonth) ?? months.length;
@@ -125,7 +132,7 @@ export function buildTrends({ entries, categories, months, today }: TrendsInput)
   const groupRank = new Map(GROUP_ORDER.map((g, i) => [g.key, i]));
   const rows = categories
     .filter((c) => byCategory.has(c.id))
-    .map((c) => ({ id: c.id, name: c.name, group: groupOfSection.get(c.section)!, byMonth: byCategory.get(c.id)! }))
+    .map((c) => ({ id: c.id, name: c.name, group: groupOfSection.get(c.section)!, parentId: c.parentId ?? null, byMonth: byCategory.get(c.id)! }))
     .sort((a, b) => groupRank.get(a.group)! - groupRank.get(b.group)!); // stable: keeps the categories' own order
 
   return {
@@ -186,7 +193,8 @@ export function whatChanged(
   const start = usualStart(trends, index);
   if (index < 0 || start >= index) return { basis, up: [], down: [] };
 
-  const changes = trends.categories.filter((c) => CHANGE_GROUPS.has(c.group)).map((c): Change => {
+  // Top-level categories only: a parent already includes its sub-categories.
+  const changes = trends.categories.filter((c) => c.parentId === null && CHANGE_GROUPS.has(c.group)).map((c): Change => {
     const soFar = c.byMonth[index]!;
     const usual = average(c.byMonth, start, index);
     const projected = basis === 'this-month' ? Math.round((soFar * monthLength(month)) / day) : soFar;

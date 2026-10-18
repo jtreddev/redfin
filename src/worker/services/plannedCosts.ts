@@ -69,7 +69,8 @@ export async function addOlderSpend(db: D1Database, spend: SpendMap, from: strin
        LEFT JOIN splits s ON t.is_split = 1 AND s.transaction_id = t.id
        JOIN categories c ON c.id = CASE WHEN s.id IS NULL THEN t.category_id ELSE s.category_id END
       WHERE t.deleted_at IS NULL AND t.is_ignored = 0 AND t.date BETWEEN ? AND ? AND c.kind != 'transfer'
-        AND c.id IN (SELECT category_id FROM planned_cost_categories)
+        AND (c.id IN (SELECT category_id FROM planned_cost_categories)
+             OR c.parent_id IN (SELECT category_id FROM planned_cost_categories))
       GROUP BY c.id, month`,
     from,
     to,
