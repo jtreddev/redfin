@@ -2,7 +2,7 @@ import type { ISODate } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import { matchPaycheck } from '../../shared/paychecks';
 import { autoLayers, billFor, ruleResult, type AutoSubject } from '../../shared/autoCategory';
-import { findPreparedRule, matchTextOf, normalizeMerchant, preparedMatches, type CategorySource, type Rule } from '../../shared/rules';
+import { findPreparedRule, ruleSubjectName, matchTextOf, normalizeMerchant, preparedMatches, type CategorySource, type Rule } from '../../shared/rules';
 import { looksLikeTransfer } from '../../shared/transfers';
 import { allByIds, batchAll, nowIso, stmt } from '../lib/db';
 import { loadIngestContext, type IngestContext } from './context';
@@ -95,7 +95,7 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
     });
   }
 
-  const subjectName = txn.memo ? `${txn.name} ${txn.memo}` : txn.name;
+  const subjectName = ruleSubjectName(txn.name, txn.memo);
   const accountOwner = ctx.privateAccountOwner.get(txn.accountId) ?? null;
   const subject: AutoSubject = {
     name: subjectName,

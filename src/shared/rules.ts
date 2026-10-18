@@ -49,6 +49,11 @@ export interface RulePatch {
   ruleId?: number | null;
 }
 
+/** The text rules (and the classifier) match against: the bank description plus the memo, when there is one. */
+export function ruleSubjectName(name: string, memo?: string | null): string {
+  return memo ? `${name} ${memo}` : name;
+}
+
 export function normalizeText(text: string | null | undefined): string {
   return (text ?? '').toUpperCase().replace(/\s+/g, ' ').trim();
 }

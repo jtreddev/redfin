@@ -169,6 +169,27 @@ describe('rule preview and apply to past charges', () => {
     expect(after.wouldChange).toBe(0);
   });
 
+  it('matches text that appears only in the memo, in preview and on save', async () => {
+    await seed();
+    const cat = aCategory();
+    db.exec(`INSERT INTO transactions (account_id, date, amount_cents, name, memo, source) VALUES (1, '2026-10-12', -900, 'CHECK 1042', 'Piano lessons', 'manual')`);
+    const preview = await json(await api(env, 'POST', '/rules/preview', { matchText: 'piano', categoryId: cat }, YOU));
+    expect(preview).toMatchObject({ count: 1, wouldChange: 1 });
+    const saved = await json(await api(env, 'POST', '/rules', { matchText: 'piano', categoryId: cat }, YOU));
+    expect(saved.updated).toBe(preview.wouldChange);
+    expect(db.rows(`SELECT category_id AS c FROM transactions WHERE memo = 'Piano lessons'`)).toEqual([{ c: cat }]);
+  });
+
+  it('previews an edit that points an existing rule at your fun money the way PATCH does', async () => {
+    const { you } = await seed();
+    const yourFun = db.rows<{ id: number }>('SELECT id FROM categories WHERE fun_member_id = ?', you)[0]!.id;
+    const { id } = await json(await api(env, 'POST', '/rules', { matchText: 'SHELL', ignore: true, applyToExisting: false }, YOU));
+    const preview = await json(await api(env, 'POST', '/rules/preview', { ruleId: id, categoryId: yourFun }, YOU));
+    expect(preview.wouldChange).toBe(1);
+    await api(env, 'PATCH', `/rules/${id}`, { categoryId: yourFun }, YOU);
+    expect(db.rows(`SELECT private_member_id AS p FROM transactions WHERE name = 'SHELL'`)).toEqual([{ p: you }]);
+  });
+
   it('PATCH previews with ruleId and reports the number it saves', async () => {
     await seed();
     const cat = aCategory();

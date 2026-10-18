@@ -5,7 +5,7 @@ import { all, batchAll, first, nowIso, run, stmt, Updates } from '../lib/db';
 import { badRequest, HttpError, notFound, oneOf, optBool, optInt, paramId, readBody, reqStr } from '../lib/http';
 import { loadIngestContext, RULE_SELECT, toRule, withRules, type RuleRow } from '../services/context';
 import { classificationChanges, reclassify, STORED_SELECT, type StoredTxn } from '../services/ingest';
-import { normalizeText, ruleMatches, type Rule } from '../../shared/rules';
+import { normalizeText, ruleMatches, ruleSubjectName, type Rule } from '../../shared/rules';
 
 export const rules = new Hono<AppEnv>();
 
@@ -66,15 +66,16 @@ async function candidatesFor(db: D1Database, texts: readonly string[]): Promise<
       db,
       `${STORED_SELECT}
         WHERE t.deleted_at IS NULL AND (t.category_source IS NULL OR t.category_source != 'user')
-          AND (UPPER(t.name) LIKE ? ESCAPE '\\' OR UPPER(COALESCE(t.merchant_name, '')) LIKE ? ESCAPE '\\')
+          AND (UPPER(t.name) LIKE ? ESCAPE '\\' OR UPPER(COALESCE(t.merchant_name, '')) LIKE ? ESCAPE '\\' OR UPPER(COALESCE(t.memo, '')) LIKE ? ESCAPE '\\')
         ORDER BY t.date DESC LIMIT 2000`,
+      like,
       like,
       like,
     );
     // Same text test as a saved rule (see ruleMatches): whitespace-normalized, in the name or merchant.
     const needle = normalizeText(text);
     for (const row of rows) {
-      if (normalizeText(row.name).includes(needle) || normalizeText(row.merchantName).includes(needle)) byId.set(row.id, row);
+      if (normalizeText(ruleSubjectName(row.name, row.memo)).includes(needle) || normalizeText(row.merchantName).includes(needle)) byId.set(row.id, row);
     }
   }
   return [...byId.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id));
@@ -248,7 +249,7 @@ rules.post('/rules/preview', async (c) => {
 
   const visible = (await candidatesFor(db, base ? [base.matchText, matchText] : [matchText])).filter((row) => canView(row, viewerId));
   const matches = visible.filter((row) =>
-    ruleMatches(draft, { name: row.name, merchantName: row.merchantName, accountId: row.accountId, amountCents: row.amountCents }),
+    ruleMatches(draft, { name: ruleSubjectName(row.name, row.memo), merchantName: row.merchantName, accountId: row.accountId, amountCents: row.amountCents }),
   );
   const changes = classificationChanges(hypothetical, visible).map(({ row }) => row);
   const sample = changes.slice(0, 5).map((row) => ({ id: row.id, date: row.date, name: row.name, amountCents: row.amountCents }));
