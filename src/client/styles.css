@@ -438,6 +438,7 @@ a {
  */
 .card {
   display: grid;
+  align-content: start;
   gap: 10px;
   width: 100%;
   min-width: 0;
@@ -644,6 +645,7 @@ a {
   font-size: var(--t-sm);
   font-weight: 600;
   line-height: 1.2;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -1546,15 +1548,8 @@ table.compare thead th {
 }
 
 .chart-hatch-line {
-  stroke: var(--surface);
-  stroke-width: 2.5;
-}
-
-.chart-partial-outline {
-  fill: none;
-  stroke: var(--ink);
-  stroke-width: 1;
-  stroke-dasharray: 3 2;
+  stroke: var(--paper);
+  stroke-width: 2;
 }
 
 .chart-grid {
@@ -1622,10 +1617,6 @@ table.compare thead th {
   height: 10px;
   border-radius: 3px;
   flex: none;
-}
-
-.chart-swatch.partial {
-  background-image: repeating-linear-gradient(135deg, transparent 0 3px, var(--surface) 3px 5px) !important;
 }
 
 .chart-refkey {
@@ -1862,4 +1853,41 @@ table.compare thead th {
   display: grid;
   gap: 8px;
   padding-bottom: 8px;
+}
+
+.table-toggle[aria-pressed='true'] {
+  background: var(--accent-soft);
+}
+
+.table-toggle .icon {
+  width: 18px;
+  height: 18px;
+}
+
+.private-mark {
+  color: var(--slate);
+  margin-right: 6px;
+}
+
+.private-mark .icon {
+  width: 16px;
+  height: 16px;
+  vertical-align: -2px;
+}
+
+/* Inside a sheet, a card is a small boxed group (bill details, a split). */
+.sheet-body .card {
+  padding: 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+.sheet-body > .btn-ghost {
+  justify-self: start;
+  margin-left: -12px;
+}
+
+/* Room under the last row for the add button. */
+.stack:has(> .fab) {
+  padding-bottom: 72px;
 }

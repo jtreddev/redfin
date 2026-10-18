@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { GROUP_ORDER } from '../../shared/trends';
 import { api, errorMessage, post } from '../api';
 import { monthLabel, weekdayDate } from '../format';
+import { Icon } from '../icons';
 import { go } from '../router';
 import { categoryName, useApp } from '../state';
 import type { Transaction } from '../types';
@@ -131,17 +132,33 @@ export function Activity({ params }: { params: URLSearchParams }) {
   return (
     <div className="stack">
       <PageHeader title="Activity" />
-      <input type="search" placeholder="Search descriptions and notes" value={search} onChange={(e) => setSearch(e.target.value)} />
-      <div className="chips">
+      <input
+        type="search"
+        aria-label="Search transactions"
+        placeholder="Search descriptions and notes"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <div className="chips" role="group" aria-label="Show">
         {FILTERS.map((f) => (
-          <button key={f.value} type="button" className={`filter-chip ${filter === f.value ? 'active' : ''}`} onClick={() => setParam({ filter: f.value })}>
+          <button
+            key={f.value}
+            type="button"
+            aria-pressed={filter === f.value}
+            className={`filter-chip ${filter === f.value ? 'active' : ''}`}
+            onClick={() => setParam({ filter: f.value })}
+          >
             {f.label}
           </button>
         ))}
       </div>
       {activeContext.length > 0 && (
         <div className="banner">
-          <span>{activeContext.join(' · ')}</span>
+          <span>
+            Showing {activeContext.join(', ')}
+            {/* Fun & Wants includes each person's fun money; only the viewer's own shows up here. */}
+            {group === 'fun' && <span className="block muted">Your partner’s fun money isn’t listed.</span>}
+          </span>
           <Button small variant="ghost" onClick={() => go('activity', { filter })}>
             Clear
           </Button>
@@ -174,7 +191,7 @@ export function Activity({ params }: { params: URLSearchParams }) {
       )}
 
       <button type="button" className="fab" aria-label="Add a transaction" onClick={() => setAdding(true)}>
-        +
+        <Icon name="plus" />
       </button>
 
       {open && (
@@ -206,7 +223,12 @@ function TransactionRow({ t, onClick }: { t: Transaction; onClick: () => void })
     <button type="button" className="row row-button" onClick={onClick}>
       <div className="row-main">
         <div className="row-title">
-          {t.isPrivate && '🔒 '}
+          {t.isPrivate && (
+            <span className="private-mark" title="My fun money: only you see this">
+              <Icon name="lock" />
+              <span className="sr-only">Private: </span>
+            </span>
+          )}
           {t.merchantName ?? t.name}
         </div>
         <div className="row-sub">

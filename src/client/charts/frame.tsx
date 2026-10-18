@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { MonthKey } from '../../shared/dates';
 import { monthShortLabel } from '../format';
 import { dollarsShort, monthTick } from './scale';
@@ -90,6 +90,8 @@ export function useActiveMonth(count: number, initial: number) {
       const to =
         e.key === 'ArrowLeft' ? from - 1 : e.key === 'ArrowRight' ? from + 1 : e.key === 'Home' ? 0 : e.key === 'End' ? count - 1 : null;
       if (e.key === 'Escape') {
+        // From a tooltip row: hand focus back to the chart before the row disappears, so it isn't lost.
+        if (wrapper.current && document.activeElement !== wrapper.current) wrapper.current.focus();
         clear();
         return;
       }
@@ -159,6 +161,22 @@ export function Axes({
       ))}
     </g>
   );
+}
+
+/**
+ * Diagonal stripes in the page color, laid over the current month's bars: "so far" is shown by texture,
+ * not by fading the color (a faded yellow or aqua bar would fall under 3:1 against the page).
+ */
+export function useHatch() {
+  const id = `hatch-${useId().replace(/[^a-zA-Z0-9]/g, '')}`;
+  const def = (
+    <defs>
+      <pattern id={id} patternUnits="userSpaceOnUse" width="6" height="6" patternTransform="rotate(45)">
+        <line className="chart-hatch-line" x1="0" y1="0" x2="0" y2="6" />
+      </pattern>
+    </defs>
+  );
+  return { fill: `url(#${id})`, def };
 }
 
 /** "Sep 2026", or "Oct 2026 so far" for the current month. */

@@ -1,7 +1,7 @@
 import type { MonthKey } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import { money } from '../format';
-import { Axes, bands, LAYOUT, monthTitle, svgHeight, useActiveMonth, useWidth } from './frame';
+import { Axes, bands, LAYOUT, monthTitle, svgHeight, useActiveMonth, useHatch, useWidth } from './frame';
 import { barPath, dollarsShort, labelsFit, niceMax, stackLayout, ticks } from './scale';
 import { Tooltip } from './Tooltip';
 
@@ -15,7 +15,7 @@ export interface Series {
 
 /**
  * One stacked bar per month, segments in the series' order from the baseline up. The current month
- * (`partialIndex`) is drawn lighter and labelled "so far". Negative values (refund months) draw as 0; the
+ * (`partialIndex`) is hatched and labelled "so far". Negative values (refund months) draw as 0; the
  * tooltip and legend show the true amounts.
  */
 export function StackedBars({
@@ -37,6 +37,7 @@ export function StackedBars({
   const latest = partialIndex === count - 1 ? count - 2 : count - 1;
   const focus = useActiveMonth(count, Math.max(0, latest));
   const { active } = focus;
+  const hatch = useHatch();
 
   const totals = months.map((_, i) => series.reduce((sum, s) => sum + (s.values[i] ?? 0), 0));
   const tallest = Math.max(0, ...months.map((_, i) => series.reduce((sum, s) => sum + Math.max(0, s.values[i] ?? 0), 0)));
@@ -84,7 +85,7 @@ export function StackedBars({
       : LAYOUT.plot;
 
   return (
-    <div className="chart" ref={ref}>
+    <div className={`chart ${onSelect ? 'chart-selectable' : ''}`} ref={ref}>
       <div className="chart-frame" role="group" aria-label={`${label}. Arrow keys move between months.`} {...focus.wrapperProps}>
         {width > 0 && (
           <svg
@@ -108,6 +109,7 @@ export function StackedBars({
               select(i, (e.target as Element).getAttribute('data-series'));
             }}
           >
+            {hatch.def}
             <Axes width={width} months={months} tickValues={tickValues} max={max} partialIndex={partialIndex} active={active} />
             {months.map((month, i) => {
               const segments = stackLayout(
@@ -117,16 +119,16 @@ export function StackedBars({
               );
               const x = center(i) - barWidth / 2;
               return (
-                <g key={month} className={i === partialIndex ? 'chart-partial' : undefined}>
-                  {segments.map((seg, k) => (
-                    <path
-                      key={series[k]!.key}
-                      data-series={series[k]!.key}
-                      className="chart-mark"
-                      d={barPath(x, LAYOUT.top + seg.y, barWidth, seg.height, seg.top)}
-                      style={{ fill: `var(${series[k]!.colorVar})` }}
-                    />
-                  ))}
+                <g key={month}>
+                  {segments.map((seg, k) => {
+                    const d = barPath(x, LAYOUT.top + seg.y, barWidth, seg.height, seg.top);
+                    return (
+                      <g key={series[k]!.key}>
+                        <path data-series={series[k]!.key} className="chart-mark" d={d} style={{ fill: `var(${series[k]!.colorVar})` }} />
+                        {i === partialIndex && <path data-series={series[k]!.key} className="chart-mark chart-hatch" d={d} fill={hatch.fill} />}
+                      </g>
+                    );
+                  })}
                 </g>
               );
             })}

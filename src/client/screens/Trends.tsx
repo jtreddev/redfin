@@ -5,6 +5,7 @@ import { api } from '../api';
 import { Bars } from '../charts/Bars';
 import { StackedBars, type Series } from '../charts/StackedBars';
 import { money, monthLabel, monthShortLabel } from '../format';
+import { Icon } from '../icons';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import type { TrendsResponse } from '../types';
@@ -42,6 +43,7 @@ export function Trends() {
   return (
     <div className="stack trends">
       <PageHeader title="Trends" subtitle="What the month costs, over time" />
+      <h2 className="sr-only">This month so far</h2>
       {fullMonths < 2 && (
         <Empty title="Trends fill in as history builds up">
           {t.historyStart === null ? 'Nothing to show yet: connect a bank or add transactions.' : 'Here’s what there is so far.'}
@@ -53,7 +55,7 @@ export function Trends() {
           const group = t.groups.find((g) => g.key === key)!;
           const usual = t.usual[key];
           return (
-            <div key={key} className="card stat-tile">
+            <div key={key} className="stat-tile">
               <div className="stat-label">
                 <span className="chart-swatch" style={{ background: `var(${GROUP_COLOR[key]})` }} aria-hidden="true" />
                 {group.name}
@@ -83,12 +85,13 @@ interface ChartCardProps {
   partialIndex: number;
 }
 
-/** "Chart" / "Table" switch for a chart card (the table is the accessible twin). */
+/** A "Table" toggle for a chart card (the table is the accessible twin); pressed shows the table. */
 function useTableToggle(title: string) {
   const [table, setTable] = useState(false);
   const toggle = (
-    <Button small variant="ghost" onClick={() => setTable((v) => !v)}>
-      <span aria-hidden="true">{table ? '▥' : '☷'}</span> {table ? 'Chart' : 'Table'}
+    <Button small variant="ghost" pressed={table} className="table-toggle" onClick={() => setTable((v) => !v)}>
+      <Icon name="table" />
+      Table
       <span className="sr-only"> view of {title}</span>
     </Button>
   );

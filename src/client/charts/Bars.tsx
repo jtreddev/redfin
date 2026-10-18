@@ -1,13 +1,13 @@
 import type { MonthKey } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import { money } from '../format';
-import { Axes, bands, LAYOUT, monthTitle, svgHeight, useActiveMonth, useWidth } from './frame';
+import { Axes, bands, LAYOUT, monthTitle, svgHeight, useActiveMonth, useHatch, useWidth } from './frame';
 import { barPath, dollarsShort, labelsFit, niceMax, ticks } from './scale';
 import { Tooltip } from './Tooltip';
 
 /**
  * One series of monthly bars with an optional thin reference line (e.g. the usual amount). The current
- * month (`partialIndex`) is drawn lighter. Negative months draw as 0; the tooltip shows the true amount.
+ * month (`partialIndex`) is hatched. Negative months draw as 0; the tooltip shows the true amount.
  */
 export function Bars({
   months,
@@ -29,6 +29,7 @@ export function Bars({
   const latest = partialIndex === count - 1 ? count - 2 : count - 1;
   const focus = useActiveMonth(count, Math.max(0, latest));
   const { active } = focus;
+  const hatch = useHatch();
 
   const tallest = Math.max(0, reference ?? 0, ...values);
   const tickValues = ticks(tallest);
@@ -59,18 +60,22 @@ export function Bars({
               if (e.pointerType !== 'mouse') return;
               focus.hover(bands(width, count).indexAt(e.clientX - e.currentTarget.getBoundingClientRect().left));
             }}
-            onPointerUp={(e) => focus.pin(bands(width, count).indexAt(e.clientX - e.currentTarget.getBoundingClientRect().left))}
+            // Touch and pen pin the readout; the mouse already shows it on hover, so its clicks do nothing.
+            onPointerUp={(e) => {
+              if (e.pointerType === 'mouse') return;
+              focus.pin(bands(width, count).indexAt(e.clientX - e.currentTarget.getBoundingClientRect().left));
+            }}
           >
+            {hatch.def}
             <Axes width={width} months={months} tickValues={tickValues} max={max} partialIndex={partialIndex} active={active} />
             {values.map((v, i) => {
               const y = yOf(v);
+              const d = barPath(center(i) - barWidth / 2, y, barWidth, LAYOUT.top + LAYOUT.plot - y, true);
               return (
-                <path
-                  key={months[i]}
-                  className={`chart-mark ${i === partialIndex ? 'chart-partial' : ''}`}
-                  d={barPath(center(i) - barWidth / 2, y, barWidth, LAYOUT.top + LAYOUT.plot - y, true)}
-                  style={{ fill: `var(${colorVar})` }}
-                />
+                <g key={months[i]}>
+                  <path className="chart-mark" d={d} style={{ fill: `var(${colorVar})` }} />
+                  {i === partialIndex && <path className="chart-hatch" d={d} fill={hatch.fill} />}
+                </g>
               );
             })}
             {reference !== undefined && reference > 0 && (
