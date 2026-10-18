@@ -130,6 +130,25 @@ export interface IngestContext extends AutoContext {
   cardPaymentCategoryId: number | null;
 }
 
+/** Per-account-owner prepared rule lists, built lazily. */
+export function makeRulesFor(rules: readonly Rule[]): IngestContext['rulesFor'] {
+  const prepared = prepareRules(rules);
+  const byOwner = new Map<number | null, PreparedRule[]>();
+  return (accountOwner) => {
+    let list = byOwner.get(accountOwner);
+    if (!list) {
+      list = prepared.filter((p) => ruleAppliesToAccount(p.rule, accountOwner));
+      byOwner.set(accountOwner, list);
+    }
+    return list;
+  };
+}
+
+/** The same context with a different rule list (to ask what saving a rule would do). */
+export function withRules(ctx: IngestContext, rules: Rule[]): IngestContext {
+  return { ...ctx, rules, rulesFor: makeRulesFor(rules) };
+}
+
 export async function loadIngestContext(db: D1Database): Promise<IngestContext> {
   const [ruleRows, sources, accounts, members, categories, bills, household] = await Promise.all([
     all<RuleRow>(db, `${RULE_SELECT} ORDER BY r.position, r.id`),
@@ -162,16 +181,7 @@ export async function loadIngestContext(db: D1Database): Promise<IngestContext> 
   const categoryIdOf = (ref: CategoryRef) => findSpecialCategory(live, ...ref);
 
   const rules = ruleRows.map(toRule);
-  const prepared = prepareRules(rules);
-  const byOwner = new Map<number | null, PreparedRule[]>();
-  const rulesFor = (accountOwner: number | null) => {
-    let list = byOwner.get(accountOwner);
-    if (!list) {
-      list = prepared.filter((p) => ruleAppliesToAccount(p.rule, accountOwner));
-      byOwner.set(accountOwner, list);
-    }
-    return list;
-  };
+  const rulesFor = makeRulesFor(rules);
 
   return {
     rules,

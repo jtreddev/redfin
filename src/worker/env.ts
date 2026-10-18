@@ -24,6 +24,8 @@ export interface Viewer {
   memberId: number;
   email: string;
   name: string;
+  hideSetup: boolean;
+  powerTools: boolean;
 }
 
 export interface HouseholdSettings {

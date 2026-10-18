@@ -66,6 +66,18 @@ core.get('/me', async (c) => {
   });
 });
 
+core.patch('/me/prefs', async (c) => {
+  const body = await readBody(c);
+  const hideSetup = optBool(body.hideSetup, 'hideSetup');
+  const powerTools = optBool(body.powerTools, 'powerTools');
+  const updates = new Updates()
+    .set('hide_setup', hideSetup === undefined ? undefined : hideSetup ? 1 : 0)
+    .set('power_tools', powerTools === undefined ? undefined : powerTools ? 1 : 0);
+  if (updates.empty) throw badRequest('Nothing to update');
+  await run(c.env.DB, `UPDATE members SET ${updates.sets.join(', ')}, updated_at = ? WHERE id = ?`, ...updates.params, nowIso(), c.get('viewer').memberId);
+  return c.json({ ok: true });
+});
+
 core.patch('/household', async (c) => {
   const body = await readBody(c);
   const updates = new Updates()
@@ -149,6 +161,25 @@ core.post('/kids', async (c) => {
     optDate(body.birthDate, 'birthDate') ?? null,
   );
   return c.json(row, 201);
+});
+
+core.post('/kids/reorder', async (c) => {
+  const body = await readBody(c);
+  if (!Array.isArray(body.ids) || body.ids.length > 200 || !body.ids.every((id) => Number.isInteger(id))) {
+    throw badRequest('ids must be a list of kid ids');
+  }
+  const db = c.env.DB;
+  const ids = body.ids as number[];
+  const current = (await all<{ id: number }>(db, 'SELECT id FROM kids ORDER BY sort, id')).map((k) => k.id);
+  const known = new Set(current);
+  if (new Set(ids).size !== ids.length || !ids.every((id) => known.has(id))) {
+    throw badRequest('ids must be distinct kids that exist');
+  }
+  // Kids not mentioned (e.g. hidden ones) keep their relative order after the listed ones.
+  const order = [...ids, ...current.filter((id) => !ids.includes(id))];
+  const now = nowIso();
+  await batchAll(db, order.map((id, i) => stmt(db, 'UPDATE kids SET sort = ?, updated_at = ? WHERE id = ?', (i + 1) * 10, now, id)));
+  return c.json({ ok: true });
 });
 
 core.patch('/kids/:id', async (c) => {

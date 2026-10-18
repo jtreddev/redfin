@@ -2,7 +2,7 @@ import type { ISODate } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import { matchPaycheck } from '../../shared/paychecks';
 import { autoLayers, billFor, ruleResult, type AutoSubject } from '../../shared/autoCategory';
-import { findPreparedRule, matchTextOf, normalizeMerchant, preparedMatches, type CategorySource, type Rule } from '../../shared/rules';
+import { findPreparedRule, ruleSubjectName, matchTextOf, normalizeMerchant, preparedMatches, type CategorySource, type Rule } from '../../shared/rules';
 import { looksLikeTransfer } from '../../shared/transfers';
 import { allByIds, batchAll, nowIso, stmt } from '../lib/db';
 import { loadIngestContext, type IngestContext } from './context';
@@ -95,7 +95,7 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
     });
   }
 
-  const subjectName = txn.memo ? `${txn.name} ${txn.memo}` : txn.name;
+  const subjectName = ruleSubjectName(txn.name, txn.memo);
   const accountOwner = ctx.privateAccountOwner.get(txn.accountId) ?? null;
   const subject: AutoSubject = {
     name: subjectName,
@@ -311,10 +311,9 @@ export const STORED_SELECT = `SELECT t.id, t.account_id AS accountId, t.date, t.
   t.transfer_pair_id AS transferPairId
   FROM transactions t`;
 
-/** Re-runs classification over stored rows (after rules change). Split rows are left alone. Returns rows updated. */
-export async function reclassify(db: D1Database, ctx: IngestContext, rows: readonly StoredTxn[]): Promise<number> {
-  const now = nowIso();
-  const statements: D1PreparedStatement[] = [];
+/** Rows whose classification would change under `ctx`, with the new classification. Split rows are left alone. */
+export function classificationChanges(ctx: IngestContext, rows: readonly StoredTxn[]): { row: StoredTxn; k: Classification }[] {
+  const changes: { row: StoredTxn; k: Classification }[] = [];
   for (const row of rows) {
     if (row.isSplit === 1) continue;
     const k = classify(ctx, row, {
@@ -337,7 +336,21 @@ export async function reclassify(db: D1Database, ctx: IngestContext, rows: reado
       k.incomeSourceId !== row.incomeSourceId ||
       k.payDate !== row.payDate ||
       k.normalizedMerchant !== row.normalizedMerchant;
-    if (!changed) continue;
+    if (changed) changes.push({ row, k });
+  }
+  return changes;
+}
+
+/**
+ * Re-runs classification over stored rows (after rules change). Everything that changes is saved; split rows are
+ * left alone. Returns rows updated, or with `visibleTo` only those that person may see (not a partner's private ones).
+ */
+export async function reclassify(db: D1Database, ctx: IngestContext, rows: readonly StoredTxn[], visibleTo?: number): Promise<number> {
+  const now = nowIso();
+  const statements: D1PreparedStatement[] = [];
+  let visible = 0;
+  for (const { row, k } of classificationChanges(ctx, rows)) {
+    if (visibleTo === undefined || row.privateMemberId === null || row.privateMemberId === visibleTo) visible++;
     statements.push(
       stmt(
         db,
@@ -360,7 +373,7 @@ export async function reclassify(db: D1Database, ctx: IngestContext, rows: reado
     );
   }
   await batchAll(db, statements);
-  return statements.length;
+  return visible;
 }
 
 /** Re-derives automatic choices for these rows, e.g. after they were paired or unpaired as a transfer. */
