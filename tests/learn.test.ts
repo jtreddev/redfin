@@ -506,6 +506,23 @@ describe('whose card it is', () => {
     expect(row(onTheirCard)).toMatchObject({ category_id: partnerFun, private_member_id: partner, category_reason: 'Matches your bill Music' });
   });
 
+  it('a household bill paid on my personal card is still the household’s bill', async () => {
+    const utilities = cat('Utilities');
+    db.exec(
+      `INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, next_date, status, category_id, private_member_id)
+       VALUES ('CITY POWER', 'Electric', 'monthly', -8000, '2026-10-20', 'confirmed', ?, NULL)`,
+      utilities,
+    );
+    const myCard = personalCard(you);
+    const onMyCard = charge(8000, { merchant: 'City Power', account: myCard });
+    const onShared = charge(8000, { merchant: 'City Power' });
+
+    await api(env, 'POST', '/categorize/all', {});
+
+    expect(row(onMyCard)).toMatchObject({ category_id: utilities, private_member_id: null, category_reason: 'Matches your bill Electric' });
+    expect(row(onShared)).toMatchObject({ category_id: utilities, private_member_id: null, category_reason: 'Matches your bill Electric' });
+  });
+
   it('a shared fix leaves charges my own rule made private, at fix time and on later re-sorts', async () => {
     db.exec(
       `INSERT INTO rules (position, match_field, match_text, private_member_id, owner_member_id) VALUES (1, 'merchant', 'SHELL', ?, ?)`,

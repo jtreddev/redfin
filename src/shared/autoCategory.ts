@@ -62,10 +62,11 @@ const NONE: AutoResult = { categoryId: null, ruleId: null, source: null, reason:
 const billKeyMatches = (billMerchant: string, merchant: string) => billMerchant === merchant || billMerchant.startsWith(`${merchant} $`);
 
 /**
- * Bills stay within the right person's accounts, like learned rules: a shared bill files charges on
- * accounts that are nobody's personal card, a private one only charges on its person's personal card.
+ * A shared bill is the household's, so it files charges on any account, a personal card included (and
+ * beats the personal-card default). A private bill only files charges on its own person's personal card.
  */
-export const billAppliesToAccount = (bill: AutoBill, accountOwner: number | null) => (bill.privateMemberId ?? null) === accountOwner;
+export const billAppliesToAccount = (bill: AutoBill, accountOwner: number | null) =>
+  bill.privateMemberId == null || bill.privateMemberId === accountOwner;
 
 export function categorize(subject: AutoSubject, ctx: AutoContext): AutoResult {
   const rule = findRule(ctx.rules, subject);
