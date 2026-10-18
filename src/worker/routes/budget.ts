@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
-import { addDays, addMonths, monthOf, type ISODate } from '../../shared/dates';
+import { addDays, addMonths, monthOf, monthStart, type ISODate } from '../../shared/dates';
 import { SUGGESTED_BUDGET } from '../../shared/defaults';
+import { findPaychecks, type DepositInput } from '../../shared/paycheckFinder';
 import { payDatesBetween } from '../../shared/paySchedule';
 import { PRIVACY_SQL } from '../../shared/privacy';
 import type { AppEnv } from '../env';
@@ -227,6 +228,35 @@ async function rematchPaychecks(db: D1Database) {
 budget.get('/income-sources', async (c) => {
   const rows = await all<IncomeSourceRow>(c.env.DB, `${INCOME_SOURCE_SELECT} ORDER BY active DESC, id`);
   return c.json(rows.map((r) => sourceToApi(r, c.get('today'))));
+});
+
+/**
+ * Paychecks found in deposit history, for "Find my paychecks". Nothing is saved: you pick
+ * one, check whose it is, and save it like any income source. Deposits already recognized
+ * as a paycheck, transfers between your accounts, and the partner's private rows are left out.
+ */
+budget.get('/income-sources/suggestions', async (c) => {
+  const db = c.env.DB;
+  const today = c.get('today');
+  const deposits = await all<DepositInput>(
+    db,
+    `SELECT t.id, t.date, t.amount_cents AS amountCents, t.name, t.merchant_name AS merchantName,
+            COALESCE(t.normalized_merchant, t.name) AS merchant, t.account_id AS accountId, t.plaid_category AS plaidCategory
+       FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
+      WHERE t.amount_cents > 0 AND t.deleted_at IS NULL AND t.is_ignored = 0 AND t.pending = 0
+        AND t.transfer_pair_id IS NULL AND (c.kind IS NULL OR c.kind != 'transfer')
+        AND COALESCE(t.plaid_category, '') != 'TRANSFER_IN' AND t.income_source_id IS NULL
+        AND t.date >= ? AND ${PRIVACY_SQL}`,
+    monthStart(addMonths(monthOf(today), -9)),
+    c.get('viewer').memberId,
+  );
+  // Recent paychecks are tagged; older ones from a source you already have aren't, so skip those too.
+  const sources = await all<{ matchText: string | null }>(db, 'SELECT match_text AS matchText FROM income_sources WHERE match_text IS NOT NULL');
+  const known = sources.map((s) => (s.matchText ?? '').toUpperCase().trim()).filter(Boolean);
+  const suggestions = findPaychecks(deposits, { today }).filter(
+    (s) => !known.some((k) => s.matchText.includes(k) || k.includes(s.matchText)),
+  );
+  return c.json(suggestions);
 });
 
 function readSource(body: Record<string, unknown>, partial: boolean) {

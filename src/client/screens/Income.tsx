@@ -1,9 +1,10 @@
 import { useState } from 'react';
+import type { PaycheckSuggestion } from '../../shared/paycheckFinder';
 import type { PayFrequency } from '../../shared/paySchedule';
 import { api, del, errorMessage, patch, post } from '../api';
 import { money, shortDate } from '../format';
 import { useApp, useLoad } from '../state';
-import { AmountInput, Button, Empty, ErrorNote, Field, Loading, Sheet, Toggle } from '../ui';
+import { AmountInput, Button, Card, Empty, ErrorNote, Field, Loading, Sheet, Toggle } from '../ui';
 import { SubHeader } from './More';
 
 interface IncomeSource {
@@ -28,10 +29,44 @@ const FREQUENCIES: { value: PayFrequency; label: string }[] = [
   { value: 'monthly', label: 'Once a month' },
 ];
 
+type Draft = Omit<IncomeSource, 'id' | 'nextPayDates'>;
+
+const titleCase = (text: string) => text.toLowerCase().replace(/\b[a-z]/g, (ch) => ch.toUpperCase());
+
 export function Income() {
-  const { me } = useApp();
+  const { me, accounts, toast } = useApp();
   const sources = useLoad(() => api<IncomeSource[]>('/income-sources'), []);
-  const [editing, setEditing] = useState<IncomeSource | 'new' | null>(null);
+  const [editing, setEditing] = useState<IncomeSource | Draft | 'new' | null>(null);
+  const [found, setFound] = useState<PaycheckSuggestion[] | null>(null);
+  const [finding, setFinding] = useState(false);
+
+  async function findPaychecks() {
+    setFinding(true);
+    try {
+      const suggestions = await api<PaycheckSuggestion[]>('/income-sources/suggestions');
+      setFound(suggestions);
+      if (!suggestions.length) toast('No regular paychecks found in the last 9 months of deposits.');
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    } finally {
+      setFinding(false);
+    }
+  }
+
+  function pickSuggestion(s: PaycheckSuggestion) {
+    setEditing({
+      memberId: me.viewer.memberId,
+      name: titleCase(s.merchant),
+      netPayCents: s.netPayCents,
+      frequency: s.frequency,
+      anchorDate: s.anchorDate,
+      semimonthlyDays: s.semimonthlyDays,
+      matchText: s.matchText,
+      accountId: s.accountId,
+      drivesAllowance: true,
+      active: true,
+    });
+  }
 
   return (
     <div className="stack">
@@ -60,15 +95,48 @@ export function Income() {
           ))}
         </div>
       )}
-      <Button variant="primary" onClick={() => setEditing('new')}>
-        Add income
-      </Button>
+      {found && found.length > 0 && (
+        <Card>
+          <h2>Found in your deposits</h2>
+          <p className="muted small">Check the details, choose whose paycheck it is, then save.</p>
+          <div className="list">
+            {found.map((s) => (
+              <div key={s.merchant} className="row">
+                <div className="row-main">
+                  <div className="row-title">
+                    {titleCase(s.merchant)} · {money(s.netPayCents)}
+                  </div>
+                  <div className="row-sub">
+                    {FREQUENCIES.find((f) => f.value === s.frequency)?.label.toLowerCase()}
+                    {s.nextDate && ` · next ${shortDate(s.nextDate)}`} · {s.deposits} deposits since {shortDate(s.firstDate)}
+                    {s.accountId && ` · into ${accounts.find((a) => a.id === s.accountId)?.name ?? 'one account'}`}
+                  </div>
+                </div>
+                <Button small onClick={() => pickSuggestion(s)}>
+                  Add
+                </Button>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+      <div className="cluster">
+        <Button variant="primary" onClick={() => setEditing('new')}>
+          Add income
+        </Button>
+        <Button onClick={() => void findPaychecks()} disabled={finding}>
+          {finding ? 'Looking…' : 'Find my paychecks'}
+        </Button>
+      </div>
       {editing && (
         <SourceSheet
-          source={editing === 'new' ? null : editing}
+          source={editing === 'new' || !('id' in editing) ? null : editing}
+          draft={editing !== 'new' && !('id' in editing) ? editing : undefined}
           onClose={() => setEditing(null)}
           onSaved={async () => {
+            const added = editing !== 'new' && !('id' in editing) ? editing.matchText : null;
             setEditing(null);
+            if (added) setFound((list) => list?.filter((s) => s.matchText !== added) ?? null);
             await sources.reload();
           }}
         />
@@ -77,17 +145,29 @@ export function Income() {
   );
 }
 
-function SourceSheet({ source, onClose, onSaved }: { source: IncomeSource | null; onClose: () => void; onSaved: () => Promise<void> }) {
+function SourceSheet({
+  source,
+  draft,
+  onClose,
+  onSaved,
+}: {
+  source: IncomeSource | null;
+  /** Prefilled from "Find my paychecks". */
+  draft?: Draft;
+  onClose: () => void;
+  onSaved: () => Promise<void>;
+}) {
   const { me, accounts, toast, reload } = useApp();
-  const [name, setName] = useState(source?.name ?? 'Paycheck');
-  const [memberId, setMemberId] = useState<number | null>(source?.memberId ?? me.viewer.memberId);
-  const [netPay, setNetPay] = useState<number | null>(source?.netPayCents ?? null);
-  const [frequency, setFrequency] = useState<PayFrequency>(source?.frequency ?? 'weekly');
-  const [anchorDate, setAnchorDate] = useState(source?.anchorDate ?? me.today);
-  const [days, setDays] = useState<[number, number]>(source?.semimonthlyDays ?? [15, 31]);
-  const [matchText, setMatchText] = useState(source?.matchText ?? '');
-  const [accountId, setAccountId] = useState<number | null>(source?.accountId ?? null);
-  const [drivesAllowance, setDrivesAllowance] = useState(source?.drivesAllowance ?? true);
+  const start = source ?? draft;
+  const [name, setName] = useState(start?.name ?? 'Paycheck');
+  const [memberId, setMemberId] = useState<number | null>(start ? start.memberId : me.viewer.memberId);
+  const [netPay, setNetPay] = useState<number | null>(start?.netPayCents ?? null);
+  const [frequency, setFrequency] = useState<PayFrequency>(start?.frequency ?? 'weekly');
+  const [anchorDate, setAnchorDate] = useState(start?.anchorDate ?? me.today);
+  const [days, setDays] = useState<[number, number]>(start?.semimonthlyDays ?? [15, 31]);
+  const [matchText, setMatchText] = useState(start?.matchText ?? '');
+  const [accountId, setAccountId] = useState<number | null>(start?.accountId ?? null);
+  const [drivesAllowance, setDrivesAllowance] = useState(start?.drivesAllowance ?? true);
   const [active, setActive] = useState(source?.active ?? true);
 
   async function save() {

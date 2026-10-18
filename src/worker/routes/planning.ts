@@ -78,11 +78,25 @@ planning.post('/recurring/detect', async (c) => {
        FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
       WHERE t.deleted_at IS NULL AND t.is_ignored = 0 AND t.transfer_pair_id IS NULL AND t.pending = 0
         AND t.amount_cents < 0 AND (c.kind IS NULL OR c.kind != 'transfer') AND t.date >= ?`,
-    monthStart(addMonths(monthOf(today), -13)),
+    // Plaid sends up to two years; yearly bills need two charges to be found.
+    monthStart(addMonths(monthOf(today), -25)),
   );
   const byId = new Map(rows.map((r) => [r.id, r]));
   const suggestions = detectRecurring(rows, { today });
   const now = nowIso();
+
+  // Suggestions that weren't found again (a cancelled subscription) go; confirmed and dismissed bills stay.
+  const found = new Set(suggestions.map((s) => `${s.merchant}|${s.cadence}`));
+  const suggested = await all<{ id: number; merchant: string; cadence: string }>(
+    db,
+    `SELECT id, merchant, cadence FROM recurring_bills WHERE status = 'suggested'`,
+  );
+  await batchAll(
+    db,
+    suggested
+      .filter((b) => !found.has(`${b.merchant}|${b.cadence}`))
+      .map((b) => stmt(db, 'DELETE FROM recurring_bills WHERE id = ?', b.id)),
+  );
 
   await batchAll(
     db,
