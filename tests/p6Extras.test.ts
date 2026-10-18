@@ -176,6 +176,8 @@ describe('subscriptions', () => {
     expect(isSubscription({ ...base, expectedAmountCents: -5000 })).toBe(true);
     expect(isSubscription({ ...base, expectedAmountCents: -5001 })).toBe(false);
     expect(isSubscription({ ...base, cadence: 'yearly', expectedAmountCents: -4900 })).toBe(true);
+    expect(isSubscription({ ...base, cadence: 'yearly', expectedAmountCents: -13900 })).toBe(true);
+    expect(isSubscription({ ...base, cadence: 'yearly', expectedAmountCents: -60100 })).toBe(false);
     expect(isSubscription({ ...base, cadence: 'weekly' })).toBe(false);
     expect(isSubscription({ ...base, status: 'suggested' })).toBe(false);
     expect(isSubscription({ ...base, categoryName: 'Phone' })).toBe(false);

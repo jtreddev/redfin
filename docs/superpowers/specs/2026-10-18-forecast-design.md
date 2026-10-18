@@ -124,7 +124,7 @@ excluded with `charge > increase_seen_cents`, or when `increase_seen_cents` is n
 ## 4. Subscriptions
 
 Plan › Bills gets a "Subscriptions" filter chip next to the status filters.
-- **What counts.** Confirmed bills with a monthly or yearly cadence, a charge of $50 or less,
+- **What counts.** Confirmed bills with a monthly or yearly cadence, $50 or less a month (a yearly charge counts as a twelfth),
   and a category outside the core household bills. The excluded categories are housing (rent
   or mortgage), utilities, phone, internet, insurance, loans and childcare, matched by
   categorySet names or ids (P6-R6).

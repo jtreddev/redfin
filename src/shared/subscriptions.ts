@@ -11,18 +11,18 @@ export interface SubscriptionCandidate {
   parentCategoryName: string | null;
 }
 
-/** The most one charge can be and still count as a subscription. */
+/** The most a subscription can cost a month (a yearly charge counts as a twelfth). */
 export const SUBSCRIPTION_MAX_CENTS = 5000;
 const CORE = new Set<string>(CORE_BILLS);
 
 /**
- * Subscriptions: confirmed bills charged monthly or yearly, $50 or less a charge, outside the core household
+ * Subscriptions: confirmed bills charged monthly or yearly, $50 or less a month (a yearly charge counts as a twelfth), outside the core household
  * bills (housing, utilities, phone, internet, insurance, loans, childcare). A bill with no category counts.
  */
 export function isSubscription(bill: SubscriptionCandidate): boolean {
   if (bill.status !== 'confirmed') return false;
   if (bill.cadence !== 'monthly' && bill.cadence !== 'yearly') return false;
-  if (Math.abs(bill.expectedAmountCents) > SUBSCRIPTION_MAX_CENTS) return false;
+  if (subscriptionCost(bill).monthCents > SUBSCRIPTION_MAX_CENTS) return false;
   return !CORE.has(bill.categoryName ?? '') && !CORE.has(bill.parentCategoryName ?? '');
 }
 
