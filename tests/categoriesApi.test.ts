@@ -371,6 +371,18 @@ describe('categories API', () => {
       expect((await api(env, 'POST', `/categories/${paychecks}/merge`, { intoId: other })).status).toBe(400);
     });
 
+    it('a sub-category name already used in the target’s group: 409 in preview and merge, nothing changed', async () => {
+      const shopping = category('Fun & Wants', 'Shopping');
+      const groceries = category('Everyday', 'Groceries');
+      const kids = category('Everyday', 'Kids');
+      // Shopping › Gas would land in Everyday next to Everyday › Gas.
+      const gas = (await add({ parentId: shopping, name: 'Gas' })).body.id;
+      expect((await api(env, 'POST', `/categories/${shopping}/merge?preview=1`, { intoId: groceries })).status).toBe(409);
+      expect((await api(env, 'POST', `/categories/${shopping}/merge`, { intoId: kids })).status).toBe(409);
+      expect(row(shopping).archived).toBe(0);
+      expect(row(gas).parent_id).toBe(shopping);
+    });
+
     it('income into spending with charges needs confirm', async () => {
       const refunds = category('Income', 'Refunds');
       const shopping = category('Fun & Wants', 'Shopping');

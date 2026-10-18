@@ -135,6 +135,22 @@ describe('sub-category roll-ups (API)', () => {
     expect(p.lines.map((l) => l.categoryId)).toEqual([habits]);
   });
 
+  it('a sub-category of Paychecks with a line: income totals and the forecast agree after nesting', async () => {
+    db.exec("INSERT INTO income_sources (name, net_pay_cents, frequency, anchor_date) VALUES ('Job', 200000, 'monthly', '2026-10-01')");
+    const paychecks = category('Income', 'Paychecks');
+    const incomeSection = db.rows<{ id: number }>("SELECT id FROM sections WHERE name = 'Income'")[0]!.id;
+    db.exec("INSERT INTO categories (section_id, name, kind, sort) VALUES (?, 'Bonus', 'income', 100)", incomeSection);
+    const bonus = category('Income', 'Bonus');
+    line(bonus, 50000, 'due_day', 20);
+    const before = await budget();
+    const plannedBefore = await planner();
+    db.exec('UPDATE categories SET parent_id = ? WHERE id = ?', paychecks, bonus);
+    const after = await budget();
+    expect(rowOf(after, paychecks)).toMatchObject({ computed: 'paychecks', budgetCents: rowOf(before, paychecks).budgetCents + 50000 });
+    expect(after.totals).toEqual(before.totals);
+    expect((await planner()).forecast.totals.endBalance).toBe(plannedBefore.forecast.totals.endBalance);
+  });
+
   it('check-in lines count a parent with its children, and the children not again', async () => {
     line(habits, 3000);
     nest();
@@ -246,6 +262,24 @@ describe('sub-category roll-ups in planned costs', () => {
     expect(cost.balanceCents).toBe(15 * 5000 - 15700);
     expect(body.categories.find((c) => c.id === tires)).toMatchObject({ parentId: car, plannedCostId: created.body.id, spent12Cents: 12000 });
     expect(body.categories.find((c) => c.id === car)).toMatchObject({ spent12Cents: 15000 });
+  });
+
+  it('a child with its own cost stays out of its parent’s cost (nested after linking)', async () => {
+    const car = category('Everyday', 'Car Upkeep');
+    const gas = category('Everyday', 'Gas');
+    const a = await create('Gas', [gas]);
+    const b = await create('Car', [car]);
+    expect((await api(env, 'PATCH', `/categories/${gas}`, { parentId: car })).status).toBe(200);
+    db.exec("INSERT INTO transactions (account_id, date, amount_cents, name, source, category_id) VALUES (1, '2026-10-02', -4000, 'SHELL', 'manual', ?)", gas);
+    const body = (await (await api(env, 'GET', '/planned-costs')).json()) as {
+      costs: { id: number; balanceCents: number }[];
+      categories: { id: number; plannedCostId: number | null }[];
+    };
+    const balance = (id: number) => body.costs.find((c) => c.id === id)!.balanceCents;
+    // Two months of $50 each (Sep and Oct); the Shell charge comes out of Gas only.
+    expect(balance(a.body.id)).toBe(10000 - 4000);
+    expect(balance(b.body.id)).toBe(10000);
+    expect(body.categories.find((c) => c.id === gas)?.plannedCostId).toBe(a.body.id);
   });
 
   it('refuses splitting a parent and its child across two costs', async () => {

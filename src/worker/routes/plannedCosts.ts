@@ -162,8 +162,10 @@ plannedCosts.get('/planned-costs', async (c) => {
     await addOlderSpend(db, spend, monthStart(earliest), monthEnd(addMonths(windowStart, -1)));
   }
 
-  // A linked parent covers its sub-categories.
-  const covered = (ids: readonly number[]) => withSubcategories(ids, categories);
+  // A linked parent covers its sub-categories, except one linked to a cost of its own (nested after
+  // linking, or moved by a merge), so no charge comes out of two costs.
+  const linkedAnywhere = new Set(costs.flatMap((cost) => cost.categoryIds));
+  const covered = (ids: readonly number[]) => withSubcategories(ids, categories, linkedAnywhere);
   const costByCategory = new Map<number, number>();
   for (const cost of costs) for (const id of covered(cost.categoryIds)) costByCategory.set(id, cost.id);
 

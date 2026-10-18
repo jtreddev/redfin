@@ -126,7 +126,8 @@ export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthD
 
     if (c.sectionName === SPECIAL.paychecks[0] && c.name === SPECIAL.paychecks[1] && sources.length) {
       computed = 'paychecks';
-      budgetCents = paycheckBudget;
+      // Sub-categories' lines (a planned bonus) stay their own forecast lines, so they add here too.
+      budgetCents = paycheckBudget + childLines.reduce((total, l) => total + l.budgetCents, 0);
       timing = 'due_day';
     } else if (c.funMemberId != null && !line) {
       computed = 'fun_money';

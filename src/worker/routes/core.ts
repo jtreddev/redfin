@@ -383,6 +383,17 @@ core.post('/categories/:id/merge', async (c) => {
     throw badRequest(`${from.name} has sub-categories, so it can only merge into a top-level category.`);
   }
   if (isSpecial(from)) throw badRequest(`The app relies on ${from.name}, so it can’t be merged away.`);
+  if (from.children > 0 && from.sectionId !== into.sectionId) {
+    // Its sub-categories move to the target's group, where a name may already be taken.
+    const taken = await first<{ name: string }>(
+      db,
+      `SELECT k.name FROM categories k
+        WHERE k.parent_id = ? AND EXISTS (SELECT 1 FROM categories o WHERE o.section_id = ? AND o.name = k.name)`,
+      id,
+      into.sectionId,
+    );
+    if (taken) throw new HttpError(409, `${into.sectionName} already has a category named ${taken.name}. Rename one first.`);
+  }
 
   if (crossesIncome(from.kind, into.kind)) {
     const charges = await chargesIn(db, id, viewerId);
@@ -399,7 +410,13 @@ core.post('/categories/:id/merge', async (c) => {
   }
 
   const counts = await mergeCounts(db, id, viewerId);
-  if (!preview) await db.batch(mergeStatements(db, id, into));
+  if (!preview) {
+    try {
+      await db.batch(mergeStatements(db, id, into));
+    } catch (error) {
+      throw uniqueName(error);
+    }
+  }
   return c.json({ preview, intoId, counts });
 });
 
