@@ -24,14 +24,14 @@ describe('money', () => {
     expect(formatCents(500, { signed: true })).toBe('+$5.00');
   });
 
-  it('describes balances to the cent, with credit cards as owed or credit', () => {
+  it('describes balances to the cent, with what you owe as negative', () => {
     expect(describeBalance('checking', 123456)).toBe('$1,234.56');
     expect(describeBalance('checking', -2501)).toBe('-$25.01');
     // Plaid and manual entry store card and loan balances as the amount owed.
-    expect(describeBalance('credit', 84217)).toBe('$842.17 owed');
-    expect(describeBalance('loan', 1500000)).toBe('$15,000.00 owed');
-    // A negative card balance means the bank owes you (overpaid or refunded).
-    expect(describeBalance('credit', -4250)).toBe('$42.50 credit');
+    expect(describeBalance('credit', 84217)).toBe('-$842.17');
+    expect(describeBalance('loan', 1500000)).toBe('-$15,000.00');
+    // A negative stored card balance is money on the card (secured card funds, a refund, an overpayment).
+    expect(describeBalance('credit', -4250)).toBe('$42.50');
     expect(describeBalance('credit', 0)).toBe('$0.00');
   });
 });
