@@ -432,6 +432,12 @@ a {
   gap: 12px;
 }
 
+.grid-2 > *,
+.grid-2 input,
+.grid-2 select {
+  min-width: 0;
+}
+
 .center {
   text-align: center;
 }
@@ -1946,4 +1952,17 @@ details {
 
 .card-boxed + .card-boxed {
   margin-top: 4px;
+}
+
+a.btn {
+  text-decoration: none;
+}
+
+code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--tint);
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.875em;
 }
