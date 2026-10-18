@@ -219,6 +219,7 @@ transactions.post('/transactions', async (c) => {
             carry: {
               categoryId,
               categorySource: 'user',
+              categoryReason: null,
               ruleId: null,
               kidId,
               privateMemberId: isPrivate ? viewer.memberId : null,
@@ -247,6 +248,7 @@ transactions.patch('/transactions/:id', async (c) => {
   let k: Classification = {
     categoryId: row.categoryId,
     categorySource: row.categorySource,
+    categoryReason: null,
     ruleId: null,
     kidId: row.kidId,
     privateMemberId: row.privateMemberId,
@@ -297,7 +299,7 @@ transactions.patch('/transactions/:id', async (c) => {
     statements.push(
       stmt(
         db,
-        `UPDATE transactions SET category_id = ?, category_source = 'user', rule_id = NULL, kid_id = ?,
+        `UPDATE transactions SET category_id = ?, category_source = 'user', category_reason = NULL, rule_id = NULL, kid_id = ?,
            private_member_id = ?, is_ignored = ?, updated_at = ? WHERE id = ?`,
         k.categoryId,
         k.kidId,

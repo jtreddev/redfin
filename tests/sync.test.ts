@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { syncStep } from '../src/worker/plaid/sync';
 import type { Env } from '../src/worker/env';
-import type { LiabilitiesResponse, PlaidAccount } from '../src/worker/plaid/client';
+import type { LiabilitiesResponse, PlaidAccount, PlaidTransaction } from '../src/worker/plaid/client';
 import { api } from './helpers/api';
 import { TestD1 } from './helpers/d1';
 import { page, plaidTxn, seedBank, stubPlaid, testEnv } from './helpers/plaid';
@@ -263,5 +263,120 @@ describe('file import into a bank-synced account', () => {
       ['import', -450],
       ['import', -1500],
     ]);
+  });
+});
+
+describe('automatic categories on synced charges', () => {
+  const catId = (section: string, name: string) =>
+    db.rows<{ id: number }>('SELECT c.id FROM categories c JOIN sections s ON s.id = c.section_id WHERE s.name = ? AND c.name = ?', section, name)[0]!.id;
+  const row = (plaidTxnId: string) =>
+    db.rows<{ categoryId: number | null; source: string | null; reason: string | null; detailed: string | null; privateMemberId: number | null; kidId: number | null; isSplit: number }>(
+      `SELECT category_id AS categoryId, category_source AS source, category_reason AS reason, plaid_category_detailed AS detailed,
+              private_member_id AS privateMemberId, kid_id AS kidId, is_split AS isSplit
+         FROM transactions WHERE plaid_txn_id = ?`,
+      plaidTxnId,
+    )[0]!;
+  const gas = { primary: 'TRANSPORTATION', detailed: 'TRANSPORTATION_GAS' };
+  const shell = (id: string, dollars: number, extra: Partial<PlaidTransaction> = {}) =>
+    plaidTxn('chime', id, '2026-10-01', dollars, { name: 'SHELL OIL 57444', merchant_name: 'Shell', personal_finance_category: gas, ...extra });
+
+  it('a synced Shell charge under $25 lands in Habits with a reason', async () => {
+    const { itemId } = await seedBank(db, env, 'chime');
+    stubPlaid({ chime: [page([shell('t1', 6.41)])] });
+
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(row('t1')).toMatchObject({
+      categoryId: catId('Habits', 'Habits'),
+      source: 'auto',
+      reason: 'Under $25 at a gas station',
+      detailed: 'TRANSPORTATION_GAS',
+    });
+  });
+
+  it('hand-set charges keep their category through a modify', async () => {
+    const { itemId } = await seedBank(db, env, 'chime');
+    stubPlaid({ chime: [page([shell('t1', 6.41)])] });
+    await syncStep(env, { itemId, trigger: 'manual' });
+    const groceries = catId('Everyday', 'Groceries');
+    db.exec(`UPDATE transactions SET category_id = ?, category_source = 'user', category_reason = NULL WHERE plaid_txn_id = 't1'`, groceries);
+
+    stubPlaid({ chime: [page([], { modified: [shell('t1', 6.41, { name: 'SHELL OIL 57444 RENAMED' })] })] });
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(row('t1')).toMatchObject({ categoryId: groceries, source: 'user', reason: null });
+  });
+
+  it('updates the bank category and re-derives it on a modify', async () => {
+    const { itemId } = await seedBank(db, env, 'chime');
+    stubPlaid({ chime: [page([plaidTxn('chime', 't1', '2026-10-01', 9, { name: 'CORNER SPOT' })])] });
+    await syncStep(env, { itemId, trigger: 'manual' });
+    expect(row('t1')).toMatchObject({ categoryId: null, source: null, reason: null });
+
+    const fastFood = { primary: 'FOOD_AND_DRINK', detailed: 'FOOD_AND_DRINK_FAST_FOOD' };
+    stubPlaid({ chime: [page([], { modified: [plaidTxn('chime', 't1', '2026-10-01', 9, { name: 'CORNER SPOT', personal_finance_category: fastFood })] })] });
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(row('t1')).toMatchObject({ detailed: 'FOOD_AND_DRINK_FAST_FOOD', source: 'auto', reason: expect.stringMatching(/^Bank says: /) });
+    expect(row('t1').categoryId).not.toBeNull();
+  });
+
+  it('splits are skipped', async () => {
+    const { itemId, accountId } = await seedBank(db, env, 'chime');
+    db.exec(
+      `INSERT INTO transactions (account_id, date, amount_cents, name, source, plaid_txn_id, is_split, plaid_category_detailed)
+       VALUES (?, '2026-10-01', -641, 'SHELL OIL 57444', 'plaid', 't1', 1, 'TRANSPORTATION_GAS')`,
+      accountId,
+    );
+    stubPlaid({ chime: [page([], { modified: [shell('t1', 6.41)] })] });
+
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(row('t1')).toMatchObject({ categoryId: null, source: null, isSplit: 1 });
+  });
+
+  it('charges on a personal card stay private, even when a built-in pattern matches', async () => {
+    const { itemId, accountId } = await seedBank(db, env, 'chime');
+    db.exec(`INSERT INTO members (id, email, name, default_private_account_id) VALUES (7, 'jo@example.com', 'Jo', ?)`, accountId);
+    db.exec(
+      `INSERT INTO categories (section_id, name, kind, fun_member_id) VALUES ((SELECT id FROM sections WHERE name = 'Fun & Wants'), 'Jo fun', 'expense', 7)`,
+    );
+    stubPlaid({ chime: [page([shell('t1', 6.41)])] });
+
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(row('t1')).toMatchObject({ privateMemberId: 7, categoryId: catId('Fun & Wants', 'Jo fun') });
+  });
+
+  it('a kid-only rule still gets a category from the automatic layers', async () => {
+    const { itemId } = await seedBank(db, env, 'chime');
+    db.exec("INSERT INTO kids (id, name) VALUES (1, 'Ada')");
+    db.exec(`INSERT INTO rules (position, match_field, match_text, kid_id) VALUES (1, 'any', 'SHELL', 1)`);
+    stubPlaid({ chime: [page([shell('t1', 6.41)])] });
+
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(row('t1')).toMatchObject({ kidId: 1, source: 'rule', categoryId: catId('Habits', 'Habits'), reason: 'Under $25 at a gas station' });
+  });
+
+  it('a payment on a credit card is still filed as a transfer', async () => {
+    const { itemId, accountId } = await seedBank(db, env, 'chime');
+    db.exec(`UPDATE accounts SET type = 'credit' WHERE id = ?`, accountId);
+    stubPlaid({ chime: [page([plaidTxn('chime', 't1', '2026-10-01', -250, { name: 'ONLINE PAYMENT THANK YOU' })])] });
+
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(row('t1')).toMatchObject({ categoryId: catId('Transfers', 'Transfers'), source: 'auto', reason: 'Card payment' });
+  });
+
+  it('a rule with a category wins, with its reason', async () => {
+    const { itemId } = await seedBank(db, env, 'chime');
+    const gasCat = catId('Everyday', 'Gas');
+    db.exec(`INSERT INTO rules (position, match_field, match_text, category_id) VALUES (1, 'any', 'SHELL', ?)`, gasCat);
+    stubPlaid({ chime: [page([shell('t1', 6.41)])] });
+
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(row('t1')).toMatchObject({ categoryId: gasCat, source: 'rule', reason: 'Your rule: SHELL' });
   });
 });

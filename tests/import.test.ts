@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { parseCsv, toCsv } from '../src/shared/import/csv';
 import { parseOfx } from '../src/shared/import/ofx';
 import { applyMapping, detectPreset, parseDateFlexible } from '../src/shared/import/presets';
+import { api } from './helpers/api';
+import { TestD1 } from './helpers/d1';
+import { testEnv } from './helpers/plaid';
 
 describe('csv', () => {
   it('handles quotes, embedded commas and newlines, and a BOM', () => {
@@ -113,5 +116,37 @@ DATA:OFXSGML
     expect(statement?.kind).toBe('credit');
     expect(statement?.mask).toBe('1111');
     expect(statement?.transactions[0]).toMatchObject({ fitId: 'A1', amountCents: -2000, name: 'SHELL' });
+  });
+});
+
+describe('imported rows are categorized', () => {
+  it('files a small Shell charge under Habits and a large one under Gas, with reasons', async () => {
+    const db = new TestD1();
+    const env = testEnv(db);
+    db.exec(`INSERT INTO accounts (id, name, type) VALUES (1, 'Checking', 'checking')`);
+    const post = async (path: string, body: unknown) => {
+      const response = await api(env, 'POST', path, body);
+      expect(response.status).toBeLessThan(300);
+      return response.json() as Promise<Record<string, number>>;
+    };
+    const { id } = await post('/import/batches', { accountId: 1, format: 'csv' });
+    await post(`/import/batches/${id}/rows`, {
+      rows: [
+        { date: '2026-10-01', amountCents: -641, name: 'SHELL OIL 57444' },
+        { date: '2026-10-02', amountCents: -4800, name: 'SHELL OIL 57444' },
+        { date: '2026-10-03', amountCents: -1200, name: 'SOMETHING ELSE' },
+      ],
+    });
+
+    expect(
+      db.rows(
+        `SELECT t.amount_cents AS cents, s.name AS section, c.name AS category, t.category_source AS source, t.category_reason AS reason
+           FROM transactions t LEFT JOIN categories c ON c.id = t.category_id LEFT JOIN sections s ON s.id = c.section_id ORDER BY t.date`,
+      ),
+    ).toEqual([
+      { cents: -641, section: 'Habits', category: 'Habits', source: 'auto', reason: 'Under $25 at a gas station' },
+      { cents: -4800, section: 'Everyday', category: 'Gas', source: 'auto', reason: 'Gas station' },
+      { cents: -1200, section: null, category: null, source: null, reason: null },
+    ]);
   });
 });

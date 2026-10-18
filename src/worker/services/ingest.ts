@@ -1,7 +1,8 @@
 import type { ISODate } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import { matchPaycheck } from '../../shared/paychecks';
-import { findRule, normalizeMerchant, type CategorySource } from '../../shared/rules';
+import { categorize, type AutoSubject } from '../../shared/autoCategory';
+import { normalizeMerchant, type CategorySource } from '../../shared/rules';
 import { looksLikeTransfer } from '../../shared/transfers';
 import { batchAll, nowIso, stmt } from '../lib/db';
 import type { IngestContext } from './context';
@@ -18,6 +19,7 @@ export interface IncomingTxn {
   plaidTxnId?: string | null;
   pendingTxnId?: string | null;
   plaidCategory?: string | null;
+  plaidCategoryDetailed?: string | null;
   importFitid?: string | null;
   importHash?: string | null;
   importBatchId?: number | null;
@@ -29,6 +31,8 @@ export interface IncomingTxn {
 export interface Classification {
   categoryId: number | null;
   categorySource: CategorySource;
+  /** Why the category was picked automatically, e.g. "Under $25 at a gas station". */
+  categoryReason: string | null;
   ruleId: number | null;
   kidId: number | null;
   privateMemberId: number | null;
@@ -38,17 +42,25 @@ export interface Classification {
   normalizedMerchant: string;
 }
 
-type Classifiable = Pick<IncomingTxn, 'accountId' | 'date' | 'amountCents' | 'name' | 'merchantName' | 'memo'>;
+type Classifiable = Pick<
+  IncomingTxn,
+  'accountId' | 'date' | 'amountCents' | 'name' | 'merchantName' | 'memo' | 'plaidCategory' | 'plaidCategoryDetailed'
+>;
+
+const PAYCHECK_REASON = 'Matches your paycheck';
+const CARD_PAYMENT_REASON = 'Card payment';
+const PERSONAL_CARD_REASON = 'Your personal card';
 
 /**
  * Decides category, kid, privacy and ignore for a transaction. Anything a person set
- * by hand is kept; automatic choices (rules, paycheck matching, card payments,
- * personal-card defaults) are re-derived each time.
+ * by hand is kept; automatic choices (rules, paycheck matching, saved bills, personal-card
+ * defaults, built-in patterns, the bank's category, card payments) are re-derived each time.
  */
 export function classify(ctx: IngestContext, txn: Classifiable, current?: Partial<Classification>): Classification {
   const out: Classification = {
     categoryId: current?.categoryId ?? null,
     categorySource: current?.categorySource ?? null,
+    categoryReason: current?.categoryReason ?? null,
     ruleId: current?.ruleId ?? null,
     kidId: current?.kidId ?? null,
     privateMemberId: current?.privateMemberId ?? null,
@@ -66,40 +78,73 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
   if (out.categorySource === 'user') return out;
 
   if (out.categorySource === 'rule' || out.categorySource === 'auto') {
-    Object.assign(out, { categoryId: null, categorySource: null, ruleId: null, kidId: null, privateMemberId: null, isIgnored: false });
+    Object.assign(out, {
+      categoryId: null,
+      categorySource: null,
+      categoryReason: null,
+      ruleId: null,
+      kidId: null,
+      privateMemberId: null,
+      isIgnored: false,
+    });
   }
 
   const subjectName = txn.memo ? `${txn.name} ${txn.memo}` : txn.name;
-  const rule = findRule(ctx.rules, { name: subjectName, merchantName: txn.merchantName, accountId: txn.accountId });
-  if (rule) {
-    out.categoryId = rule.action.categoryId ?? null;
-    out.kidId = rule.action.kidId ?? null;
-    out.privateMemberId = rule.action.privateMemberId ?? null;
-    out.isIgnored = !!rule.action.ignore;
-    out.ruleId = rule.id;
+  const subject: AutoSubject = {
+    name: subjectName,
+    merchantName: txn.merchantName ?? null,
+    merchant: out.normalizedMerchant,
+    accountId: txn.accountId,
+    amountCents: txn.amountCents,
+    bankDetailed: txn.plaidCategoryDetailed ?? null,
+    bankPrimary: txn.plaidCategory ?? null,
+  };
+
+  let auto = categorize(subject, ctx);
+  let ruleReason: string | null = null;
+  let privateByRule = false;
+  if (auto.source === 'rule') {
+    const action = auto.action ?? {};
+    out.categoryId = action.categoryId ?? null;
+    out.categoryReason = auto.reason;
+    out.kidId = action.kidId ?? null;
+    out.privateMemberId = action.privateMemberId ?? null;
+    out.isIgnored = !!action.ignore;
+    out.ruleId = auto.ruleId;
     out.categorySource = 'rule';
+    ruleReason = auto.reason;
+    privateByRule = out.privateMemberId !== null;
+    // A kid-only or private-only rule doesn't pick a category, so the other layers still can.
+    if (out.categoryId === null && !out.isIgnored) auto = categorize(subject, { ...ctx, rules: [] });
   }
 
   if (out.categoryId === null && !out.isIgnored) {
+    const source = out.categorySource ?? 'auto';
     const privateOwner = ctx.privateAccountOwner.get(txn.accountId);
+    // Saved bills come before the personal-card default; built-in patterns and the bank's category after it.
+    const billOnly = categorize(subject, { rules: [], bills: ctx.bills, cutoffCents: ctx.cutoffCents, categoryIdOf: () => null });
     if (paycheck && ctx.paychecksCategoryId) {
-      out.categoryId = ctx.paychecksCategoryId;
-      out.categorySource = 'auto';
+      Object.assign(out, { categoryId: ctx.paychecksCategoryId, categorySource: source, categoryReason: PAYCHECK_REASON });
+    } else if (privateOwner !== undefined && txn.amountCents < 0 && out.privateMemberId === null && billOnly.categoryId === null) {
+      Object.assign(out, { privateMemberId: privateOwner, categorySource: source, categoryReason: PERSONAL_CARD_REASON });
+    } else if (auto.categoryId !== null) {
+      Object.assign(out, { categoryId: auto.categoryId, categorySource: source, categoryReason: auto.reason });
     } else if (
       txn.amountCents > 0 &&
       ctx.accountType.get(txn.accountId) === 'credit' &&
       ctx.cardPaymentCategoryId &&
       looksLikeTransfer({ id: 0, accountId: txn.accountId, date: txn.date, amountCents: txn.amountCents, name: subjectName })
     ) {
-      out.categoryId = ctx.cardPaymentCategoryId;
-      out.categorySource = 'auto';
-    } else if (privateOwner !== undefined && txn.amountCents < 0 && out.privateMemberId === null) {
-      out.privateMemberId = privateOwner;
-      out.categorySource = 'auto';
+      Object.assign(out, { categoryId: ctx.cardPaymentCategoryId, categorySource: source, categoryReason: CARD_PAYMENT_REASON });
     }
   }
 
-  return enforceFunMoney(ctx, out);
+  const final = enforceFunMoney(ctx, out);
+  if (final.categoryId !== out.categoryId) {
+    // Moved into someone's fun money: the reason is why it's private, not what the bank thought.
+    final.categoryReason = privateByRule ? ruleReason : PERSONAL_CARD_REASON;
+  }
+  return final;
 }
 
 /** Private ⇔ filed under that person's fun money. */
@@ -117,10 +162,10 @@ export function enforceFunMoney(ctx: IngestContext, k: Classification): Classifi
 
 const INSERT_SQL = `INSERT OR IGNORE INTO transactions (
   account_id, date, amount_cents, name, merchant_name, normalized_merchant, memo, pending, source,
-  plaid_txn_id, pending_txn_id, plaid_category, import_fitid, import_hash, import_batch_id,
-  category_id, category_source, rule_id, kid_id, private_member_id, income_source_id, pay_date,
+  plaid_txn_id, pending_txn_id, plaid_category, plaid_category_detailed, import_fitid, import_hash, import_batch_id,
+  category_id, category_source, category_reason, rule_id, kid_id, private_member_id, income_source_id, pay_date,
   is_ignored, created_by_member_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`;
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`;
 
 export interface InsertResult {
   inserted: number;
@@ -153,11 +198,13 @@ export async function insertTransactions(
       row.plaidTxnId,
       row.pendingTxnId,
       row.plaidCategory,
+      row.plaidCategoryDetailed,
       row.importFitid,
       row.importHash,
       row.importBatchId,
       k.categoryId,
       k.categorySource,
+      k.categoryReason,
       k.ruleId,
       k.kidId,
       k.privateMemberId,
@@ -189,6 +236,7 @@ function pickUserFields(carry: Classification): Partial<Classification> {
     ? {
         categoryId: carry.categoryId,
         categorySource: 'user',
+        categoryReason: carry.categoryReason,
         kidId: carry.kidId,
         privateMemberId: carry.privateMemberId,
         isIgnored: carry.isIgnored,
@@ -206,10 +254,14 @@ export interface StoredTxn {
   memo: string | null;
   categoryId: number | null;
   categorySource: CategorySource;
+  categoryReason: string | null;
   ruleId: number | null;
   kidId: number | null;
   privateMemberId: number | null;
   isIgnored: number;
+  isSplit: number;
+  plaidCategory: string | null;
+  plaidCategoryDetailed: string | null;
   incomeSourceId: number | null;
   payDate: ISODate | null;
   normalizedMerchant: string | null;
@@ -217,18 +269,21 @@ export interface StoredTxn {
 
 export const STORED_SELECT = `SELECT t.id, t.account_id AS accountId, t.date, t.amount_cents AS amountCents, t.name,
   t.merchant_name AS merchantName, t.memo, t.category_id AS categoryId, t.category_source AS categorySource,
-  t.rule_id AS ruleId, t.kid_id AS kidId, t.private_member_id AS privateMemberId, t.is_ignored AS isIgnored,
+  t.category_reason AS categoryReason, t.is_split AS isSplit, t.plaid_category AS plaidCategory,
+  t.plaid_category_detailed AS plaidCategoryDetailed, t.rule_id AS ruleId, t.kid_id AS kidId, t.private_member_id AS privateMemberId, t.is_ignored AS isIgnored,
   t.income_source_id AS incomeSourceId, t.pay_date AS payDate, t.normalized_merchant AS normalizedMerchant
   FROM transactions t`;
 
-/** Re-runs classification over stored rows (after rules change). Returns rows updated. */
+/** Re-runs classification over stored rows (after rules change). Split rows are left alone. Returns rows updated. */
 export async function reclassify(db: D1Database, ctx: IngestContext, rows: readonly StoredTxn[]): Promise<number> {
   const now = nowIso();
   const statements: D1PreparedStatement[] = [];
   for (const row of rows) {
+    if (row.isSplit === 1) continue;
     const k = classify(ctx, row, {
       categoryId: row.categoryId,
       categorySource: row.categorySource,
+      categoryReason: row.categoryReason,
       ruleId: row.ruleId,
       kidId: row.kidId,
       privateMemberId: row.privateMemberId,
@@ -237,6 +292,7 @@ export async function reclassify(db: D1Database, ctx: IngestContext, rows: reado
     const changed =
       k.categoryId !== row.categoryId ||
       k.categorySource !== row.categorySource ||
+      k.categoryReason !== row.categoryReason ||
       k.ruleId !== row.ruleId ||
       k.kidId !== row.kidId ||
       k.privateMemberId !== row.privateMemberId ||
@@ -248,11 +304,12 @@ export async function reclassify(db: D1Database, ctx: IngestContext, rows: reado
     statements.push(
       stmt(
         db,
-        `UPDATE transactions SET category_id = ?, category_source = ?, rule_id = ?, kid_id = ?, private_member_id = ?,
-           is_ignored = ?, income_source_id = ?, pay_date = ?, normalized_merchant = ?, updated_at = ?
+        `UPDATE transactions SET category_id = ?, category_source = ?, category_reason = ?, rule_id = ?, kid_id = ?,
+           private_member_id = ?, is_ignored = ?, income_source_id = ?, pay_date = ?, normalized_merchant = ?, updated_at = ?
          WHERE id = ?`,
         k.categoryId,
         k.categorySource,
+        k.categoryReason,
         k.ruleId,
         k.kidId,
         k.privateMemberId,

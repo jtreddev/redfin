@@ -128,6 +128,7 @@ function toIncoming(t: PlaidTransaction | InvestmentTransaction, accountId: numb
     plaidTxnId: t.transaction_id,
     pendingTxnId: t.pending_transaction_id,
     plaidCategory: t.personal_finance_category?.primary ?? null,
+    plaidCategoryDetailed: t.personal_finance_category?.detailed ?? null,
   };
 }
 
@@ -367,9 +368,9 @@ async function applyAdded(
   // Pending versions (possibly already removed) whose details should carry over to the posted row.
   const pendingIds = added.map((t) => t.pending_transaction_id).filter((id): id is string => Boolean(id));
   const pendingRows = pendingIds.length
-    ? await allByIds<StoredTxn & { plaidTxnId: string; notes: string | null; isSplit: number }>(
+    ? await allByIds<StoredTxn & { plaidTxnId: string; notes: string | null }>(
         db,
-        (list) => `${STORED_SELECT.replace('FROM transactions t', ', t.plaid_txn_id AS plaidTxnId, t.notes, t.is_split AS isSplit FROM transactions t')} WHERE t.plaid_txn_id IN (${list})`,
+        (list) => `${STORED_SELECT.replace('FROM transactions t', ', t.plaid_txn_id AS plaidTxnId, t.notes FROM transactions t')} WHERE t.plaid_txn_id IN (${list})`,
         pendingIds,
       )
     : [];
@@ -413,10 +414,11 @@ async function applyAdded(
       stmt(
         db,
         `UPDATE transactions SET plaid_txn_id = ?, source = 'plaid', merchant_name = ?, plaid_category = ?,
-           date = ?, pending = 0, updated_at = ? WHERE id = ?`,
+           plaid_category_detailed = ?, date = ?, pending = 0, updated_at = ? WHERE id = ?`,
         t.transaction_id,
         t.merchant_name,
         incoming.plaidCategory,
+        incoming.plaidCategoryDetailed,
         t.date,
         now,
         twin,
@@ -457,6 +459,7 @@ async function applyAdded(
       incoming.carry = {
         categoryId: pending.categoryId,
         categorySource: pending.categorySource,
+        categoryReason: pending.categoryReason,
         ruleId: pending.ruleId,
         kidId: pending.kidId,
         privateMemberId: pending.privateMemberId,
@@ -521,7 +524,7 @@ async function applyModified(
       stmt(
         db,
         `UPDATE transactions SET account_id = ?, date = ?, amount_cents = ?, name = ?, merchant_name = ?, pending = ?,
-           plaid_category = ?, updated_at = ? WHERE plaid_txn_id = ?`,
+           plaid_category = ?, plaid_category_detailed = ?, updated_at = ? WHERE plaid_txn_id = ?`,
         accountId,
         incoming.date,
         incoming.amountCents,
@@ -529,6 +532,7 @@ async function applyModified(
         incoming.merchantName,
         incoming.pending ? 1 : 0,
         incoming.plaidCategory,
+        incoming.plaidCategoryDetailed,
         now,
         t.transaction_id,
       ),

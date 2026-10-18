@@ -1,10 +1,11 @@
 import type { CategoryKind } from '../../shared/actuals';
+import type { AutoContext, CategoryRef } from '../../shared/autoCategory';
 import { SPECIAL } from '../../shared/categorySet';
 import type { ISODate } from '../../shared/dates';
 import type { IncomeSourceMatcher } from '../../shared/paychecks';
 import type { PayFrequency, PaySchedule } from '../../shared/paySchedule';
 import type { Rule } from '../../shared/rules';
-import { all } from '../lib/db';
+import { all, first } from '../lib/db';
 
 export interface RuleRow {
   id: number;
@@ -17,11 +18,15 @@ export interface RuleRow {
   privateMemberId: number | null;
   ignoreTxn: number;
   ownerMemberId: number | null;
+  amountMin: number | null;
+  amountMax: number | null;
+  learned: number;
 }
 
 export const RULE_SELECT = `SELECT r.id, r.position, r.match_field AS matchField, r.match_text AS matchText,
   r.account_id AS accountId, r.category_id AS categoryId, r.kid_id AS kidId,
-  r.private_member_id AS privateMemberId, r.ignore_txn AS ignoreTxn, r.owner_member_id AS ownerMemberId
+  r.private_member_id AS privateMemberId, r.ignore_txn AS ignoreTxn, r.owner_member_id AS ownerMemberId,
+  r.amount_min_cents AS amountMin, r.amount_max_cents AS amountMax, r.learned
   FROM rules r`;
 
 export function toRule(row: RuleRow): Rule {
@@ -31,6 +36,9 @@ export function toRule(row: RuleRow): Rule {
     matchField: row.matchField,
     matchText: row.matchText,
     accountId: row.accountId,
+    amountMin: row.amountMin,
+    amountMax: row.amountMax,
+    learned: row.learned === 1,
     action: {
       ...(row.categoryId != null ? { categoryId: row.categoryId } : {}),
       ...(row.kidId != null ? { kidId: row.kidId } : {}),
@@ -100,7 +108,7 @@ export function findSpecialCategory(categories: readonly CategoryRow[], section:
 }
 
 /** Everything the classifier needs, loaded once per import chunk or sync step. */
-export interface IngestContext {
+export interface IngestContext extends AutoContext {
   rules: Rule[];
   paySources: IncomeSourceMatcher[];
   accountType: Map<number, string>;
@@ -114,7 +122,7 @@ export interface IngestContext {
 }
 
 export async function loadIngestContext(db: D1Database): Promise<IngestContext> {
-  const [ruleRows, sources, accounts, members, categories] = await Promise.all([
+  const [ruleRows, sources, accounts, members, categories, bills, household] = await Promise.all([
     all<RuleRow>(db, `${RULE_SELECT} ORDER BY r.position, r.id`),
     loadIncomeSources(db),
     all<{ id: number; type: string }>(db, 'SELECT id, type FROM accounts'),
@@ -123,6 +131,12 @@ export async function loadIngestContext(db: D1Database): Promise<IngestContext> 
       'SELECT id, default_private_account_id AS defaultPrivateAccountId FROM members',
     ),
     loadCategories(db),
+    all<{ merchant: string; cents: number; categoryId: number | null; name: string }>(
+      db,
+      `SELECT merchant, expected_amount_cents AS cents, category_id AS categoryId, name
+         FROM recurring_bills WHERE status = 'confirmed' ORDER BY id`,
+    ),
+    first<{ habitCutoffCents: number }>(db, 'SELECT habit_cutoff_cents AS habitCutoffCents FROM household WHERE id = 1'),
   ]);
 
   const funCategoryOwner = new Map<number, number>();
@@ -134,8 +148,15 @@ export async function loadIngestContext(db: D1Database): Promise<IngestContext> 
     }
   }
 
+  // Archived categories are skipped so the next layer gets a turn.
+  const live = categories.filter((c) => !c.archived);
+  const categoryIdOf = (ref: CategoryRef) => findSpecialCategory(live, ...ref);
+
   return {
     rules: ruleRows.map(toRule),
+    bills,
+    cutoffCents: household?.habitCutoffCents ?? 2500,
+    categoryIdOf,
     paySources: sources.map((s) => ({ id: s.id, matchText: s.matchText, accountId: s.accountId, schedule: scheduleOf(s) })),
     accountType: new Map(accounts.map((a) => [a.id, a.type])),
     privateAccountOwner: new Map(
