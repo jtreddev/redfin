@@ -399,6 +399,23 @@ export interface UpcomingBill {
   overdue: boolean;
   source: 'budget' | 'recurring';
   categoryId: number | null;
+  /** A recurring bill's cadence (budget lines are monthly). */
+  cadence?: Cadence;
+  /** A recurring bill that is the viewer's own private one. */
+  privateMemberId?: number | null;
+}
+
+/** A later month's budget rows: its own when it has a budget, otherwise this month's carried forward. */
+export async function laterMonthRows(db: D1Database, planner: Planner, month: MonthKey): Promise<readonly BudgetRow[]> {
+  const budgeted = await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM budget_lines WHERE month = ?', month);
+  return budgeted?.n ? (await loadMonth(db, month)).rows : planner.data.rows;
+}
+
+/** A row that is a planned line of its own (typed, or the planned-costs line), not one counted in its parent's. */
+export function ownLineRows(rows: readonly BudgetRow[]): BudgetRow[] {
+  const byId = new Map(rows.map((r) => [r.categoryId, r]));
+  const hasLine = (r: BudgetRow | undefined) => r !== undefined && (r.lineId !== null || r.computed === 'planned_costs');
+  return rows.filter((r) => hasLine(r) && !(r.parentId !== null && hasLine(byId.get(r.parentId))));
 }
 
 /**
@@ -407,12 +424,9 @@ export interface UpcomingBill {
  * Planned-cost set-asides stay in the account (P6-R5), so a savings line counts only its hand part.
  */
 function dueDayLines(rows: readonly BudgetRow[], month: MonthKey): UpcomingBill[] {
-  const byId = new Map(rows.map((r) => [r.categoryId, r]));
-  const hasLine = (r: BudgetRow | undefined) => r !== undefined && (r.lineId !== null || r.computed === 'planned_costs');
-  return rows
+  return ownLineRows(rows)
     .filter((r) => r.timing === 'due_day' && r.dueDay != null && r.kind !== 'income' && r.kind !== 'transfer' && r.funMemberId == null)
     .filter((r) => r.budgetCents - r.plannedCostsCents > 0)
-    .filter((r) => hasLine(r) && !(r.parentId !== null && hasLine(byId.get(r.parentId))))
     .map((r) => ({
       name: r.name,
       date: clampDay(month, r.dueDay!),
@@ -439,7 +453,15 @@ export async function upcomingBills(
   planner: Planner,
   today: ISODate,
   viewerId: number,
-  horizon: number | { until: ISODate; repeat?: boolean; laterMonths?: boolean } = 21,
+  horizon:
+    | number
+    | {
+        until: ISODate;
+        repeat?: boolean;
+        laterMonths?: boolean;
+        /** A later month's rows, for a caller that needs them too (default: laterMonthRows). */
+        monthRows?: (month: MonthKey) => Promise<readonly BudgetRow[]>;
+      } = 21,
 ): Promise<UpcomingBill[]> {
   const bills: UpcomingBill[] = [];
   for (const row of planner.data.rows) {
@@ -497,7 +519,16 @@ export async function upcomingBills(
     }
     for (let guard = 0; date <= until && guard < 60; guard++, date = nextOccurrence(date, r.cadence)) {
       if (!(lineCategories(r.categoryId).some((id) => budgetCategories.has(id)) && monthOf(date) === planner.month)) {
-        bills.push({ name: r.name, date, amountCents: Math.abs(r.expectedAmountCents), overdue: date < today, source: 'recurring', categoryId: r.categoryId });
+        bills.push({
+          name: r.name,
+          date,
+          amountCents: Math.abs(r.expectedAmountCents),
+          overdue: date < today,
+          source: 'recurring',
+          categoryId: r.categoryId,
+          cadence: r.cadence,
+          privateMemberId: r.privateMemberId,
+        });
       }
       if (!repeat) break;
     }
@@ -505,8 +536,7 @@ export async function upcomingBills(
 
   if (typeof horizon !== 'number' && horizon.laterMonths) {
     for (let month = addMonths(planner.month, 1); month <= monthOf(until); month = addMonths(month, 1)) {
-      const budgeted = await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM budget_lines WHERE month = ?', month);
-      const rows = budgeted?.n ? (await loadMonth(db, month)).rows : planner.data.rows;
+      const rows = await (horizon.monthRows ?? ((m: MonthKey) => laterMonthRows(db, planner, m)))(month);
       const billed = new Set<number | null>(bills.filter((b) => b.source === 'recurring' && monthOf(b.date) === month).flatMap((b) => lineCategories(b.categoryId)));
       for (const line of dueDayLines(rows, month)) {
         if (line.date <= until && !billed.has(line.categoryId)) bills.push(line);

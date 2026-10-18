@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { addDays, monthOf } from '../../shared/dates';
+import { addDays } from '../../shared/dates';
 import {
   DAYS_PER_MONTH,
   fallbackLastDate,
@@ -10,13 +10,9 @@ import {
   type ProjectionInput,
   usualLessBills,
 } from '../../shared/projection';
-import type { Cadence } from '../../shared/recurring';
-import { buildTrends, GROUP_ORDER } from '../../shared/trends';
 import type { AppEnv } from '../env';
-import { all, first } from '../lib/db';
-import { loadIncomeSources, scheduleOf } from '../services/context';
-import { buildPlanner, CASH_ACCOUNTS_WHERE, upcomingBills } from '../services/planner';
-import { loadTrendsInput, monthsBack } from '../services/trends';
+import { loadForecastInputs, withoutSetAside } from '../services/forecastInputs';
+import { upcomingBills } from '../services/planner';
 
 /** "Usual" is the last 3 full months, so the current month plus 3. */
 const USUAL_MONTHS = 4;
@@ -33,56 +29,24 @@ forecast.get('/forecast', async (c) => {
   const viewer = c.get('viewer');
   const household = c.get('household');
 
-  const [cash, sources, received, planner, trendsInput, confirmed] = await Promise.all([
-    first<{ total: number; counted: number }>(
-      db,
-      `SELECT COALESCE(SUM(current_balance_cents), 0) AS total, COUNT(current_balance_cents) AS counted FROM accounts WHERE ${CASH_ACCOUNTS_WHERE}`,
-    ),
-    loadIncomeSources(db),
-    all<{ sourceId: number; payDate: string }>(
-      db,
-      `SELECT DISTINCT income_source_id AS sourceId, pay_date AS payDate FROM transactions
-        WHERE deleted_at IS NULL AND is_ignored = 0 AND income_source_id IS NOT NULL AND pay_date BETWEEN ? AND ?`,
-      addDays(today, 1),
-      addDays(today, PAYDAY_WITHIN_DAYS),
-    ),
-    buildPlanner(db, monthOf(today), household, today),
-    loadTrendsInput(db, monthsBack(today, USUAL_MONTHS), today),
-    all<{ categoryId: number; cadence: Cadence; amountCents: number; privateMemberId: number | null }>(
-      db,
-      `SELECT category_id AS categoryId, cadence, expected_amount_cents AS amountCents, private_member_id AS privateMemberId
-         FROM recurring_bills
-        WHERE status = 'confirmed' AND category_id IS NOT NULL AND next_date IS NOT NULL
-          AND (private_member_id IS NULL OR private_member_id = ?)`,
-      viewer.memberId,
-    ),
-  ]);
-
-  const payday = nextPayday(
-    sources.map((s) => ({
-      name: s.name,
-      netPayCents: s.netPayCents,
-      schedule: scheduleOf(s),
-      receivedPayDates: received.filter((r) => r.sourceId === s.id).map((r) => r.payDate),
-    })),
-    today,
-  );
+  const inputs = await loadForecastInputs(db, today, viewer.memberId, household, {
+    payUntil: addDays(today, PAYDAY_WITHIN_DAYS),
+    trendsMonths: USUAL_MONTHS,
+  });
+  const { cash, planner, setAside } = inputs;
+  const payday = nextPayday(inputs.sources, today);
   const lastDate = payday ? addDays(payday.date, -1) : fallbackLastDate(today);
 
   // This month's due-day lines, recurring bills (every time they come up) and, past the month end, next
   // month's due-day lines (P6-R3b), to the last day.
   const bills = await upcomingBills(db, planner, today, viewer.memberId, { until: lastDate, repeat: true, laterMonths: true });
-  // Planned-cost set-asides stay in the account, so they aren't taken off (P6-R5): a due-day savings line
-  // counts only its hand part. Later months' lines already come without them. Home says "before set-asides".
-  const setAside = new Map(planner.data.rows.filter((r) => r.plannedCostsCents > 0).map((r) => [r.categoryId, r.plannedCostsCents]));
-  const ownSetAside = (b: (typeof bills)[number]) =>
-    b.source === 'budget' && b.categoryId !== null && monthOf(b.date) === planner.month ? (setAside.get(b.categoryId) ?? 0) : 0;
+  // Planned-cost set-asides stay in the account, so they aren't taken off (P6-R5). Home says "before set-asides".
   const events: ProjectionEvent[] = bills
     .map((b, i): ProjectionEvent => ({
       id: `${b.source}-${i}`,
       date: b.date,
       name: b.name,
-      amountCents: Math.max(0, b.amountCents - ownSetAside(b)),
+      amountCents: withoutSetAside(b, inputs),
       kind: b.source === 'budget' ? 'budget' : 'bill',
     }))
     .filter((e) => e.amountCents > 0);
@@ -90,16 +54,11 @@ forecast.get('/forecast', async (c) => {
   // Bills and Saving are left out: their money is in the events (P6-R4). So are confirmed bills filed under
   // Everyday, Habits or Fun: they come out as events too. The viewer's private bills come out of fun, where
   // Trends counts private charges.
-  const groupOf = new Map(GROUP_ORDER.map((g) => [g.section, g.key]));
-  const sectionOf = new Map(trendsInput.categories.map((c) => [c.id, c.section]));
-  const usual = usualLessBills(
-    buildTrends(trendsInput).usual,
-    confirmed.map((b) => ({ ...b, group: b.privateMemberId !== null ? 'fun' : (groupOf.get(sectionOf.get(b.categoryId) ?? '') ?? null) })),
-  );
+  const usual = usualLessBills(inputs.trends.usual, inputs.confirmed);
   const perDay = (monthly: number) => Math.max(0, Math.round(monthly / DAYS_PER_MONTH));
   const input: ProjectionInput = {
     today,
-    startBalanceCents: cash?.total ?? 0,
+    startBalanceCents: cash.total,
     payday,
     events,
     dailySpend: { everyday: perDay(usual.everyday), habits: perDay(usual.habits), fun: perDay(usual.fun) },
@@ -112,6 +71,6 @@ forecast.get('/forecast', async (c) => {
     projection: projectToPayday(input),
     hasSetAsides: setAside.size > 0,
     // No cash account has a balance (e.g. only imported files): there's nothing to start from.
-    hasBalance: (cash?.counted ?? 0) > 0,
+    hasBalance: cash.counted > 0,
   });
 });
