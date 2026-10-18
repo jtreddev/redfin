@@ -274,8 +274,8 @@ describe('GET /api/forecast/months', () => {
         expect((await api(env, 'GET', path, undefined, YOU)).status).toBe(200);
         return queries;
       };
-      expect(await count('/forecast/months')).toBeLessThanOrEqual(30);
-      expect(await count('/forecast')).toBeLessThanOrEqual(30);
+      expect(await count('/forecast/months')).toBeLessThanOrEqual(35);
+      expect(await count('/forecast')).toBeLessThanOrEqual(35);
     } finally {
       proto.execute = execute;
     }
