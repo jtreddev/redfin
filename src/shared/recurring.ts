@@ -43,6 +43,9 @@ const CADENCE_DAYS: Record<Cadence, number> = {
 const VARIABLE_TOLERANCE = 0.4;
 const SLOW_CADENCES = new Set<Cadence>(['monthly', 'quarterly', 'yearly']);
 
+/** Within `ratio` times of each other: allows for bills that change (utilities) but keeps $0.99 and $9.99 apart. */
+export const sameBill = (a: number, b: number, ratio = 2) => Math.max(Math.abs(a), Math.abs(b)) <= Math.min(Math.abs(a), Math.abs(b)) * ratio;
+
 export function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);

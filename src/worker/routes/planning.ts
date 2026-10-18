@@ -7,7 +7,7 @@ import { planPayoff } from '../../shared/debt';
 import { goalProgress } from '../../shared/goals';
 import { toCsv } from '../../shared/import/csv';
 import { PRIVACY_SQL } from '../../shared/privacy';
-import { detectRecurring, guessCadence, median, nextOccurrence, type Cadence } from '../../shared/recurring';
+import { detectRecurring, guessCadence, median, nextOccurrence, sameBill, type Cadence } from '../../shared/recurring';
 import type { AppEnv } from '../env';
 import { all, batchAll, first, nowIso, run, stmt, Updates } from '../lib/db';
 import {
@@ -150,9 +150,6 @@ interface BillRow {
   status: 'suggested' | 'confirmed' | 'dismissed';
   privateMemberId: number | null;
 }
-
-/** Within `ratio` times of each other: allows for bills that change (utilities) but keeps $0.99 and $9.99 apart. */
-const sameBill = (a: number, b: number, ratio = 2) => Math.max(Math.abs(a), Math.abs(b)) <= Math.min(Math.abs(a), Math.abs(b)) * ratio;
 
 /** A transaction's bill key, the same one detection uses. */
 async function billKey(db: D1Database, txnId: number) {

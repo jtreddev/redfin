@@ -21,6 +21,11 @@ export interface Rule {
   matchText: string;
   /** Only match transactions on this account. */
   accountId?: number | null;
+  /** Only match charges of at least / at most this many cents (absolute, inclusive; null = no bound). */
+  amountMin?: number | null;
+  amountMax?: number | null;
+  /** Made by the app from a fix someone made by hand. */
+  learned?: boolean;
   action: RuleAction;
 }
 
@@ -28,6 +33,7 @@ export interface RuleSubject {
   name: string;
   merchantName?: string | null;
   accountId: number;
+  amountCents?: number;
 }
 
 export type CategorySource = 'rule' | 'user' | 'auto' | null;
@@ -86,6 +92,11 @@ const US_STATES = new Set(
 
 export function ruleMatches(rule: Rule, subject: RuleSubject): boolean {
   if (rule.accountId != null && rule.accountId !== subject.accountId) return false;
+  if (subject.amountCents != null) {
+    const cents = Math.abs(subject.amountCents);
+    if (rule.amountMin != null && cents < rule.amountMin) return false;
+    if (rule.amountMax != null && cents > rule.amountMax) return false;
+  }
   const needle = normalizeText(rule.matchText);
   if (!needle) return false;
   const name = normalizeText(subject.name);
