@@ -7,7 +7,14 @@ export interface AppData {
   sections: { id: number; name: string; sort: number }[];
   accounts: Account[];
   reload: () => Promise<void>;
-  toast: (text: string, tone?: 'ok' | 'error') => void;
+  toast: (text: string, tone?: 'ok' | 'error', options?: ToastOptions) => void;
+}
+
+export interface ToastOptions {
+  /** A button in the toast, e.g. Undo. */
+  action?: { label: string; run: () => void };
+  /** How long it stays up; defaults to 3.5 s, or 6 s with an action. */
+  durationMs?: number;
 }
 
 export const AppContext = createContext<AppData | null>(null);

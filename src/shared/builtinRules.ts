@@ -37,13 +37,18 @@ const KNOWN_PATTERNS = KNOWN_NAMES.map((k) => ({ ...k, pattern: pattern(k.tokens
 
 const dollars = (cents: number) => (cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`);
 
+/** A gas station by its merchant key, or by the bank's detailed category. */
+export function isGasStation(subject: { merchant: string; bankDetailed: string | null }): boolean {
+  return GAS_PATTERN.test(subject.merchant) || subject.bankDetailed === 'TRANSPORTATION_GAS';
+}
+
 /** Spending only: a refund from a gas station or Netflix isn't a habit or a bill. */
 export function builtinCategory(
   subject: { merchant: string; amountCents: number; bankDetailed: string | null },
   cutoffCents: number,
 ): { ref: CategoryRef; reason: string } | null {
   if (subject.amountCents >= 0) return null;
-  if (GAS_PATTERN.test(subject.merchant) || subject.bankDetailed === 'TRANSPORTATION_GAS') {
+  if (isGasStation(subject)) {
     return Math.abs(subject.amountCents) < cutoffCents
       ? { ref: SPECIAL.habits, reason: `Under ${dollars(cutoffCents)} at a gas station` }
       : { ref: SPECIAL.gas, reason: 'Gas station' };

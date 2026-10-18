@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api, del, errorMessage, patch, post, put } from '../api';
 import { money, plural, weekdayDate } from '../format';
-import { categoryName, useApp } from '../state';
-import type { RuleSuggestion, Split, Transaction } from '../types';
+import { useApp } from '../state';
+import type { CategoryMove, Split, Transaction } from '../types';
 import { AmountInput, Button, CategorySelect, Field, KidSelect, Money, Sheet, Toggle } from '../ui';
 
 export function TransactionSheet({
@@ -17,17 +17,15 @@ export function TransactionSheet({
   onChanged: (updated: Transaction | null, refreshAll?: boolean) => void;
   onNext?: () => void;
 }) {
-  const { me, categories, toast } = useApp();
+  const { me, toast, reload } = useApp();
   const [t, setT] = useState(txn);
   const [notes, setNotes] = useState(txn.notes ?? '');
-  const [suggestion, setSuggestion] = useState<RuleSuggestion | null>(null);
   const [busy, setBusy] = useState(false);
   const [splitting, setSplitting] = useState(false);
 
   useEffect(() => {
     setT(txn);
     setNotes(txn.notes ?? '');
-    setSuggestion(null);
     setSplitting(false);
     if (txn.transferPairId) {
       api<Transaction>(`/transactions/${txn.id}`)
@@ -39,10 +37,10 @@ export function TransactionSheet({
   async function update(body: Record<string, unknown>) {
     setBusy(true);
     try {
-      const res = await patch<{ transaction: Transaction | null; suggestion: RuleSuggestion | null }>(`/transactions/${t.id}`, body);
+      const res = await patch<{ transaction: Transaction | null; move: CategoryMove | null }>(`/transactions/${t.id}`, body);
       if (res.transaction) setT(res.transaction);
-      setSuggestion(res.suggestion);
-      onChanged(res.transaction);
+      onChanged(res.transaction, !!res.move?.moved);
+      if (res.move) showMove(res.move);
     } catch (error) {
       toast(errorMessage(error), 'error');
     } finally {
@@ -50,21 +48,26 @@ export function TransactionSheet({
     }
   }
 
-  async function acceptRule() {
-    if (!suggestion) return;
-    try {
-      const res = await post<{ updated: number }>('/rules', {
-        matchField: suggestion.matchField,
-        matchText: suggestion.matchText,
-        categoryId: suggestion.categoryId,
-        applyToExisting: true,
-      });
-      toast(res.updated ? `Rule saved and ${plural(res.updated, 'transaction')} updated` : 'Rule saved');
-      setSuggestion(null);
-      onChanged(t, true);
-    } catch (error) {
-      toast(errorMessage(error), 'error');
-    }
+  /** "Moved 41 Shell charges to Habits · Undo". Undo may run after the sheet has closed. */
+  function showMove(move: CategoryMove) {
+    const merchant = t.merchantName ?? move.merchant;
+    const text = move.moved
+      ? `Moved ${plural(move.moved, `${merchant} charge`)} to ${move.categoryName}`
+      : `${merchant} goes to ${move.categoryName} from now on`;
+    toast(text, 'ok', {
+      action: {
+        label: 'Undo',
+        run: () => {
+          post(`/category-moves/${move.id}/undo`)
+            .then(() => {
+              onChanged(null, true);
+              void reload();
+              toast('Undone');
+            })
+            .catch((error: unknown) => toast(errorMessage(error), 'error'));
+        },
+      },
+    });
   }
 
   async function unlinkTransfer() {
@@ -121,22 +124,6 @@ export function TransactionSheet({
         </Field>
       )}
 
-      {suggestion && (
-        <div className="banner banner-good">
-          <span>
-            Always file “{suggestion.matchText}” as {categoryName(categories, suggestion.categoryId)}?
-            {suggestion.otherCount > 0 && ` That also fixes ${plural(suggestion.otherCount, 'other transaction')}.`}
-          </span>
-          <div className="cluster">
-            <Button small variant="primary" onClick={() => void acceptRule()}>
-              Yes
-            </Button>
-            <Button small variant="ghost" onClick={() => setSuggestion(null)}>
-              No
-            </Button>
-          </div>
-        </div>
-      )}
 
       {t.amountCents < 0 && !t.pending && <BillToggle txnId={t.id} />}
 

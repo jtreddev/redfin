@@ -13,6 +13,7 @@ import { planning } from './routes/planning';
 import { plaidRoutes } from './routes/plaid';
 import { rules } from './routes/rules';
 import { transactions } from './routes/transactions';
+import { cleanupCategoryMoves } from './services/learn';
 
 const app = new Hono<AppEnv>();
 
@@ -49,5 +50,7 @@ export default {
   fetch: app.fetch,
   async scheduled(_controller, env, ctx) {
     ctx.waitUntil(runCron(env));
+    // Undo for category moves lasts a day; this runs even when syncing fails.
+    ctx.waitUntil(cleanupCategoryMoves(env.DB));
   },
 } satisfies ExportedHandler<Env>;

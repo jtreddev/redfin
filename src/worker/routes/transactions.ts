@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { monthEnd, monthStart } from '../../shared/dates';
 import { PRIVACY_SQL } from '../../shared/privacy';
-import { suggestRule } from '../../shared/rules';
 import type { AppEnv } from '../env';
 import { all, allByIds, batchAll, first, nowIso, run, stmt, type Param } from '../lib/db';
 import {
@@ -20,7 +19,8 @@ import {
   reqStr,
 } from '../lib/http';
 import { loadIngestContext, type IngestContext } from '../services/context';
-import { enforceFunMoney, insertTransactions, type Classification } from '../services/ingest';
+import { enforceFunMoney, insertTransactions, STORED_SELECT, type Classification, type StoredTxn } from '../services/ingest';
+import { learnFromFix, undoMove } from '../services/learn';
 
 export const transactions = new Hono<AppEnv>();
 
@@ -324,37 +324,25 @@ transactions.patch('/transactions/:id', async (c) => {
   if (!statements.length) throw badRequest('Nothing to update');
   await batchAll(db, statements);
 
-  // Offer to remember this choice for similar transactions.
-  let suggestion = null;
-  if (body.categoryId !== undefined && k.categoryId !== null && !ctx.funCategoryOwner.has(k.categoryId) && row.categoryId !== k.categoryId) {
-    const rule = suggestRule({ name: row.name, merchantName: row.merchantName, accountId: row.accountId });
-    const existing = await first(
-      db,
-      'SELECT id FROM rules WHERE UPPER(match_text) = UPPER(?) AND category_id = ?',
-      rule.matchText,
-      k.categoryId,
-    );
-    if (!existing && rule.matchText.length >= 3) {
-      const column = rule.matchField === 'merchant' ? 't.merchant_name' : 't.name';
-      const count = await first<{ n: number }>(
-        db,
-        `SELECT COUNT(*) AS n FROM transactions t
-          WHERE t.deleted_at IS NULL AND t.id != ? AND ${PRIVACY_SQL}
-            AND (t.category_source IS NULL OR t.category_source != 'user')
-            AND (t.category_id IS NULL OR t.category_id != ?)
-            AND UPPER(COALESCE(${column}, '')) LIKE ?`,
-        row.id,
-        viewer.memberId,
-        k.categoryId,
-        `%${rule.matchText.toUpperCase().replace(/[%_]/g, '')}%`,
-      );
-      suggestion = { ...rule, categoryId: k.categoryId, otherCount: count?.n ?? 0 };
+  // A fix teaches a quiet rule and re-files similar charges; the app offers Undo.
+  let move: { id: number; moved: number; merchant: string; categoryName: string } | null = null;
+  const learnFrom = k.categoryId;
+  if (body.categoryId !== undefined && learnFrom !== null && (row.categoryId !== learnFrom || row.categorySource !== 'user')) {
+    const stored = await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id);
+    const learned = stored ? await learnFromFix(db, ctx, viewer, stored, learnFrom) : null;
+    if (learned?.moveId) {
+      const category = await first<{ name: string }>(db, 'SELECT name FROM categories WHERE id = ?', learnFrom);
+      move = { id: learned.moveId, moved: learned.moved, merchant: learned.merchant, categoryName: category?.name ?? '' };
     }
   }
 
   const updated = await visibleTxn(db, row.id, viewer.memberId).catch(() => null);
   const splits = updated ? await loadSplits(db, [row.id]) : [];
-  return c.json({ transaction: updated ? toApi(updated, splits) : null, suggestion });
+  return c.json({ transaction: updated ? toApi(updated, splits) : null, move });
+});
+
+transactions.post('/category-moves/:id/undo', async (c) => {
+  return c.json(await undoMove(c.env.DB, c.get('viewer'), paramId(c)));
 });
 
 transactions.delete('/transactions/:id', async (c) => {

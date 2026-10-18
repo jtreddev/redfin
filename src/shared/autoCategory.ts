@@ -40,6 +40,9 @@ export interface AutoResult {
   action?: RuleAction;
 }
 
+/** Why a charge was filed by a rule the app learned from a fix. */
+export const LEARNED_REASON = 'Learned from your fix';
+
 const NONE: AutoResult = { categoryId: null, ruleId: null, source: null, reason: null };
 
 /** The bill's key, or its "MERCHANT $9" variant for a second bill from the same merchant. */
@@ -52,7 +55,7 @@ export function categorize(subject: AutoSubject, ctx: AutoContext): AutoResult {
       categoryId: rule.action.categoryId ?? null,
       ruleId: rule.id,
       source: 'rule',
-      reason: rule.learned ? 'Learned from your fix' : `Your rule: ${rule.matchText}`,
+      reason: rule.learned ? LEARNED_REASON : `Your rule: ${rule.matchText}`,
       action: rule.action,
     };
   }

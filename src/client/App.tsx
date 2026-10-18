@@ -6,7 +6,7 @@ import { Goals } from './screens/Goals';
 import { Home } from './screens/Home';
 import { More } from './screens/More';
 import { Plan } from './screens/Plan';
-import { AppContext, type AppData } from './state';
+import { AppContext, type AppData, type ToastOptions } from './state';
 import { recategorizeAll } from './sync';
 import type { Account, Category, Me } from './types';
 import { ErrorNote, Loading } from './ui';
@@ -62,7 +62,7 @@ export function App() {
   const route = useRoute();
   const [base, setBase] = useState<BaseData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ text: string; tone: 'ok' | 'error'; action?: ToastOptions['action'] } | null>(null);
   const timer = useRef<number | undefined>(undefined);
 
   const reload = useCallback(async () => {
@@ -94,10 +94,10 @@ export function App() {
       .catch((e) => console.error('Background categorizing failed', e));
   }, [needsCategorizing, reload]);
 
-  const showToast = useCallback((text: string, tone: 'ok' | 'error' = 'ok') => {
-    setToast({ text, tone });
+  const showToast = useCallback((text: string, tone: 'ok' | 'error' = 'ok', options: ToastOptions = {}) => {
+    setToast({ text, tone, action: options.action });
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setToast(null), 3500);
+    timer.current = window.setTimeout(() => setToast(null), options.durationMs ?? (options.action ? 6000 : 3500));
   }, []);
 
   if (!base) {
@@ -133,7 +133,21 @@ export function App() {
       </nav>
       {toast && (
         <div className={`toast ${toast.tone}`} role="status">
-          {toast.text}
+          <span>{toast.text}</span>
+          {toast.action && (
+            <button
+              type="button"
+              className="toast-action"
+              onClick={() => {
+                const { run } = toast.action!;
+                window.clearTimeout(timer.current);
+                setToast(null);
+                run();
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
         </div>
       )}
     </AppContext.Provider>

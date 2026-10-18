@@ -107,11 +107,12 @@ export interface Transaction {
   transferPair?: Transaction | null;
 }
 
-export interface RuleSuggestion {
-  matchField: 'name' | 'merchant' | 'any';
-  matchText: string;
-  categoryId: number;
-  otherCount: number;
+/** What a category fix did: charges re-filed under the rule it learned (see POST /category-moves/:id/undo). */
+export interface CategoryMove {
+  id: number;
+  moved: number;
+  merchant: string;
+  categoryName: string;
 }
 
 export interface BudgetRow {
