@@ -17,8 +17,7 @@
     "typecheck": "tsc -b",
     "db:migrate:local": "wrangler d1 migrations apply fin --local",
     "db:migrate:remote": "wrangler d1 migrations apply fin --remote",
-    "backup": "node scripts/backup.mjs",
-    "icons": "node scripts/make-icons.mjs"
+    "backup": "node scripts/backup.mjs"
   },
   "dependencies": {
     "hono": "^4.13.7",

@@ -1,12 +1,12 @@
 // App-shell service worker. Never caches /api (your data) or Cloudflare Access login pages.
-const CACHE = 'fin-shell-v1';
+const CACHE = 'fin-shell-v2';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((cache) => cache.addAll(['/manifest.webmanifest', '/icon.svg']))
+      .then((cache) => cache.addAll(['/manifest.webmanifest', '/icon.svg', '/fonts/PublicSans-Variable.woff2']))
       .catch(() => undefined),
   );
 });
@@ -45,8 +45,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (url.pathname.startsWith('/assets/')) {
-    // Built assets have content hashes in their names, so cache-first is safe.
+  if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/fonts/')) {
+    // Built assets have content hashes in their names, so cache-first is safe. The font has no hash: a new
+    // font file needs a new CACHE name (which clears the old one on activate).
     event.respondWith(
       (async () => {
         const hit = await caches.match(request);

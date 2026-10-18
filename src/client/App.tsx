@@ -26,12 +26,11 @@ const WIDE = new Set(['trends', 'plan']);
 /** The app's mark: the month ribbon in miniature (the same drawing as the app icon). */
 function Mark() {
   return (
-    <svg className="sidebar-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
-      <rect width="32" height="32" rx="8" fill="var(--accent)" />
-      <rect x="6" y="13.5" width="9" height="5" rx="1.5" fill="var(--accent-ink)" />
-      <rect x="16.5" y="13.5" width="5" height="5" rx="1.5" fill="var(--accent-ink)" opacity="0.8" />
-      <rect x="23" y="13.5" width="2.5" height="5" rx="1" fill="var(--accent-ink)" opacity="0.6" />
-      <rect x="23.75" y="9" width="1.5" height="14" rx="0.75" fill="var(--accent-ink)" />
+    <svg className="sidebar-mark" viewBox="80 150 352 212" aria-hidden="true" focusable="false">
+      <rect x="92" y="214" width="164" height="84" rx="18" fill="var(--accent)" />
+      <rect x="268" y="214" width="76" height="84" rx="18" fill="var(--accent)" fillOpacity="0.7" />
+      <rect x="356" y="214" width="30" height="84" rx="12" fill="var(--accent)" fillOpacity="0.45" />
+      <rect x="398" y="164" width="24" height="184" rx="12" fill="var(--accent)" />
     </svg>
   );
 }
