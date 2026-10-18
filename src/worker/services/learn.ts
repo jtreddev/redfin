@@ -1,7 +1,7 @@
 import { LEARNED_REASON } from '../../shared/autoCategory';
 import { isGasStation } from '../../shared/builtinRules';
 import { PRIVACY_SQL } from '../../shared/privacy';
-import { normalizeMerchant, normalizeText, ruleMatches, type MatchField, type Rule } from '../../shared/rules';
+import { normalizeMerchant, normalizeText, ruleAppliesToAccount, ruleMatches, type MatchField, type Rule } from '../../shared/rules';
 import type { Viewer } from '../env';
 import { all, batchAll, chunk, first, nowIso, placeholders, run, stmt } from '../lib/db';
 import { HttpError, notFound } from '../lib/http';
@@ -135,7 +135,11 @@ export async function learnFromFix(
     learned.amountMax,
     `%${merchant.toUpperCase().replace(/[%_]/g, '')}%`,
   );
-  const refile = candidates.filter((t) => ruleMatches(learned, subjectOf(t))).map((t) => t.id);
+  // The same account check classify() uses, so re-filing never does what a later sync would undo.
+  const asSaved: Rule = { ...learned, action: privateTo === null ? {} : { privateMemberId: privateTo } };
+  const refile = candidates
+    .filter((t) => ruleAppliesToAccount(asSaved, ctx.privateAccountOwner.get(t.accountId) ?? null) && ruleMatches(learned, subjectOf(t)))
+    .map((t) => t.id);
 
   const ruleChanged = !existing || existing.category_id !== categoryId || existing.private_member_id !== privateTo || existing.owner_member_id !== privateTo;
   if (!ruleChanged && !refile.length) return { moved: 0, moveId: null, ruleId: existing.id, merchant };

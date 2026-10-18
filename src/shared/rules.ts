@@ -111,6 +111,17 @@ export function ruleMatches(rule: Rule, subject: RuleSubject): boolean {
   }
 }
 
+/**
+ * Learned rules stay within the right person's accounts: a shared one applies only to charges on
+ * accounts that are nobody's personal card, a private one only to its person's personal card.
+ * `accountOwner` is the member whose default private account the charge is on, or null.
+ * Rules people typed in apply everywhere, as before.
+ */
+export function ruleAppliesToAccount(rule: Rule, accountOwner: number | null): boolean {
+  if (!rule.learned) return true;
+  return (rule.action.privateMemberId ?? null) === accountOwner;
+}
+
 /** First matching rule by position. */
 export function findRule(rules: readonly Rule[], subject: RuleSubject): Rule | null {
   const ordered = [...rules].sort((a, b) => a.position - b.position || a.id - b.id);

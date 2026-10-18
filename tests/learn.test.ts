@@ -19,12 +19,13 @@ let yourFun: number;
 
 const cat = (name: string) => db.rows<{ id: number }>('SELECT id FROM categories WHERE name = ? AND fun_member_id IS NULL', name)[0]!.id;
 
-function charge(cents: number, opts: { categoryId?: number | null; source?: string | null; reason?: string | null; privateTo?: number | null; merchant?: string } = {}) {
+function charge(cents: number, opts: { categoryId?: number | null; source?: string | null; reason?: string | null; privateTo?: number | null; merchant?: string; account?: number } = {}) {
   const merchant = opts.merchant ?? 'Shell';
   db.exec(
     `INSERT INTO transactions (account_id, date, amount_cents, name, merchant_name, normalized_merchant, source,
        category_id, category_source, category_reason, private_member_id)
-     VALUES (1, '2026-10-01', ?, ?, ?, ?, 'plaid', ?, ?, ?, ?)`,
+     VALUES (?, '2026-10-01', ?, ?, ?, ?, 'plaid', ?, ?, ?, ?)`,
+    opts.account ?? 1,
     -cents,
     `${merchant.toUpperCase()} OIL 5512`,
     merchant,
@@ -35,6 +36,14 @@ function charge(cents: number, opts: { categoryId?: number | null; source?: stri
     opts.privateTo ?? null,
   );
   return db.rows<{ id: number }>('SELECT MAX(id) AS id FROM transactions')[0]!.id;
+}
+
+/** A personal card for `memberId`: its charges default to that person's fun money. */
+function personalCard(memberId: number) {
+  db.exec(`INSERT INTO accounts (name, type) VALUES ('Personal card', 'credit')`);
+  const id = db.rows<{ id: number }>('SELECT MAX(id) AS id FROM accounts')[0]!.id;
+  db.exec('UPDATE members SET default_private_account_id = ? WHERE id = ?', id, memberId);
+  return id;
 }
 
 const row = (id: number) =>
@@ -236,7 +245,9 @@ describe('fixing a charge', () => {
 
   it('private fix stays private', async () => {
     const habits = cat('Habits');
-    const mine = [charge(700, { categoryId: habits, source: 'auto' }), charge(700, { categoryId: habits, source: 'auto' })];
+    const myCard = personalCard(you);
+    const mine = [charge(700, { categoryId: habits, source: 'auto' }), charge(700, { categoryId: habits, source: 'auto', account: myCard })];
+    const shared = charge(700, { categoryId: habits, source: 'auto' });
     const partnerFun = db.rows<{ id: number }>('SELECT id FROM categories WHERE fun_member_id = ?', partner)[0]!.id;
     const theirs = charge(700, { categoryId: partnerFun, source: 'auto', privateTo: partner });
 
@@ -247,6 +258,8 @@ describe('fixing a charge', () => {
     expect(rules[0]).toMatchObject({ category_id: yourFun, private_member_id: you, owner_member_id: you });
     expect(row(mine[1]!)).toMatchObject({ category_id: yourFun, private_member_id: you, category_source: 'rule' });
     expect(row(theirs)).toMatchObject({ category_id: partnerFun, private_member_id: partner, category_source: 'auto' });
+    // A private learned rule only reaches your own card: shared-account charges stay shared.
+    expect(row(shared)).toMatchObject({ category_id: habits, private_member_id: null, category_source: 'auto' });
 
     const list = async (email: string) => ((await (await api(env, 'GET', '/rules', undefined, email)).json()) as { id: number }[]).map((r) => r.id);
     expect(await list(YOU)).toContain(rules[0]!.id);
@@ -255,6 +268,48 @@ describe('fixing a charge', () => {
     // Undo puts the re-filed charge back where everyone can see it.
     expect((await undo(body.move!.id)).status).toBe(200);
     expect(row(mine[1]!)).toMatchObject({ category_id: habits, private_member_id: null, category_source: 'auto' });
+  });
+
+  it('my private fix never pulls a partner’s later charge into my fun money', async () => {
+    await fix(charge(700), yourFun);
+    // The partner buys there later, on the shared card, and history gets re-sorted.
+    const theirs = charge(700);
+    await api(env, 'POST', '/categorize/all', {});
+    expect(row(theirs)).toMatchObject({ private_member_id: null });
+    expect(row(theirs).category_id).not.toBe(yourFun);
+    expect(row(theirs).category_source).not.toBe('rule');
+  });
+
+  it('a shared fix never moves my personal-card charge into shared view', async () => {
+    const myCard = personalCard(you);
+    const habits = cat('Habits');
+    const gas = cat('Gas');
+    const onMyCard = charge(4000, { categoryId: yourFun, source: 'auto', reason: 'Your personal card', privateTo: you, account: myCard });
+    const sharedToo = charge(4000, { categoryId: habits, source: 'auto' });
+    const body = await fix(charge(4000, { categoryId: habits, source: 'auto' }), gas);
+    expect(body.move?.moved).toBe(1);
+    expect(row(sharedToo)).toMatchObject({ category_id: gas, category_source: 'rule' });
+    expect(row(onMyCard)).toMatchObject({ category_id: yourFun, private_member_id: you, category_source: 'auto' });
+
+    await api(env, 'POST', '/categorize/all', {});
+    expect(row(onMyCard)).toMatchObject({ category_id: yourFun, private_member_id: you });
+    expect(row(onMyCard).category_source).not.toBe('rule');
+    expect(row(sharedToo)).toMatchObject({ category_id: gas, category_source: 'rule' });
+  });
+
+  it('a private learned rule applies to new charges on my own card', async () => {
+    const myCard = personalCard(you);
+    await fix(charge(700, { account: myCard }), yourFun);
+    const ruleId = learnedRules()[0]!.id;
+    const later = charge(700, { account: myCard });
+    await api(env, 'POST', '/categorize/all', {});
+    expect(row(later)).toMatchObject({
+      category_id: yourFun,
+      private_member_id: you,
+      category_source: 'rule',
+      category_reason: 'Learned from your fix',
+      rule_id: ruleId,
+    });
   });
 
   it('a partner’s private learned rule is never reused', async () => {

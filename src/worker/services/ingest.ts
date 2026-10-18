@@ -2,7 +2,7 @@ import type { ISODate } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import { matchPaycheck } from '../../shared/paychecks';
 import { categorize, type AutoSubject } from '../../shared/autoCategory';
-import { normalizeMerchant, type CategorySource } from '../../shared/rules';
+import { normalizeMerchant, ruleAppliesToAccount, type CategorySource } from '../../shared/rules';
 import { looksLikeTransfer } from '../../shared/transfers';
 import { batchAll, nowIso, stmt } from '../lib/db';
 import type { IngestContext } from './context';
@@ -100,7 +100,9 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
     bankPrimary: txn.plaidCategory ?? null,
   };
 
-  let auto = categorize(subject, ctx);
+  const accountOwner = ctx.privateAccountOwner.get(txn.accountId) ?? null;
+  const rules = ctx.rules.filter((rule) => ruleAppliesToAccount(rule, accountOwner));
+  let auto = categorize(subject, { ...ctx, rules });
   let ruleReason: string | null = null;
   let privateByRule = false;
   if (auto.source === 'rule') {
