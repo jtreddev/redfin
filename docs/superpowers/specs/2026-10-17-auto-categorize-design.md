@@ -150,7 +150,10 @@ the income source; personal-card defaults for private accounts still apply befor
 Sync stores `personal_finance_category.detailed`. Existing transactions lack it; the Accounts
 screen's sync gets a one-time "Refresh bank details" that restarts each item's
 `/transactions/sync` from no cursor, so Plaid re-sends history and existing rows update in place
-(matched by `plaid_txn_id`). Until that runs, layer 5 uses `primary`.
+(matched by `plaid_txn_id`). Until that runs, layer 5 uses `primary`. The household won't press it,
+so cron does the same reset once per bank (`plaid_items.details_refreshed_at`, migration 0005, is
+NULL until then; refused while a sync holds the bank, skipped for banks needing sign-in). The
+button stamps it too, and banks linked later are stamped at link time.
 
 ### When categorizing runs
 

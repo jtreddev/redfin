@@ -30,11 +30,13 @@ interface ItemRow {
   status: 'ok' | 'login_required' | 'error';
   liabilitiesUpdatedAt: string | null;
   balancesUpdatedAt: string | null;
+  detailsRefreshedAt: string | null;
 }
 
 const ITEM_SELECT = `SELECT id, item_id AS itemId, institution_name AS institutionName, access_token_enc AS accessTokenEnc,
   cursor, sync_start_cursor AS syncStartCursor, has_more AS hasMore, history_complete AS historyComplete, status,
-  liabilities_updated_at AS liabilitiesUpdatedAt, balances_updated_at AS balancesUpdatedAt
+  liabilities_updated_at AS liabilitiesUpdatedAt, balances_updated_at AS balancesUpdatedAt,
+  details_refreshed_at AS detailsRefreshedAt
   FROM plaid_items`;
 
 const LOGIN_ERRORS = new Set(['ITEM_LOGIN_REQUIRED', 'PENDING_EXPIRATION', 'PENDING_DISCONNECT', 'ITEM_LOCKED', 'USER_SETUP_REQUIRED', 'ACCESS_NOT_GRANTED']);
@@ -195,6 +197,28 @@ async function pickItem(
   );
 }
 
+/**
+ * Starts this bank's history over so Plaid re-sends every charge with its newest category details
+ * (see refreshStored), and records when. Refused (false) while a sync holds the bank, in the same
+ * statement as the lock check. `onlyOnce` skips banks already refreshed or needing sign-in (cron).
+ */
+export async function resetForDetails(db: D1Database, id: number, { onlyOnce = false } = {}): Promise<boolean> {
+  const now = nowIso();
+  const row = await first<{ id: number }>(
+    db,
+    `UPDATE plaid_items SET cursor = NULL, sync_start_cursor = NULL, has_more = 0, history_complete = 0,
+       details_refreshed_at = ?, updated_at = ?
+     WHERE id = ? AND (sync_lock_until IS NULL OR sync_lock_until < ?)
+       ${onlyOnce ? "AND details_refreshed_at IS NULL AND status = 'ok'" : ''}
+     RETURNING id`,
+    now,
+    now,
+    id,
+    now,
+  );
+  return row !== null;
+}
+
 /** Takes the bank's sync lease; false if another sync holds it. */
 async function lockItem(db: D1Database, id: number): Promise<boolean> {
   const until = new Date(Date.now() + LOCK_MS).toISOString();
@@ -224,7 +248,11 @@ export async function syncStep(
   }: { itemId?: number; trigger: 'cron' | 'manual' | 'link'; since?: string; excludeIds?: readonly number[] },
 ): Promise<SyncStepResult> {
   const db = env.DB;
-  const item = await pickItem(db, itemId, since, excludeIds);
+  let item = await pickItem(db, itemId, since, excludeIds);
+  // Banks linked before detailed categories: cron re-pulls their history once, unattended.
+  if (item && trigger === 'cron' && item.detailsRefreshedAt === null && item.status === 'ok') {
+    if (await resetForDetails(db, item.id, { onlyOnce: true })) item = await first<ItemRow>(db, `${ITEM_SELECT} WHERE id = ?`, item.id);
+  }
   if (!item) return { itemId: null, institutionName: null, done: true, added: 0, modified: 0, removed: 0, status: 'idle' };
   if (!(await lockItem(db, item.id))) {
     return { itemId: item.id, institutionName: item.institutionName, done: false, added: 0, modified: 0, removed: 0, status: 'ok', busy: true };

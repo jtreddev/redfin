@@ -347,6 +347,92 @@ describe('automatic categories on synced charges', () => {
     expect(row('t2')).toMatchObject({ detailed: 'FOOD_AND_DRINK_FAST_FOOD', categoryId: eatingOut, source: 'user' });
   });
 
+  describe('automatic details refresh, once per bank', () => {
+    const item = (itemId: number) =>
+      db.rows<{ cursor: string | null; historyComplete: number; refreshedAt: string | null }>(
+        'SELECT cursor, history_complete AS historyComplete, details_refreshed_at AS refreshedAt FROM plaid_items WHERE id = ?',
+        itemId,
+      )[0]!;
+    /** A bank linked before details refresh existed: synced, with a cursor, never refreshed. */
+    async function oldBank(name: string) {
+      const { itemId } = await seedBank(db, env, name, '2026-10-17T00:00:00Z');
+      db.exec('UPDATE plaid_items SET cursor = ?, details_refreshed_at = NULL WHERE id = ?', `old-${name}`, itemId);
+      return itemId;
+    }
+    const cursorsSent: (string | null)[] = [];
+    function stubCursorPlaid() {
+      cursorsSent.length = 0;
+      vi.stubGlobal('fetch', async (url: string, init: { body: string }) => {
+        if (new URL(url).pathname === '/transactions/sync') cursorsSent.push((JSON.parse(init.body) as { cursor?: string }).cursor ?? null);
+        return Response.json(page([]));
+      });
+    }
+
+    it('a cron step resets a never-refreshed bank once and stamps it', async () => {
+      const itemId = await oldBank('chime');
+      stubCursorPlaid();
+
+      await syncStep(env, { trigger: 'cron' });
+      expect(cursorsSent).toEqual([null]);
+      const after = item(itemId);
+      expect(after.refreshedAt).toEqual(expect.any(String));
+      expect(after.cursor).toMatch(/^cursor-/);
+
+      // History is whole again and stamped: later cron steps continue from the cursor.
+      db.exec('UPDATE plaid_items SET last_synced_at = ? WHERE id = ?', '2026-01-01T00:00:00Z', itemId);
+      const cursor = item(itemId).cursor;
+      await syncStep(env, { trigger: 'cron' });
+      expect(cursorsSent).toEqual([null, cursor]);
+      expect(item(itemId).refreshedAt).toBe(after.refreshedAt);
+    });
+
+    it('a bank another sync holds is not reset', async () => {
+      const itemId = await oldBank('chime');
+      db.exec('UPDATE plaid_items SET sync_lock_until = ? WHERE id = ?', new Date(Date.now() + 30_000).toISOString(), itemId);
+      stubCursorPlaid();
+
+      await syncStep(env, { trigger: 'cron' });
+
+      expect(cursorsSent).toEqual([]);
+      expect(item(itemId)).toMatchObject({ cursor: 'old-chime', historyComplete: 1, refreshedAt: null });
+    });
+
+    it('a bank that needs signing in again is left alone', async () => {
+      const itemId = await oldBank('chime');
+      db.exec(`UPDATE plaid_items SET status = 'login_required' WHERE id = ?`, itemId);
+      stubCursorPlaid();
+
+      await syncStep(env, { trigger: 'cron' });
+
+      expect(item(itemId)).toMatchObject({ cursor: 'old-chime', refreshedAt: null });
+    });
+
+    it('"Refresh bank details" stamps the bank too', async () => {
+      const itemId = await oldBank('chime');
+      await api(env, 'POST', `/plaid/items/${itemId}/refresh-details`);
+      expect(item(itemId)).toMatchObject({ cursor: null, historyComplete: 0, refreshedAt: expect.any(String) });
+    });
+
+    it('a newly linked bank is stamped and never reset', async () => {
+      vi.stubGlobal('fetch', async (url: string) => {
+        const path = new URL(url).pathname;
+        if (path === '/item/public_token/exchange') return Response.json({ access_token: 'access-new', item_id: 'item-new' });
+        if (path === '/accounts/get') return Response.json({ accounts: [] });
+        return Response.json(page([]));
+      });
+      await api(env, 'GET', '/me');
+      const res = await api(env, 'POST', '/plaid/exchange', { publicToken: 'public-new', institutionId: 'ins_1', institutionName: 'New Bank' });
+      expect(res.status).toBe(201);
+      const { itemId } = (await res.json()) as { itemId: number };
+      expect(item(itemId).refreshedAt).toEqual(expect.any(String));
+
+      db.exec('UPDATE plaid_items SET cursor = ?, history_complete = 1 WHERE id = ?', 'linked-cursor', itemId);
+      stubCursorPlaid();
+      await syncStep(env, { trigger: 'cron' });
+      expect(cursorsSent).toEqual(['linked-cursor']);
+    });
+  });
+
   it('refresh details is refused while a sync holds the bank', async () => {
     const { itemId } = await seedBank(db, env, 'chime');
     db.exec('UPDATE plaid_items SET cursor = ?, sync_lock_until = ? WHERE id = ?', 'c1', new Date(Date.now() + 30_000).toISOString(), itemId);
