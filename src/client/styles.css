@@ -1313,6 +1313,9 @@ input[type='checkbox']:not(.switch) {
   padding: 8px 20px 24px;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  /* Rows never squeeze below their content when the sheet is shorter than its body. */
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: 16px;
 }
 
@@ -1965,4 +1968,26 @@ code {
   color: var(--ink);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.875em;
+}
+
+@media (min-width: 900px) {
+  /* Forms on a computer: comfortable field widths and buttons sized to their words. */
+  .app .field {
+    max-width: 520px;
+  }
+
+  .app .card .stack > .btn,
+  .app .card .stack-sm > .btn,
+  .app .card > .btn {
+    justify-self: start;
+  }
+}
+
+.toggle-row {
+  padding: 6px 0;
+}
+
+/* A list already ends in a hairline: the next section doesn't need a second one. */
+.list + .card {
+  border-top-color: transparent;
 }

@@ -112,3 +112,37 @@ quiet: no shadows, hairline dividers, generous space.
   on paper and surface in both modes); dark mode on every screen.
 - Browser check of every screen at 390px and 1280px, light and dark, with screenshots reviewed;
   no console errors.
+
+## Appendix: tokens as built, with measured contrast
+
+Tokens the plan left open, chosen while building (WCAG 2 contrast ratios, computed from the hex values):
+
+| Token | Light | Dark | Role |
+|---|---|---|---|
+| tint | `#f1f3f6` | `#20252d` | tracks, chips, pressed rows |
+| control | `#848e9c` | `#6b7480` | input, switch and secondary-button edges; chart axis |
+| accent-ink | `#ffffff` | `#111419` | text on the accent (white on `#8f98ec` would be 2.6:1) |
+| good / warn / bad | `#1d7447` / `#935700` / `#b3352b` | `#6cc795` / `#e0b25a` / `#f08a78` | status text, always with a word |
+| good- / warn- / bad-soft | `#e5f3eb` / `#fbf0dc` / `#fbe8e4` | `#16301f` / `#33290f` / `#3a1d1a` | banners and chips |
+
+Text (needs 4.5:1), light / dark:
+
+| Pair | Light | Dark |
+|---|---|---|
+| ink on paper / surface / tint | 15.24 / 15.65 / 14.08 | 15.44 / 14.31 / 12.88 |
+| slate on paper / surface / tint | 5.52 / 5.67 / 5.10 | 7.31 / 6.77 / 6.10 |
+| accent on paper / surface / tint | 7.46 / 7.66 / 6.89 | 6.92 / 6.41 / 5.77 |
+| accent on accent-soft (active tab, chips) | 6.63 | 5.34 |
+| slate on accent-soft | 4.91 | 5.64 |
+| accent-ink on accent (primary button) | 7.66 | 6.92 |
+| good / warn / bad on paper | 5.61 / 5.67 / 5.91 | 9.00 / 9.39 / 7.57 |
+| good / warn / bad on their soft | 5.04 / 5.16 / 5.13 | 6.94 / 7.29 / 6.28 |
+| slate on warn- / bad- / good-soft | 5.02 / 4.80 / 4.96 | 5.68 / 6.07 / 5.63 |
+| paper on ink (toast) | 15.24 | 15.44 |
+| surface on bad (error toast) | 6.07 | 7.01 |
+
+Non-text (needs 3:1): control on paper / surface 3.23 / 3.32 light, 3.90 / 3.61 dark. Hairlines
+(`#e4e8ee`, `#262c35`) only divide content; they never mark a control's edge.
+
+The current month's chart bars are hatched with page-colored stripes rather than faded, so their
+color keeps the series' own contrast.

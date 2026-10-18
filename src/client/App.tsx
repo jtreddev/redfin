@@ -20,8 +20,11 @@ const TABS: { path: string; label: string; icon: IconName }[] = [
   { path: 'more', label: 'More', icon: 'more' },
 ];
 
-/** Screens that may use the wide (two-column) layout on a computer. */
-const WIDE = new Set(['trends', 'plan']);
+/** Screens that use the wide (two-column) layout on a computer: Trends, and Plan's budget. */
+function isWide(route: Route, top: string): boolean {
+  if (top === 'trends') return true;
+  return top === 'plan' && !route.params.get('view') && (route.params.get('tab') ?? 'budget') === 'budget';
+}
 
 /** The app's mark: the month ribbon in miniature (the same drawing as the app icon). */
 function Mark() {
@@ -169,7 +172,7 @@ export function App() {
           <NavLink key={item.path} path={`more/${item.path}`} label={item.short} icon={item.icon} active={sideActive === `more/${item.path}`} />
         ))}
       </nav>
-      <main id="main" tabIndex={-1} className={`app ${WIDE.has(top) ? 'app-wide' : ''}`}>
+      <main id="main" tabIndex={-1} className={`app ${isWide(route, top) ? 'app-wide' : ''}`}>
         <ScreenErrorBoundary key={route.path}>
           <Screen route={route} />
         </ScreenErrorBoundary>
