@@ -583,6 +583,32 @@ describe('automatic categories on synced charges', () => {
       ]);
     });
 
+    it('your rule can still count a paired transfer as savings, while the bank layer on the other half gives Transfers', async () => {
+      const savings = catId('Saving', 'Savings & Planned Costs');
+      db.exec(`INSERT INTO rules (position, match_field, match_text, category_id) VALUES (1, 'name', 'TRANSFER TO SAVINGS', ?)`, savings);
+      const ruleId = db.rows<{ id: number }>('SELECT MAX(id) AS id FROM rules')[0]!.id;
+      const checking = await seedBank(db, env, 'chime');
+      const vault = await seedBank(db, env, 'ally');
+      db.exec(`UPDATE accounts SET type = 'savings' WHERE id = ?`, vault.accountId);
+      const transferOut = { primary: 'TRANSFER_OUT', detailed: 'TRANSFER_OUT_SAVINGS' };
+      stubPlaid({
+        chime: [page([plaidTxn('chime', 'out', '2026-10-01', 100, { name: 'TRANSFER TO SAVINGS 0042', personal_finance_category: transferOut })])],
+        ally: [page([plaidTxn('ally', 'in', '2026-10-01', -100, { name: 'TRANSFER FROM CHECKING', personal_finance_category: transferIn })])],
+      });
+      await syncStep(env, { itemId: checking.itemId, trigger: 'manual' });
+      await syncStep(env, { itemId: vault.itemId, trigger: 'manual' });
+
+      const expected = [
+        { plaidTxnId: 'out', pairedWith: 'in', kind: 'savings', source: 'rule' },
+        { plaidTxnId: 'in', pairedWith: 'out', kind: 'transfer', source: 'auto' },
+      ];
+      expect(paired()).toEqual(expected);
+      expect(db.rows(`SELECT rule_id FROM transactions WHERE plaid_txn_id = 'out'`)).toEqual([{ rule_id: ruleId }]);
+
+      await api(env, 'POST', '/categorize/all', {});
+      expect(paired()).toEqual(expected);
+    });
+
     it('recategorize-all keeps paired halves in Transfers, leaves hand-set ones, and unlinking re-sorts them', async () => {
       const { accountId } = await seedBank(db, env, 'chime');
       db.exec(`INSERT INTO accounts (name, type) VALUES ('Card', 'credit')`);

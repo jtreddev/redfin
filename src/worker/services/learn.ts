@@ -130,7 +130,7 @@ export async function learnFromFix(
     db,
     `SELECT t.id, t.name, t.memo, t.merchant_name AS merchantName, t.account_id AS accountId, t.amount_cents AS amountCents
        FROM transactions t
-      WHERE t.deleted_at IS NULL AND t.id != ? AND t.is_split = 0 AND t.is_ignored = 0 AND t.transfer_pair_id IS NULL
+      WHERE t.deleted_at IS NULL AND t.id != ? AND t.is_split = 0 AND t.is_ignored = 0
         AND (t.category_source IS NULL OR t.category_source != 'user')
         AND t.category_id IS NOT ? AND ${PRIVACY_SQL}
         ${sharedOnly}

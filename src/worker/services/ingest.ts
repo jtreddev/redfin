@@ -118,6 +118,8 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
   }
   let ruleReason: string | null = null;
   let privateByRule = false;
+  // A rule (typed or learned) comes from a person, so it may file a paired transfer under any category.
+  let categoryByRule = false;
   if (rule) {
     const auto = ruleResult(rule);
     const action = rule.action;
@@ -130,6 +132,7 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
     out.categorySource = 'rule';
     ruleReason = auto.reason;
     privateByRule = out.privateMemberId !== null;
+    categoryByRule = out.categoryId !== null || privateByRule;
     // A kid-only or private-only rule doesn't pick a category, so the other layers below still can.
   }
 
@@ -166,13 +169,13 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
     // Moved into someone's fun money: the reason is why it's private, not what the bank thought.
     final.categoryReason = privateByRule ? ruleReason : PERSONAL_CARD_REASON;
   }
-  // Half of a matched transfer is never spending, income or debt: only Transfers (kid tag and ignore stay).
-  if (paired && !final.isIgnored && ctx.cardPaymentCategoryId && final.categoryId !== ctx.cardPaymentCategoryId) {
+  // The automatic layers (bills, built-in patterns, the bank) only ever file half of a matched transfer as
+  // Transfers; a rule may still count it, e.g. as savings. Kid tag, ignore and a kid-only rule stay.
+  if (paired && !categoryByRule && !final.isIgnored && ctx.cardPaymentCategoryId && final.categoryId !== ctx.cardPaymentCategoryId) {
     Object.assign(final, {
       categoryId: ctx.cardPaymentCategoryId,
-      categorySource: 'auto',
+      categorySource: final.categorySource === 'rule' ? 'rule' : 'auto',
       categoryReason: PAIRED_TRANSFER_REASON,
-      ruleId: null,
       privateMemberId: null,
     });
   }

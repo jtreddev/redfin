@@ -451,16 +451,20 @@ describe('what a fix learns', () => {
     expect(row(b).category_id).toBe(groceries);
   });
 
-  it('never re-files half of a matched transfer', async () => {
+  it('a fix also re-files half of a matched transfer, and a later re-sort keeps it (rules may count transfers)', async () => {
     const transfers = db.rows<{ id: number }>(`SELECT id FROM categories WHERE kind = 'transfer' AND archived = 0`)[0]!.id;
-    const out = charge(4000, { categoryId: transfers, source: 'auto' });
+    const savings = cat('Savings & Planned Costs');
+    const out = charge(4000, { merchant: 'Vault Savings', categoryId: transfers, source: 'auto' });
     db.exec(`INSERT INTO accounts (name, type) VALUES ('Savings', 'savings')`);
-    const inflow = charge(-4000, { categoryId: transfers, source: 'auto', account: db.rows<{ id: number }>('SELECT MAX(id) AS id FROM accounts')[0]!.id });
+    const inflow = charge(-4000, { merchant: 'Deposit From Checking', categoryId: transfers, source: 'auto', account: db.rows<{ id: number }>('SELECT MAX(id) AS id FROM accounts')[0]!.id });
     db.exec('UPDATE transactions SET transfer_pair_id = ? WHERE id = ?', inflow, out);
     db.exec('UPDATE transactions SET transfer_pair_id = ? WHERE id = ?', out, inflow);
-    const body = await fix(charge(4000), cat('Gas'));
-    expect(body.move?.moved).toBe(0);
-    expect(row(out)).toMatchObject({ category_id: transfers, category_source: 'auto' });
+    const body = await fix(charge(4000, { merchant: 'Vault Savings' }), savings);
+    expect(body.move?.moved).toBe(1);
+    expect(row(out)).toMatchObject({ category_id: savings, category_source: 'rule' });
+    await api(env, 'POST', '/categorize/all', {});
+    expect(row(out)).toMatchObject({ category_id: savings, category_source: 'rule' });
+    expect(row(inflow)).toMatchObject({ category_id: transfers, category_source: 'auto' });
   });
 
   it('re-files whole-word matches only', async () => {

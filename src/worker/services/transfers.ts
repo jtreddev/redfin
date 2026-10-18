@@ -6,9 +6,9 @@ import { rederive } from './ingest';
 
 /**
  * Pairs up transfers between your own accounts in a date range. Paychecks and rows a
- * person filed as ordinary spending or income are never paired; a category the app picked
- * (the bank calling a card payment "shopping") doesn't stop a pair, and both halves are
- * then re-sorted into Transfers.
+ * person (or their rule) filed as ordinary spending or income are never paired; a category
+ * the automatic layers picked (the bank calling a card payment "shopping") doesn't stop a pair,
+ * and both halves are then re-sorted (see classify).
  */
 export async function matchTransfers(db: D1Database, from: ISODate, to: ISODate, ctx?: IngestContext): Promise<number> {
   const candidates = await all<TransferCandidate>(
@@ -21,7 +21,7 @@ export async function matchTransfers(db: D1Database, from: ISODate, to: ISODate,
         AND t.deleted_at IS NULL AND t.is_ignored = 0 AND t.pending = 0
         AND t.transfer_pair_id IS NULL AND t.income_source_id IS NULL AND t.is_split = 0
         AND (c.kind IS NULL OR c.kind IN ('transfer', 'savings', 'debt')
-             OR (t.category_source IN ('auto', 'rule') AND t.private_member_id IS NULL))`,
+             OR (t.category_source = 'auto' AND t.private_member_id IS NULL))`,
     addDays(from, -3),
     addDays(to, 3),
   );
