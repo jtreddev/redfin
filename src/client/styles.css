@@ -1877,6 +1877,75 @@ table.compare thead th {
   }
 }
 
+/* ---------- Trends: ahead ---------- */
+
+.trends-view,
+.ahead-horizon {
+  max-width: 420px;
+}
+
+.ahead-lead {
+  margin: 0 0 4px;
+  font-size: var(--t-md);
+}
+
+.ahead-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ahead-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ahead-flag svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ahead-fix {
+  display: block;
+  margin-top: 2px;
+}
+
+/* "Money in": a short ink tick across each month's bar, on the same axis. */
+.chart-marker {
+  stroke: var(--ink);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.chart-markkey {
+  width: 14px;
+  height: 0;
+  border-top: 2px solid var(--ink);
+  border-radius: 1px;
+  flex: none;
+}
+
+.chart-refkey-dashed {
+  border-top-style: dashed;
+}
+
+.what-if-ahead {
+  margin-top: 0;
+  border-top: none;
+}
+
+.what-if-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 8px;
+}
+
 .chart-head {
   margin-bottom: 4px;
 }

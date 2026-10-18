@@ -120,6 +120,11 @@ export function UntilPayday({ refresh }: { refresh: unknown }) {
         Today’s cash in your everyday accounts, less bills and your usual spending (
         <Money cents={dailyTotal(input.dailySpend)} whole /> a day).
       </p>
+      <p className="small">
+        <a className="edit-link" href="#/trends?view=ahead">
+          See the next few months
+        </a>
+      </p>
 
       {p.events.length > 0 && (
         <>

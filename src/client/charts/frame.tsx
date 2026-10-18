@@ -115,26 +115,39 @@ export function useActiveMonth(count: number, initial: number) {
   };
 }
 
-/** Recessive grid, y ticks in whole dollars, month labels (single letters on narrow charts). */
+/** Where a value sits on the plot (px from the SVG's top), for an axis from `min` (0, or below for cash) to `max`. */
+export function plotY(v: number, max: number, min = 0): number {
+  return LAYOUT.top + LAYOUT.plot - ((v - min) / (max - min || 1)) * LAYOUT.plot;
+}
+
+/**
+ * Recessive grid, y ticks in whole dollars, month labels (single letters on narrow charts). With `min` below
+ * 0 the zero line is the baseline and the months stay along the bottom.
+ */
 export function Axes({
   width,
   months,
   tickValues,
   max,
+  min = 0,
   partialIndex,
+  partialLabel = 'so far',
   active,
 }: {
   width: number;
   months: readonly MonthKey[];
   tickValues: number[];
   max: number;
+  min?: number;
   partialIndex?: number;
+  /** Under the current month's label: "so far" for the past, "rest" ahead. */
+  partialLabel?: string;
   active: number | null;
 }) {
   const { center, band } = bands(width, months.length);
   const narrow = width < NARROW;
-  const yOf = (v: number) => LAYOUT.top + LAYOUT.plot - (v / max) * LAYOUT.plot;
-  const baseline = LAYOUT.top + LAYOUT.plot;
+  const yOf = (v: number) => plotY(v, max, min);
+  const bottom = LAYOUT.top + LAYOUT.plot;
   return (
     <g aria-hidden="true">
       {active !== null && (
@@ -142,19 +155,19 @@ export function Axes({
       )}
       {tickValues.map((t) => (
         <g key={t}>
-          {t > 0 && <line className="chart-grid" x1={LAYOUT.left} x2={width - LAYOUT.right} y1={yOf(t)} y2={yOf(t)} />}
+          {t !== 0 && <line className="chart-grid" x1={LAYOUT.left} x2={width - LAYOUT.right} y1={yOf(t)} y2={yOf(t)} />}
           <text className="chart-tick chart-amount" x={LAYOUT.left - 6} y={yOf(t)} dy="0.32em" textAnchor="end">
             {dollarsShort(t)}
           </text>
         </g>
       ))}
-      <line className="chart-baseline" x1={LAYOUT.left} x2={width - LAYOUT.right} y1={baseline} y2={baseline} />
+      <line className="chart-baseline" x1={LAYOUT.left} x2={width - LAYOUT.right} y1={yOf(0)} y2={yOf(0)} />
       {months.map((m, i) => (
-        <text key={m} className={`chart-tick ${i === active ? 'active' : ''}`} x={center(i)} y={baseline + 16} textAnchor="middle">
+        <text key={m} className={`chart-tick ${i === active ? 'active' : ''}`} x={center(i)} y={bottom + 16} textAnchor="middle">
           {monthTick(m, narrow)}
           {i === partialIndex && (
             <tspan x={center(i)} dy="1.2em" className="chart-sofar">
-              so far
+              {partialLabel}
             </tspan>
           )}
         </text>

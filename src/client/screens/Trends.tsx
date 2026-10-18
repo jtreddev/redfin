@@ -3,19 +3,14 @@ import type { MonthKey } from '../../shared/dates';
 import { GROUP_ORDER, usualOf, type Change, type GroupKey } from '../../shared/trends';
 import { api } from '../api';
 import { Bars } from '../charts/Bars';
+import { GROUP_COLOR, useTableToggle } from '../charts/cards';
 import { StackedBars, type Series } from '../charts/StackedBars';
 import { monthLabel, monthShortLabel } from '../format';
-import { Icon } from '../icons';
-import { go } from '../router';
+import { go, replaceRoute, useRoute } from '../router';
 import { useApp, useLoad } from '../state';
 import type { TrendsResponse } from '../types';
-import { Button, Card, Empty, ErrorNote, Loading, Money, PageHeader } from '../ui';
-
-/** Each group's chart color: dataviz categorical slots 1–5, in the groups' fixed order. */
-const GROUP_COLOR: Record<GroupKey, string> = Object.fromEntries(GROUP_ORDER.map((g, i) => [g.key, `--series-${i + 1}`])) as Record<
-  GroupKey,
-  string
->;
+import { Button, Card, Empty, ErrorNote, Loading, Money, PageHeader, Segmented } from '../ui';
+import { MonthsAhead } from './MonthsAhead';
 
 const TILE_GROUPS: GroupKey[] = ['bills', 'everyday', 'habits'];
 
@@ -26,7 +21,29 @@ function visibleRange(t: TrendsResponse): number {
   return first < 0 ? 0 : first;
 }
 
+/** Trends: the months behind (Past) or ahead (#/trends?view=ahead). */
 export function Trends() {
+  const route = useRoute();
+  const view = route.params.get('view') === 'ahead' ? 'ahead' : 'past';
+  return (
+    <div className="stack trends">
+      <PageHeader title="Trends" subtitle={view === 'ahead' ? 'What the next months look like' : 'What the month costs, over time'} />
+      <div className="trends-view" role="group" aria-label="Show">
+        <Segmented
+          value={view}
+          onChange={(v) => replaceRoute('trends', v === 'ahead' ? 'view=ahead' : '')}
+          options={[
+            { value: 'past', label: 'Past' },
+            { value: 'ahead', label: 'Ahead' },
+          ]}
+        />
+      </div>
+      {view === 'ahead' ? <MonthsAhead /> : <PastTrends />}
+    </div>
+  );
+}
+
+function PastTrends() {
   const trends = useLoad(() => api<TrendsResponse>('/trends?months=12'), []);
 
   if (trends.error && !trends.data) return <ErrorNote message={trends.error} onRetry={() => void trends.reload()} />;
@@ -41,8 +58,7 @@ export function Trends() {
   const fullMonths = months.filter((m) => m < t.partialMonth).length;
 
   return (
-    <div className="stack trends">
-      <PageHeader title="Trends" subtitle="What the month costs, over time" />
+    <>
       <h2 className="sr-only">This month so far</h2>
       {fullMonths < 2 && (
         <Empty title="Trends fill in as history builds up">
@@ -74,7 +90,7 @@ export function Trends() {
         <CategoryCard t={t} months={months} slice={slice} partialIndex={partialIndex} />
         <ChangesCard t={t} />
       </div>
-    </div>
+    </>
   );
 }
 
@@ -83,19 +99,6 @@ interface ChartCardProps {
   months: MonthKey[];
   slice: (values: number[]) => number[];
   partialIndex: number;
-}
-
-/** A "Table" toggle for a chart card (the table is the accessible twin); pressed shows the table. */
-function useTableToggle(title: string) {
-  const [table, setTable] = useState(false);
-  const toggle = (
-    <Button small variant="ghost" pressed={table} className="table-toggle" onClick={() => setTable((v) => !v)}>
-      <Icon name="table" />
-      Table
-      <span className="sr-only"> view of {title}</span>
-    </Button>
-  );
-  return [table, toggle] as const;
 }
 
 function monthCell(month: MonthKey, partial: boolean) {
