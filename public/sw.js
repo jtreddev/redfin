@@ -1,13 +1,31 @@
 // App-shell service worker. Never caches /api (your data) or Cloudflare Access login pages.
 const CACHE = 'fin-shell-v2';
 
+/**
+ * Caches the app shell ('/') and the built files it loads, so the first offline launch after an update
+ * works (activating a new CACHE deletes the old one, shell included). Same guard as navigations: only a
+ * plain same-origin 200 that wasn't redirected, so a Cloudflare Access sign-in page is never cached; and
+ * only a page that is really the app (it has the #root mount). The shell goes in after its files.
+ */
+async function precacheShell(cache) {
+  const response = await fetch('/', { cache: 'no-store', credentials: 'same-origin' });
+  if (!(response.ok && response.type === 'basic' && !response.redirected)) return;
+  const html = await response.clone().text();
+  if (!html.includes('id="root"')) return;
+  const files = [...new Set(html.match(/\/assets\/[^"'\s>]+/g) ?? [])];
+  await cache.addAll(files);
+  await cache.put('/', response);
+}
+
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
-    caches
-      .open(CACHE)
-      .then((cache) => cache.addAll(['/manifest.webmanifest', '/icon.svg', '/fonts/PublicSans-Variable.woff2']))
-      .catch(() => undefined),
+    (async () => {
+      const cache = await caches.open(CACHE);
+      await cache.addAll(['/manifest.webmanifest', '/icon.svg', '/fonts/PublicSans-Variable.woff2']).catch(() => undefined);
+      // Best effort: without it, the shell is cached on the next online launch as before.
+      await precacheShell(cache).catch(() => undefined);
+    })(),
   );
 });
 
