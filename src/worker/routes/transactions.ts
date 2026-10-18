@@ -268,7 +268,9 @@ transactions.get('/transactions', async (c) => {
     where.push('ABS(t.amount_cents) <= ?');
     params.push(Math.min(...maxCents));
   }
-  if (q.ignored !== '1') where.push('t.is_ignored = 0');
+  // ignored=1 includes left-out charges; ignored=only lists just them.
+  if (q.ignored === 'only') where.push('t.is_ignored = 1');
+  else if (q.ignored !== '1') where.push('t.is_ignored = 0');
 
   const limit = Math.min(200, Math.max(1, Number(q.limit) || 100));
   const offset = Math.max(0, Number(q.offset) || 0);

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { monthOf, monthStart } from '../../shared/dates';
+import { rewriteCategoryIds } from '../../shared/activityQuery';
 import { findImportedTwin } from '../../shared/dedupe';
 import type { AppEnv } from '../env';
 import { all, batchAll, first, nowIso, run, stmt, Updates } from '../lib/db';
@@ -455,8 +456,26 @@ core.post('/categories/:id/merge', async (c) => {
       409,
     );
   }
+  // Saved searches are query strings (categoryId=3,5), not columns: re-point them in the same batch, everyone's.
+  const saved = await all<{ id: number; query: string }>(db, "SELECT id, query FROM saved_searches WHERE query LIKE '%categor%'");
+  const rewrites = saved
+    .map((s) => ({ id: s.id, query: rewriteCategoryIds(s.query, id, into.id) }))
+    .filter((s): s is { id: number; query: string } => s.query !== null);
+  const statements = mergeStatements(db, id, into, viewerId, nowIso());
+  if (rewrites.length) {
+    statements.push(
+      stmt(
+        db,
+        `UPDATE saved_searches SET query = (SELECT json_extract(j.value, '$.query') FROM json_each(?) j
+                                              WHERE json_extract(j.value, '$.id') = saved_searches.id)
+          WHERE id IN (SELECT json_extract(value, '$.id') FROM json_each(?))`,
+        JSON.stringify(rewrites),
+        JSON.stringify(rewrites),
+      ),
+    );
+  }
   try {
-    await db.batch(mergeStatements(db, id, into, viewerId, nowIso()));
+    await db.batch(statements);
   } catch (error) {
     throw uniqueName(error);
   }

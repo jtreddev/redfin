@@ -57,7 +57,8 @@ function mostCommon<T>(values: readonly T[]): T | null {
 const RECURRING_SELECT = `SELECT r.id, r.merchant, r.name, r.cadence, r.expected_amount_cents AS expectedAmountCents,
   r.last_date AS lastDate, r.next_date AS nextDate, r.category_id AS categoryId, c.name AS categoryName,
   r.account_id AS accountId, r.status, r.confidence, r.private_member_id AS privateMemberId
-  FROM recurring_bills r LEFT JOIN categories c ON c.id = r.category_id`;
+  FROM recurring_bills r LEFT JOIN categories c ON c.id = r.category_id
+  LEFT JOIN categories pc ON pc.id = c.parent_id`;
 
 /**
  * Bills, optionally searched (`q`: name, merchant, category, an amount or a size like ">50") and filtered
@@ -77,8 +78,9 @@ planning.get('/recurring', async (c) => {
   const search = parseSearch((c.req.query('q') ?? '').slice(0, 100));
   if (search.text) {
     const like = likeAnywhere(search.text.slice(0, 60));
-    const textMatch = `r.name LIKE ? ESCAPE '\\' OR r.merchant LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\'`;
-    params.push(like, like, like);
+    // A sub-category's bills are found by its parent's name too.
+    const textMatch = `r.name LIKE ? ESCAPE '\\' OR r.merchant LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\' OR pc.name LIKE ? ESCAPE '\\'`;
+    params.push(like, like, like, like);
     if (search.amount) {
       where.push(`(${textMatch} OR ABS(r.expected_amount_cents) BETWEEN ? AND ?)`);
       params.push(search.amount.minCents, search.amount.maxCents);
@@ -327,7 +329,8 @@ planning.patch('/recurring/:id', async (c) => {
     .set('name', optStr(body.name, 'name', 80) ?? undefined)
     .set('category_id', optInt(body.categoryId, 'categoryId', { min: 1 }))
     .set('expected_amount_cents', optInt(body.expectedAmountCents, 'expectedAmountCents'))
-    .set('next_date', optDate(body.nextDate, 'nextDate'));
+    .set('next_date', optDate(body.nextDate, 'nextDate'))
+    .set('cadence', oneOf(body.cadence, 'cadence', ['weekly', 'biweekly', 'monthly', 'quarterly', 'yearly'] as const));
   if (updates.empty) throw badRequest('Nothing to update');
   await run(db, `UPDATE recurring_bills SET ${updates.sets.join(', ')}, updated_at = ? WHERE id = ?`, ...updates.params, nowIso(), id);
   return c.json({ ok: true });
