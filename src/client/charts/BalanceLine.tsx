@@ -148,7 +148,7 @@ export function BalanceLine({
             title={dayTitle(activePoint.date, today)}
             interactive={focus.pinned}
             rows={rows}
-            note={cushion !== null && activePoint.balanceCents < cushion ? `Under your ${money(cushion, { whole: true })} cushion` : undefined}
+            note={cushion !== null && activePoint.balanceCents < cushion ? 'Under your cushion' : undefined}
           />
         )}
       </div>

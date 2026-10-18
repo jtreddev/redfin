@@ -32,7 +32,10 @@ forecast.get('/forecast', async (c) => {
   const household = c.get('household');
 
   const [cash, sources, received, planner, trendsInput] = await Promise.all([
-    first<{ total: number }>(db, `SELECT COALESCE(SUM(current_balance_cents), 0) AS total FROM accounts WHERE ${CASH_ACCOUNTS_WHERE}`),
+    first<{ total: number; counted: number }>(
+      db,
+      `SELECT COALESCE(SUM(current_balance_cents), 0) AS total, COUNT(current_balance_cents) AS counted FROM accounts WHERE ${CASH_ACCOUNTS_WHERE}`,
+    ),
     loadIncomeSources(db),
     all<{ sourceId: number; payDate: string }>(
       db,
@@ -59,13 +62,18 @@ forecast.get('/forecast', async (c) => {
   // This month's due-day lines, then recurring bills (every time they come up) to the last day. A payday
   // next month gets no due-day lines for next month: its budget may not exist yet (P6-R3).
   const bills = await upcomingBills(db, planner, today, viewer.memberId, { until: lastDate, repeat: true });
-  const events: ProjectionEvent[] = bills.map((b, i) => ({
-    id: `${b.source}-${i}`,
-    date: b.date,
-    name: b.name,
-    amountCents: b.amountCents,
-    kind: b.source === 'budget' ? 'budget' : 'bill',
-  }));
+  // Planned-cost set-asides stay in the account, so they aren't taken off (P6-R5): a due-day savings line
+  // counts only its hand part. Home says "before set-asides".
+  const setAside = new Map(planner.data.rows.filter((r) => r.plannedCostsCents > 0).map((r) => [r.categoryId, r.plannedCostsCents]));
+  const events: ProjectionEvent[] = bills
+    .map((b, i): ProjectionEvent => ({
+      id: `${b.source}-${i}`,
+      date: b.date,
+      name: b.name,
+      amountCents: b.source === 'budget' && b.categoryId !== null ? Math.max(0, b.amountCents - (setAside.get(b.categoryId) ?? 0)) : b.amountCents,
+      kind: b.source === 'budget' ? 'budget' : 'bill',
+    }))
+    .filter((e) => e.amountCents > 0);
 
   // Bills and Saving are left out: their money is in the events (P6-R4).
   const usual = buildTrends(trendsInput).usual;
@@ -83,7 +91,8 @@ forecast.get('/forecast', async (c) => {
     today,
     input,
     projection: projectToPayday(input),
-    // Planned-cost set-asides stay in the account, so they aren't taken off (P6-R5); Home says so.
-    hasSetAsides: planner.data.rows.some((r) => r.plannedCostsCents > 0),
+    hasSetAsides: setAside.size > 0,
+    // No cash account has a balance (e.g. only imported files): there's nothing to start from.
+    hasBalance: (cash?.counted ?? 0) > 0,
   });
 });

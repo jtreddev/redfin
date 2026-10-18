@@ -2,7 +2,7 @@ import { useId, useMemo, useState } from 'react';
 import { dailyTotal, projectToPayday, yearlyChangeCents, type Projection, type ProjectionInput, type WhatIf } from '../../shared/projection';
 import { api } from '../api';
 import { BalanceLine, dayTitle } from '../charts/BalanceLine';
-import { money, shortDate, weekdayDate } from '../format';
+import { shortDate, weekdayDate } from '../format';
 import { Icon } from '../icons';
 import { useApp, useLoad } from '../state';
 import { AmountInput, Button, Card, Money, Segmented } from '../ui';
@@ -13,6 +13,7 @@ export interface ForecastResponse {
   input: ProjectionInput;
   projection: Projection;
   hasSetAsides: boolean;
+  hasBalance: boolean;
 }
 
 /** How many bills show before "and N more". */
@@ -29,6 +30,14 @@ export function UntilPayday({ refresh }: { refresh: unknown }) {
   const [table, setTable] = useState(false);
   const f = forecast.data;
   if (!f) return null;
+  if (!f.hasBalance) {
+    return (
+      <Card className="until-payday">
+        <h2>Until payday</h2>
+        <p className="muted small">Connect a bank, or add a balance to a checking account, to see your cash day by day until payday.</p>
+      </Card>
+    );
+  }
   const { projection: p, input } = f;
   const cushion = input.lowBalanceCents;
   const title = p.payday ? `Payday ${weekdayDate(p.payday.date)}` : `Until ${weekdayDate(p.lastDate)}`;
@@ -63,7 +72,9 @@ export function UntilPayday({ refresh }: { refresh: unknown }) {
               <Money cents={p.freeCents} whole /> free to spend until then
             </>
           ) : (
-            <span className="tone-warn">Nothing free to spend until then: it dips under your {money(cushion, { whole: true })} cushion.</span>
+            <span className="tone-warn">
+              Nothing free to spend until then: it dips under your <Money cents={cushion} whole /> cushion.
+            </span>
           )}
         </p>
       )}

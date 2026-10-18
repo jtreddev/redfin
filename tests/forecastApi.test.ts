@@ -15,6 +15,7 @@ interface ForecastBody {
   input: ProjectionInput;
   projection: Projection;
   hasSetAsides: boolean;
+  hasBalance: boolean;
 }
 
 describe('GET /api/forecast', () => {
@@ -134,6 +135,23 @@ describe('GET /api/forecast', () => {
     expect(body.hasSetAsides).toBe(false);
   });
 
+  it('leaves planned-cost set-asides in the account', async () => {
+    const savings = category('Saving', "AND c.name = 'Savings & Planned Costs'");
+    await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: savings, budgetCents: 30000, timing: 'due_day', dueDay: 20 });
+    expect((await api(env, 'POST', '/planned-costs', { name: 'Car repairs', monthlyCents: 10000 })).status).toBe(201);
+    const body = await forecast();
+    expect(body.hasSetAsides).toBe(true);
+    expect(body.projection.events.find((e) => e.name === 'Savings & Planned Costs')?.amountCents).toBe(30000);
+  });
+
+  it('says when no cash account has a balance', async () => {
+    db.exec('UPDATE accounts SET current_balance_cents = NULL');
+    const body = await forecast();
+    expect(body.hasBalance).toBe(false);
+    db.exec('UPDATE accounts SET current_balance_cents = 100 WHERE id = 1');
+    expect((await forecast()).hasBalance).toBe(true);
+  });
+
   it('skips a payday whose deposit already came in', async () => {
     db.exec("INSERT INTO income_sources (id, name, net_pay_cents, frequency, anchor_date) VALUES (1, 'Weekly', 100000, 'weekly', '2026-10-02')");
     db.exec(
@@ -164,9 +182,30 @@ describe('GET /api/forecast', () => {
     }
     expect(Math.min(...runs)).toBeLessThan(5);
 
-    // The whole route, node:sqlite included (it runs in-process here, unlike D1), stays snappy too.
-    const start = performance.now();
-    await forecast();
-    expect(performance.now() - start).toBeLessThan(100);
+    // The whole route less its sqlite time (in-process here; I/O on D1, not CPU). Alone it measures about
+    // 5 ms; the bound leaves room for the rest of the suite running in parallel.
+    const proto = Object.getPrototypeOf(db.prepare('SELECT 1')) as { execute: (...a: unknown[]) => unknown };
+    const execute = proto.execute;
+    let sqlite = 0;
+    proto.execute = function (this: unknown, ...a: unknown[]) {
+      const t = performance.now();
+      try {
+        return execute.apply(this, a);
+      } finally {
+        sqlite += performance.now() - t;
+      }
+    };
+    try {
+      const totals: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        sqlite = 0;
+        const start = performance.now();
+        await forecast();
+        totals.push(performance.now() - start - sqlite);
+      }
+      expect(Math.min(...totals)).toBeLessThan(20);
+    } finally {
+      proto.execute = execute;
+    }
   });
 });
