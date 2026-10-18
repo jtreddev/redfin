@@ -132,9 +132,10 @@ the income source; personal-card defaults for private accounts still apply befor
 ### Data changes (migration 0003, same file)
 
 - `transactions.plaid_category_detailed TEXT` and `transactions.category_reason TEXT`.
-- `transactions.category_source` gains values `learned`, `bill`, `builtin`, `bank`.
-  SQLite CHECK constraints can't be altered in place, so the column constraint is relaxed by
-  rebuilding the table inside the migration (the standard SQLite 12-step table rebuild).
+- `transactions.category_source` keeps its values (`rule`, `user`, `auto`): learned rules
+  store `rule`; bills, built-in and bank layers store `auto`. Which layer decided is in
+  `category_reason`. (Decided while planning: avoids rebuilding the transactions table on the
+  live database, since SQLite can't alter a CHECK constraint in place.)
 - `rules.amount_min_cents INTEGER`, `rules.amount_max_cents INTEGER` (absolute cents, inclusive,
   null = no bound), `rules.learned INTEGER NOT NULL DEFAULT 0`.
 - `household.habit_cutoff_cents INTEGER NOT NULL DEFAULT 2500`.
