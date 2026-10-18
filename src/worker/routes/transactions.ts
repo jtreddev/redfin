@@ -257,6 +257,8 @@ transactions.patch('/transactions/:id', async (c) => {
   const row = await visibleTxn(db, paramId(c), viewer.memberId);
   const body = await readBody(c);
   const ctx = await loadIngestContext(db);
+  // A pick changes this charge only; "also file similar ones" is an explicit choice.
+  const alsoSimilar = optBool(body.alsoSimilar, 'alsoSimilar') ?? false;
 
   let k: Classification = {
     categoryId: row.categoryId,
@@ -307,7 +309,7 @@ transactions.patch('/transactions/:id', async (c) => {
   }
 
   // The charge's category before this fix, so Undo can put it back.
-  const beforeFix = body.categoryId !== undefined ? await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id) : null;
+  const beforeFix = body.categoryId !== undefined && alsoSimilar ? await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id) : null;
 
   const statements: D1PreparedStatement[] = [];
   const now = nowIso();
@@ -337,13 +339,14 @@ transactions.patch('/transactions/:id', async (c) => {
     if (amountCents) statements.push(stmt(db, 'UPDATE transactions SET amount_cents = ? WHERE id = ?', amountCents, row.id));
     if (name) statements.push(stmt(db, 'UPDATE transactions SET name = ? WHERE id = ?', name, row.id));
   }
-  if (!statements.length) throw badRequest('Nothing to update');
-  await batchAll(db, statements);
+  if (alsoSimilar && (k.categoryId === null || row.isSplit === 1)) throw badRequest('Pick a category first.');
+  if (!statements.length && !alsoSimilar) throw badRequest('Nothing to update');
+  if (statements.length) await batchAll(db, statements);
 
-  // A fix teaches a quiet rule and re-files similar charges; the app offers Undo.
+  // Asked for: teach a quiet rule and re-file similar charges; the app offers Undo.
   let move: { id: number; moved: number; merchant: string; categoryName: string } | null = null;
   const learnFrom = k.categoryId;
-  if (body.categoryId !== undefined && learnFrom !== null && (row.categoryId !== learnFrom || row.categorySource !== 'user')) {
+  if (alsoSimilar && learnFrom !== null) {
     const stored = await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id);
     const learned = stored ? await learnFromFix(db, ctx, viewer, stored, learnFrom, beforeFix ?? stored) : null;
     if (learned?.moveId) {

@@ -54,7 +54,8 @@ const row = (id: number) =>
   )[0]!;
 
 async function fix(id: number, categoryId: number | null, email = YOU): Promise<PatchBody> {
-  const res = await api(env, 'PATCH', `/transactions/${id}`, { categoryId }, email);
+  // A fix with "also file similar ones" ticked: the learn-and-refile path.
+  const res = await api(env, 'PATCH', `/transactions/${id}`, categoryId === null ? { categoryId } : { categoryId, alsoSimilar: true }, email);
   expect(res.status).toBe(200);
   return (await res.json()) as PatchBody;
 }
@@ -618,5 +619,66 @@ describe('rules screen and charge reasons', () => {
     expect(ruleRangeLabel(500, 2499)).toBe('$5–$25');
     expect(ruleRangeLabel(null, null)).toBeNull();
     expect(ruleRangeLabel(0, null)).toBeNull();
+  });
+});
+
+describe('one charge at a time by default', () => {
+  const patch = async (id: number, body: Record<string, unknown>, email = YOU) => {
+    const res = await api(env, 'PATCH', `/transactions/${id}`, body, email);
+    expect(res.status).toBe(200);
+    return (await res.json()) as PatchBody;
+  };
+
+  it('picking a category changes that charge only: no rule, no re-filing, no move', async () => {
+    const habits = cat('Habits');
+    const gas = cat('Gas');
+    const ids = [1, 2, 3].map(() => charge(4000, { categoryId: habits, source: 'auto' }));
+    const body = await patch(ids[0]!, { categoryId: gas });
+    expect(body.move).toBeNull();
+    expect(body.transaction?.categoryId).toBe(gas);
+    expect(row(ids[0]!)).toMatchObject({ category_id: gas, category_source: 'user' });
+    for (const id of ids.slice(1)) expect(row(id)).toMatchObject({ category_id: habits, category_source: 'auto' });
+    expect(learnedRules()).toEqual([]);
+    expect(db.rows('SELECT id FROM category_moves')).toEqual([]);
+  });
+
+  it('alsoSimilar: false is the same as leaving it out', async () => {
+    const ids = [charge(4000), charge(4000)];
+    const body = await patch(ids[0]!, { categoryId: cat('Gas'), alsoSimilar: false });
+    expect(body.move).toBeNull();
+    expect(row(ids[1]!).category_id).toBeNull();
+  });
+
+  it('ticking "also file" right after a one-off pick learns and re-files', async () => {
+    const gas = cat('Gas');
+    const ids = [charge(4000), charge(4000), charge(4000)];
+    await patch(ids[0]!, { categoryId: gas });
+    const body = await patch(ids[0]!, { categoryId: gas, alsoSimilar: true });
+    expect(body.move).toMatchObject({ moved: 2, merchant: 'SHELL', categoryName: 'Gas' });
+    expect(row(ids[1]!)).toMatchObject({ category_id: gas, category_source: 'rule' });
+    // Undo of "also file" leaves the one-off pick in place and puts the others back.
+    expect((await undo(body.move!.id)).status).toBe(200);
+    expect(row(ids[0]!)).toMatchObject({ category_id: gas, category_source: 'user' });
+    expect(row(ids[1]!).category_id).toBeNull();
+    expect(learnedRules()).toEqual([]);
+  });
+
+  it('alsoSimilar alone learns from the charge’s current category', async () => {
+    const gas = cat('Gas');
+    const ids = [charge(4000), charge(4000)];
+    await patch(ids[0]!, { categoryId: gas });
+    const body = await patch(ids[0]!, { alsoSimilar: true });
+    expect(body.move).toMatchObject({ moved: 1 });
+    expect(row(ids[1]!).category_id).toBe(gas);
+  });
+
+  it('alsoSimilar alone on an uncategorized charge is refused', async () => {
+    const res = await api(env, 'PATCH', `/transactions/${charge(4000)}`, { alsoSimilar: true });
+    expect(res.status).toBe(400);
+  });
+
+  it('alsoSimilar must be true or false', async () => {
+    const res = await api(env, 'PATCH', `/transactions/${charge(4000)}`, { categoryId: cat('Gas'), alsoSimilar: 'yes' });
+    expect(res.status).toBe(400);
   });
 });
