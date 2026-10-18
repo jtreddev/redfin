@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { monthEnd, monthStart } from '../../shared/dates';
 import { PRIVACY_SQL } from '../../shared/privacy';
+import { likeAnywhere, parseSearch } from '../../shared/search';
 import { GROUP_ORDER } from '../../shared/trends';
 import type { AppEnv } from '../env';
 import { all, allByIds, batchAll, first, nowIso, run, stmt, type Param } from '../lib/db';
@@ -21,11 +22,22 @@ import {
 } from '../lib/http';
 import { loadIngestContext, type IngestContext } from '../services/context';
 import { enforceFunMoney, insertTransactions, rederive, STORED_SELECT, type Classification, type StoredTxn } from '../services/ingest';
-import { learnFromFix, undoMove } from '../services/learn';
+import { findSimilar, learnFromFix, undoMove } from '../services/learn';
 
 export const transactions = new Hono<AppEnv>();
 
 const TRENDS_GROUP_SECTION = new Map<string, string>(GROUP_ORDER.map((g) => [g.key, g.section]));
+
+/** Most ids one filter or bulk change takes. */
+const MAX_FILTER_IDS = 100;
+
+/**
+ * The categories a category filter covers. Today that is just the ones picked; once categories have
+ * sub-categories (categories.parent_id, migration 0007), a parent's children belong here too.
+ */
+function expandCategoryIds(ids: number[]): number[] {
+  return [...new Set(ids)];
+}
 
 export const TXN_SELECT = `SELECT t.id, t.account_id AS accountId, a.name AS accountName, a.type AS accountType,
   a.institution, t.date, t.amount_cents AS amountCents, t.name, t.merchant_name AS merchantName, t.memo, t.pending,
@@ -106,6 +118,68 @@ function assertCategoryAllowed(ctx: IngestContext, categoryId: number | null, vi
   if (owner !== undefined && owner !== viewerId) throw new HttpError(403, 'That’s your partner’s fun money category.');
 }
 
+/** A hand change to how a charge is filed; absent fields stay as they are. */
+interface Edit {
+  categoryId?: number | null;
+  kidId?: number | null;
+  isPrivate?: boolean;
+  isIgnored?: boolean;
+}
+
+/** Reads and checks an edit from a request body (PATCH) or a bulk `set`. */
+function readEdit(ctx: IngestContext, body: Record<string, unknown>, viewerId: number): Edit {
+  const edit: Edit = {};
+  if (body.categoryId !== undefined) {
+    edit.categoryId = optInt(body.categoryId, 'categoryId', { min: 1 }) ?? null;
+    assertCategoryAllowed(ctx, edit.categoryId, viewerId);
+  }
+  if (body.kidId !== undefined) edit.kidId = optInt(body.kidId, 'kidId', { min: 1 }) ?? null;
+  if (body.isPrivate !== undefined) edit.isPrivate = optBool(body.isPrivate, 'isPrivate');
+  if (body.isIgnored !== undefined) edit.isIgnored = optBool(body.isIgnored, 'isIgnored');
+  return edit;
+}
+
+/**
+ * How a charge ends up filed after a hand edit: picked by hand ('user'), and fun money kept consistent
+ * (your private charges live in your fun money; leaving it makes them shared).
+ */
+function applyEdit(ctx: IngestContext, row: TxnRow, edit: Edit, viewerId: number): Classification {
+  let k: Classification = {
+    categoryId: row.categoryId,
+    categorySource: row.categorySource,
+    categoryReason: null,
+    ruleId: null,
+    kidId: row.kidId,
+    privateMemberId: row.privateMemberId,
+    isIgnored: row.isIgnored === 1,
+    incomeSourceId: row.incomeSourceId,
+    payDate: row.payDate,
+    normalizedMerchant: '',
+  };
+  if (!Object.keys(edit).length) return k;
+  const viewerFunCategory = ctx.funCategoryByMember.get(viewerId) ?? null;
+  if (edit.categoryId !== undefined) {
+    const categoryId = edit.categoryId;
+    k.categoryId = categoryId;
+    if (k.privateMemberId === viewerId && (categoryId === null || !ctx.funCategoryOwner.has(categoryId))) {
+      k.privateMemberId = null;
+    }
+  }
+  if (edit.kidId !== undefined) k.kidId = edit.kidId;
+  if (edit.isPrivate !== undefined) {
+    if (edit.isPrivate) {
+      k.privateMemberId = viewerId;
+      k.categoryId = viewerFunCategory;
+    } else {
+      k.privateMemberId = null;
+      if (k.categoryId !== null && k.categoryId === viewerFunCategory) k.categoryId = null;
+    }
+  }
+  if (edit.isIgnored !== undefined) k.isIgnored = edit.isIgnored;
+  k = enforceFunMoney(ctx, { ...k, categorySource: 'user' });
+  return k;
+}
+
 transactions.get('/transactions', async (c) => {
   const db = c.env.DB;
   const q = c.req.query();
@@ -130,12 +204,16 @@ transactions.get('/transactions', async (c) => {
     where.push('t.account_id = ?');
     params.push(reqInt(q.accountId, 'accountId'));
   }
-  if (q.categoryId) {
-    const id = reqInt(q.categoryId, 'categoryId');
+  const categoryIds = (c.req.queries('categoryId') ?? []).flatMap((v) => v.split(',')).filter((v) => v.trim() !== '');
+  if (categoryIds.length) {
+    if (categoryIds.length > MAX_FILTER_IDS) throw badRequest(`At most ${MAX_FILTER_IDS} categories at once.`);
+    // One bound list (D1 allows 100 parameters a statement), matched against the charge and its split parts.
     // A parent includes its sub-categories.
-    const ids = 'SELECT id FROM categories WHERE id = ? OR parent_id = ?';
-    where.push(`(t.category_id IN (${ids}) OR EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id AND s.category_id IN (${ids})))`);
-    params.push(id, id, id, id);
+    const list = JSON.stringify(expandCategoryIds(categoryIds.map((v) => reqInt(v.trim(), 'categoryId'))));
+    const inList =
+      'IN (SELECT id FROM categories WHERE id IN (SELECT value FROM json_each(?)) OR parent_id IN (SELECT value FROM json_each(?)))';
+    where.push(`(t.category_id ${inList} OR EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id AND s.category_id ${inList}))`);
+    params.push(list, list, list, list);
   }
   if (q.group) {
     // The Trends groups, counted the way Trends counts them: your private charges are your fun money.
@@ -162,25 +240,60 @@ transactions.get('/transactions', async (c) => {
     where.push('t.private_member_id = ?');
     params.push(viewer.memberId);
   }
-  if (q.q) {
-    const like = `%${q.q.replace(/[%_]/g, '').slice(0, 60)}%`;
-    where.push('(t.name LIKE ? OR t.merchant_name LIKE ? OR t.notes LIKE ?)');
-    params.push(like, like, like);
+  const search = parseSearch((q.q ?? '').slice(0, 100));
+  if (search.text) {
+    // Case-insensitive (LIKE, ASCII). The bank's description, merchant, notes, and the category (or split parts') name.
+    const like = likeAnywhere(search.text.slice(0, 60));
+    const textMatch = `t.name LIKE ? ESCAPE '\\' OR t.memo LIKE ? ESCAPE '\\' OR t.merchant_name LIKE ? ESCAPE '\\'
+      OR t.normalized_merchant LIKE ? ESCAPE '\\' OR t.notes LIKE ? ESCAPE '\\'
+      OR EXISTS (SELECT 1 FROM categories qc WHERE qc.id = t.category_id AND qc.name LIKE ? ESCAPE '\\')
+      OR EXISTS (SELECT 1 FROM splits qs JOIN categories qc ON qc.id = qs.category_id
+                  WHERE qs.transaction_id = t.id AND qc.name LIKE ? ESCAPE '\\')`;
+    params.push(like, like, like, like, like, like, like);
+    // A bare amount ("45", "$45.12") also finds charges of that size, money in or out.
+    if (search.amount) {
+      where.push(`(${textMatch} OR ABS(t.amount_cents) BETWEEN ? AND ?)`);
+      params.push(search.amount.minCents, search.amount.maxCents);
+    } else {
+      where.push(`(${textMatch})`);
+    }
+  }
+  const minCents = [search.minCents, q.minCents ? reqInt(q.minCents, 'minCents', { min: 0 }) : null].filter((v) => v !== null);
+  const maxCents = [search.maxCents, q.maxCents ? reqInt(q.maxCents, 'maxCents', { min: 0 }) : null].filter((v) => v !== null);
+  if (minCents.length) {
+    where.push('ABS(t.amount_cents) >= ?');
+    params.push(Math.max(...minCents));
+  }
+  if (maxCents.length) {
+    where.push('ABS(t.amount_cents) <= ?');
+    params.push(Math.min(...maxCents));
   }
   if (q.ignored !== '1') where.push('t.is_ignored = 0');
 
   const limit = Math.min(200, Math.max(1, Number(q.limit) || 100));
   const offset = Math.max(0, Number(q.offset) || 0);
-  const rows = await all<TxnRow>(
-    db,
-    `${TXN_SELECT} WHERE ${where.join(' AND ')} ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ?`,
-    ...params,
-    limit + 1,
-    offset,
-  );
+  const filter = where.join(' AND ');
+  // The page and the totals for the whole result, in one round trip.
+  const [pageResult, totalsResult] = await db.batch([
+    stmt(db, `${TXN_SELECT} WHERE ${filter} ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ?`, ...params, limit + 1, offset),
+    stmt(
+      db,
+      `SELECT COUNT(*) AS count,
+              COALESCE(SUM(CASE WHEN t.amount_cents < 0 THEN -t.amount_cents ELSE 0 END), 0) AS outCents,
+              COALESCE(SUM(CASE WHEN t.amount_cents > 0 THEN t.amount_cents ELSE 0 END), 0) AS inCents
+         FROM transactions t WHERE ${filter}`,
+      ...params,
+    ),
+  ]);
+  const rows = (pageResult?.results ?? []) as TxnRow[];
+  const totals = (totalsResult?.results?.[0] ?? { count: 0, outCents: 0, inCents: 0 }) as { count: number; outCents: number; inCents: number };
   const page = rows.slice(0, limit);
   const splits = await loadSplits(db, page.filter((r) => r.isSplit === 1).map((r) => r.id));
-  return c.json({ transactions: page.map((r) => toApi(r, splits)), hasMore: rows.length > limit });
+  return c.json({
+    transactions: page.map((r) => toApi(r, splits)),
+    hasMore: rows.length > limit,
+    totals: { count: totals.count, outCents: totals.outCents, inCents: totals.inCents },
+  });
 });
 
 transactions.get('/transactions/:id', async (c) => {
@@ -192,6 +305,25 @@ transactions.get('/transactions/:id', async (c) => {
     ? await first<TxnRow>(db, `${TXN_SELECT} WHERE t.id = ? AND ${PRIVACY_SQL}`, row.transferPairId, viewer.memberId)
     : null;
   return c.json({ ...toApi(row, splits), transferPair: pair ? toApi(pair) : null });
+});
+
+/**
+ * How many other charges "also file similar ones" would move if this charge went to `categoryId`
+ * (optional), and the merchant key it would learn. Read-only; the same matching as learning.
+ */
+transactions.get('/transactions/:id/similar', async (c) => {
+  const db = c.env.DB;
+  const viewer = c.get('viewer');
+  const row = await visibleTxn(db, paramId(c), viewer.memberId);
+  const raw = c.req.query('categoryId');
+  const categoryId = raw === undefined || raw === '' ? null : reqInt(raw, 'categoryId', { min: 1 });
+  const ctx = await loadIngestContext(db);
+  assertCategoryAllowed(ctx, categoryId, viewer.memberId);
+  // A split charge can't take a category, so "also file similar ones" has nothing to start from.
+  if (row.isSplit === 1) return c.json({ count: 0, merchant: '' });
+  const stored = await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id);
+  const found = stored ? await findSimilar(db, ctx, viewer, stored, categoryId) : null;
+  return c.json({ count: found?.ids.length ?? 0, merchant: found?.learned?.matchText ?? '' });
 });
 
 transactions.post('/transactions', async (c) => {
@@ -259,57 +391,16 @@ transactions.patch('/transactions/:id', async (c) => {
   const row = await visibleTxn(db, paramId(c), viewer.memberId);
   const body = await readBody(c);
   const ctx = await loadIngestContext(db);
+  // A pick changes this charge only; "also file similar ones" is an explicit choice.
+  const alsoSimilar = optBool(body.alsoSimilar, 'alsoSimilar') ?? false;
 
-  let k: Classification = {
-    categoryId: row.categoryId,
-    categorySource: row.categorySource,
-    categoryReason: null,
-    ruleId: null,
-    kidId: row.kidId,
-    privateMemberId: row.privateMemberId,
-    isIgnored: row.isIgnored === 1,
-    incomeSourceId: row.incomeSourceId,
-    payDate: row.payDate,
-    normalizedMerchant: '',
-  };
-  let classificationTouched = false;
-  const viewerFunCategory = ctx.funCategoryByMember.get(viewer.memberId) ?? null;
-
-  if (body.categoryId !== undefined) {
-    const categoryId = optInt(body.categoryId, 'categoryId', { min: 1 }) ?? null;
-    assertCategoryAllowed(ctx, categoryId, viewer.memberId);
-    if (row.isSplit === 1 && categoryId !== null) throw badRequest('Remove the split first.');
-    k.categoryId = categoryId;
-    if (k.privateMemberId === viewer.memberId && (categoryId === null || !ctx.funCategoryOwner.has(categoryId))) {
-      k.privateMemberId = null;
-    }
-    classificationTouched = true;
-  }
-  if (body.kidId !== undefined) {
-    k.kidId = optInt(body.kidId, 'kidId', { min: 1 }) ?? null;
-    classificationTouched = true;
-  }
-  if (body.isPrivate !== undefined) {
-    const isPrivate = optBool(body.isPrivate, 'isPrivate');
-    if (isPrivate) {
-      k.privateMemberId = viewer.memberId;
-      k.categoryId = viewerFunCategory;
-    } else {
-      k.privateMemberId = null;
-      if (k.categoryId !== null && k.categoryId === viewerFunCategory) k.categoryId = null;
-    }
-    classificationTouched = true;
-  }
-  if (body.isIgnored !== undefined) {
-    k.isIgnored = optBool(body.isIgnored, 'isIgnored') ?? false;
-    classificationTouched = true;
-  }
-  if (classificationTouched) {
-    k = enforceFunMoney(ctx, { ...k, categorySource: 'user' });
-  }
+  const edit = readEdit(ctx, body, viewer.memberId);
+  if (row.isSplit === 1 && edit.categoryId !== undefined && edit.categoryId !== null) throw badRequest('Remove the split first.');
+  const classificationTouched = Object.keys(edit).length > 0;
+  const k = applyEdit(ctx, row, edit, viewer.memberId);
 
   // The charge's category before this fix, so Undo can put it back.
-  const beforeFix = body.categoryId !== undefined ? await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id) : null;
+  const beforeFix = body.categoryId !== undefined && alsoSimilar ? await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id) : null;
 
   const statements: D1PreparedStatement[] = [];
   const now = nowIso();
@@ -339,13 +430,14 @@ transactions.patch('/transactions/:id', async (c) => {
     if (amountCents) statements.push(stmt(db, 'UPDATE transactions SET amount_cents = ? WHERE id = ?', amountCents, row.id));
     if (name) statements.push(stmt(db, 'UPDATE transactions SET name = ? WHERE id = ?', name, row.id));
   }
-  if (!statements.length) throw badRequest('Nothing to update');
-  await batchAll(db, statements);
+  if (alsoSimilar && (k.categoryId === null || row.isSplit === 1)) throw badRequest('Pick a category first.');
+  if (!statements.length && !alsoSimilar) throw badRequest('Nothing to update');
+  if (statements.length) await batchAll(db, statements);
 
-  // A fix teaches a quiet rule and re-files similar charges; the app offers Undo.
+  // Asked for: teach a quiet rule and re-file similar charges; the app offers Undo.
   let move: { id: number; moved: number; merchant: string; categoryName: string } | null = null;
   const learnFrom = k.categoryId;
-  if (body.categoryId !== undefined && learnFrom !== null && (row.categoryId !== learnFrom || row.categorySource !== 'user')) {
+  if (alsoSimilar && learnFrom !== null) {
     const stored = await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id);
     const learned = stored ? await learnFromFix(db, ctx, viewer, stored, learnFrom, beforeFix ?? stored) : null;
     if (learned?.moveId) {
@@ -357,6 +449,94 @@ transactions.patch('/transactions/:id', async (c) => {
   const updated = await visibleTxn(db, row.id, viewer.memberId).catch(() => null);
   const splits = updated ? await loadSplits(db, [row.id]) : [];
   return c.json({ transaction: updated ? toApi(updated, splits) : null, move });
+});
+
+/** Most charges one bulk change takes. */
+const MAX_BULK = 500;
+
+/**
+ * Bulk edit: the same hand change (category, kid, private, left out) on many charges, as one-offs
+ * (nothing is learned). Only charges the viewer can see are changed; split charges keep their parts
+ * when a category or privacy is set. One move records it all, so one Undo puts it back.
+ */
+transactions.post('/transactions/bulk', async (c) => {
+  const db = c.env.DB;
+  const viewer = c.get('viewer');
+  const body = await readBody(c);
+  if (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > MAX_BULK) {
+    throw badRequest(`ids must be a list of 1 to ${MAX_BULK} charges`);
+  }
+  const ids = [...new Set(body.ids.map((id, i) => reqInt(id, `ids[${i}]`, { min: 1 })))];
+  if (!body.set || typeof body.set !== 'object' || Array.isArray(body.set)) throw badRequest('set is required');
+  const ctx = await loadIngestContext(db);
+  const edit = readEdit(ctx, body.set as Record<string, unknown>, viewer.memberId);
+  if (!Object.keys(edit).length) throw badRequest('Nothing to change');
+  const filing = edit.categoryId !== undefined || edit.isPrivate !== undefined;
+  if (edit.categoryId != null && !(await first(db, 'SELECT 1 AS x FROM categories WHERE id = ?', edit.categoryId))) {
+    throw badRequest('No such category.');
+  }
+  if (edit.kidId != null && !(await first(db, 'SELECT 1 AS x FROM kids WHERE id = ?', edit.kidId))) throw badRequest('No such kid.');
+
+  // One bound list, whatever the size (D1 allows 100 parameters a statement).
+  const rows = await all<TxnRow>(
+    db,
+    `${TXN_SELECT} WHERE t.id IN (SELECT value FROM json_each(?)) AND t.deleted_at IS NULL AND ${PRIVACY_SQL}`,
+    JSON.stringify(ids),
+    viewer.memberId,
+  );
+  const changes = rows
+    .filter((row) => !(filing && row.isSplit === 1))
+    .map((row) => {
+      const k = applyEdit(ctx, row, edit, viewer.memberId);
+      return { id: row.id, c: k.categoryId, k: k.kidId, p: k.privateMemberId, i: k.isIgnored ? 1 : 0 };
+    });
+  if (!changes.length) return c.json({ updated: 0, skipped: ids.length, moveId: null });
+
+  const now = nowIso();
+  const payload = JSON.stringify(changes);
+  const field = (name: string) => `json_extract(j.value, '$.${name}')`;
+  // Re-checked inside the batch, so a charge made private or deleted, or split, since the read above is left alone.
+  const stillOk = (t: string) =>
+    `${t}.deleted_at IS NULL AND (${t}.private_member_id IS NULL OR ${t}.private_member_id = ?) AND NOT (? AND ${t}.is_split = 1)`;
+  // This request's move: the batch runs alone, so the newest bulk move of this person is the one just made.
+  const thisMove = `(SELECT MAX(id) FROM category_moves WHERE member_id = ? AND kind = 'bulk')`;
+  // Record, snapshot and change in one atomic batch. The changed charges carry the move's time in
+  // updated_at, which is how Undo knows a charge hasn't been touched since.
+  const [moveResult, , updateResult] = await db.batch([
+    stmt(db, `INSERT INTO category_moves (member_id, kind, created_at) VALUES (?, 'bulk', ?) RETURNING id`, viewer.memberId, now),
+    stmt(
+      db,
+      `INSERT INTO category_move_items (move_id, transaction_id, old_category_id, old_source, old_reason, old_rule_id,
+         old_kid_id, old_private_member_id, old_is_ignored, old_is_split, new_category_id, new_kid_id, new_private_member_id, new_is_ignored)
+       SELECT ${thisMove}, t.id, t.category_id, t.category_source, t.category_reason, t.rule_id, t.kid_id, t.private_member_id,
+              t.is_ignored, t.is_split, ${field('c')}, ${field('k')}, ${field('p')}, ${field('i')}
+         FROM json_each(?) j JOIN transactions t ON t.id = ${field('id')}
+        WHERE ${stillOk('t')}`,
+      viewer.memberId,
+      payload,
+      viewer.memberId,
+      filing ? 1 : 0,
+    ),
+    stmt(
+      db,
+      `UPDATE transactions SET category_id = ${field('c')}, category_source = 'user', category_reason = NULL, rule_id = NULL,
+         kid_id = ${field('k')}, private_member_id = ${field('p')}, is_ignored = ${field('i')}, updated_at = ?
+         FROM json_each(?) j WHERE transactions.id = ${field('id')} AND ${stillOk('transactions')}`,
+      now,
+      payload,
+      viewer.memberId,
+      filing ? 1 : 0,
+    ),
+    // Nothing left to change after all: no empty move to undo.
+    stmt(
+      db,
+      `DELETE FROM category_moves WHERE id = ${thisMove} AND NOT EXISTS (SELECT 1 FROM category_move_items i WHERE i.move_id = category_moves.id)`,
+      viewer.memberId,
+    ),
+  ]);
+  const updated = updateResult?.meta.changes ?? 0;
+  const moveId = updated ? ((moveResult?.results?.[0] as { id: number } | undefined)?.id ?? null) : null;
+  return c.json({ updated, skipped: ids.length - updated, moveId });
 });
 
 transactions.post('/category-moves/:id/undo', async (c) => {

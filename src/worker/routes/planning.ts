@@ -7,9 +7,10 @@ import { planPayoff } from '../../shared/debt';
 import { goalProgress } from '../../shared/goals';
 import { toCsv } from '../../shared/import/csv';
 import { PRIVACY_SQL } from '../../shared/privacy';
+import { likeAnywhere, parseSearch } from '../../shared/search';
 import { detectRecurring, guessCadence, median, nextOccurrence, sameBill, type Cadence } from '../../shared/recurring';
 import type { AppEnv } from '../env';
-import { all, batchAll, first, nowIso, run, stmt, Updates } from '../lib/db';
+import { all, batchAll, first, nowIso, run, stmt, Updates, type Param } from '../lib/db';
 import {
   badRequest,
   HttpError,
@@ -58,15 +59,48 @@ const RECURRING_SELECT = `SELECT r.id, r.merchant, r.name, r.cadence, r.expected
   r.account_id AS accountId, r.status, r.confidence, r.private_member_id AS privateMemberId
   FROM recurring_bills r LEFT JOIN categories c ON c.id = r.category_id`;
 
+/**
+ * Bills, optionally searched (`q`: name, merchant, category, an amount or a size like ">50") and filtered
+ * by `status` (suggested | confirmed | dismissed | all). Without a status, dismissed ones stay out
+ * unless `all=1`.
+ */
 planning.get('/recurring', async (c) => {
-  const includeDismissed = c.req.query('all') === '1';
+  const status = oneOf(c.req.query('status'), 'status', ['suggested', 'confirmed', 'dismissed', 'all'] as const);
+  const where = ['(r.private_member_id IS NULL OR r.private_member_id = ?)'];
+  const params: Param[] = [c.get('viewer').memberId];
+  if (status && status !== 'all') {
+    where.push('r.status = ?');
+    params.push(status);
+  } else if (!status && c.req.query('all') !== '1') {
+    where.push("r.status != 'dismissed'");
+  }
+  const search = parseSearch((c.req.query('q') ?? '').slice(0, 100));
+  if (search.text) {
+    const like = likeAnywhere(search.text.slice(0, 60));
+    const textMatch = `r.name LIKE ? ESCAPE '\\' OR r.merchant LIKE ? ESCAPE '\\' OR c.name LIKE ? ESCAPE '\\'`;
+    params.push(like, like, like);
+    if (search.amount) {
+      where.push(`(${textMatch} OR ABS(r.expected_amount_cents) BETWEEN ? AND ?)`);
+      params.push(search.amount.minCents, search.amount.maxCents);
+    } else {
+      where.push(`(${textMatch})`);
+    }
+  }
+  if (search.minCents !== null) {
+    where.push('ABS(r.expected_amount_cents) >= ?');
+    params.push(search.minCents);
+  }
+  if (search.maxCents !== null) {
+    where.push('ABS(r.expected_amount_cents) <= ?');
+    params.push(search.maxCents);
+  }
   return c.json(
     await all(
       c.env.DB,
       `${RECURRING_SELECT}
-        WHERE (r.private_member_id IS NULL OR r.private_member_id = ?) ${includeDismissed ? '' : "AND r.status != 'dismissed'"}
+        WHERE ${where.join(' AND ')}
         ORDER BY CASE r.status WHEN 'suggested' THEN 0 WHEN 'confirmed' THEN 1 ELSE 2 END, r.next_date`,
-      c.get('viewer').memberId,
+      ...params,
     ),
   );
 });

@@ -54,7 +54,8 @@ const row = (id: number) =>
   )[0]!;
 
 async function fix(id: number, categoryId: number | null, email = YOU): Promise<PatchBody> {
-  const res = await api(env, 'PATCH', `/transactions/${id}`, { categoryId }, email);
+  // A fix with "also file similar ones" ticked: the learn-and-refile path.
+  const res = await api(env, 'PATCH', `/transactions/${id}`, categoryId === null ? { categoryId } : { categoryId, alsoSimilar: true }, email);
   expect(res.status).toBe(200);
   return (await res.json()) as PatchBody;
 }
@@ -618,5 +619,170 @@ describe('rules screen and charge reasons', () => {
     expect(ruleRangeLabel(500, 2499)).toBe('$5–$25');
     expect(ruleRangeLabel(null, null)).toBeNull();
     expect(ruleRangeLabel(0, null)).toBeNull();
+  });
+});
+
+describe('one charge at a time by default', () => {
+  const patch = async (id: number, body: Record<string, unknown>, email = YOU) => {
+    const res = await api(env, 'PATCH', `/transactions/${id}`, body, email);
+    expect(res.status).toBe(200);
+    return (await res.json()) as PatchBody;
+  };
+
+  it('picking a category changes that charge only: no rule, no re-filing, no move', async () => {
+    const habits = cat('Habits');
+    const gas = cat('Gas');
+    const ids = [1, 2, 3].map(() => charge(4000, { categoryId: habits, source: 'auto' }));
+    const body = await patch(ids[0]!, { categoryId: gas });
+    expect(body.move).toBeNull();
+    expect(body.transaction?.categoryId).toBe(gas);
+    expect(row(ids[0]!)).toMatchObject({ category_id: gas, category_source: 'user' });
+    for (const id of ids.slice(1)) expect(row(id)).toMatchObject({ category_id: habits, category_source: 'auto' });
+    expect(learnedRules()).toEqual([]);
+    expect(db.rows('SELECT id FROM category_moves')).toEqual([]);
+  });
+
+  it('alsoSimilar: false is the same as leaving it out', async () => {
+    const ids = [charge(4000), charge(4000)];
+    const body = await patch(ids[0]!, { categoryId: cat('Gas'), alsoSimilar: false });
+    expect(body.move).toBeNull();
+    expect(row(ids[1]!).category_id).toBeNull();
+  });
+
+  it('ticking "also file" right after a one-off pick learns and re-files', async () => {
+    const gas = cat('Gas');
+    const ids = [charge(4000), charge(4000), charge(4000)];
+    await patch(ids[0]!, { categoryId: gas });
+    const body = await patch(ids[0]!, { categoryId: gas, alsoSimilar: true });
+    expect(body.move).toMatchObject({ moved: 2, merchant: 'SHELL', categoryName: 'Gas' });
+    expect(row(ids[1]!)).toMatchObject({ category_id: gas, category_source: 'rule' });
+    // Undo of "also file" leaves the one-off pick in place and puts the others back.
+    expect((await undo(body.move!.id)).status).toBe(200);
+    expect(row(ids[0]!)).toMatchObject({ category_id: gas, category_source: 'user' });
+    expect(row(ids[1]!).category_id).toBeNull();
+    expect(learnedRules()).toEqual([]);
+  });
+
+  it('alsoSimilar alone learns from the charge’s current category', async () => {
+    const gas = cat('Gas');
+    const ids = [charge(4000), charge(4000)];
+    await patch(ids[0]!, { categoryId: gas });
+    const body = await patch(ids[0]!, { alsoSimilar: true });
+    expect(body.move).toMatchObject({ moved: 1 });
+    expect(row(ids[1]!).category_id).toBe(gas);
+  });
+
+  it('alsoSimilar alone on an uncategorized charge is refused', async () => {
+    const res = await api(env, 'PATCH', `/transactions/${charge(4000)}`, { alsoSimilar: true });
+    expect(res.status).toBe(400);
+  });
+
+  it('alsoSimilar must be true or false', async () => {
+    const res = await api(env, 'PATCH', `/transactions/${charge(4000)}`, { categoryId: cat('Gas'), alsoSimilar: 'yes' });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('how many similar charges a fix would move (preview)', () => {
+  type Similar = { count: number; merchant: string };
+  const similar = async (id: number, categoryId: number | null, email = YOU): Promise<Similar> => {
+    const res = await api(env, 'GET', `/transactions/${id}/similar${categoryId === null ? '' : `?categoryId=${categoryId}`}`, undefined, email);
+    expect(res.status).toBe(200);
+    return (await res.json()) as Similar;
+  };
+  const byName = (name: string, cents: number) => {
+    db.exec(`INSERT INTO transactions (account_id, date, amount_cents, name, source) VALUES (1, '2026-10-01', ?, ?, 'plaid')`, -cents, name);
+    return db.rows<{ id: number }>('SELECT MAX(id) AS id FROM transactions')[0]!.id;
+  };
+  /** The preview, then the real fix: the counts must agree and the preview must change nothing. */
+  async function agrees(id: number, categoryId: number, expected: number, email = YOU) {
+    const before = db.rows('SELECT id, category_id, category_source FROM transactions ORDER BY id');
+    const preview = await similar(id, categoryId, email);
+    expect(preview.count).toBe(expected);
+    expect(db.rows('SELECT id, category_id, category_source FROM transactions ORDER BY id')).toEqual(before);
+    expect(learnedRules()).toEqual([]);
+    const body = await fix(id, categoryId, email);
+    expect(body.move?.moved ?? 0).toBe(expected);
+    if (body.move) expect(preview.merchant).toBe(body.move.merchant);
+    return preview;
+  }
+
+  it('gas under the cutoff counts small stops only', async () => {
+    const habits = cat('Habits');
+    const small = charge(675, { categoryId: habits, source: 'auto' });
+    charge(899, { categoryId: habits, source: 'auto' });
+    charge(4500, { categoryId: cat('Gas'), source: 'auto' });
+    charge(4500, { categoryId: habits, source: 'auto' });
+    const preview = await agrees(small, cat('Coffee & Fast Food'), 1);
+    expect(preview.merchant).toBe('SHELL');
+  });
+
+  it('gas over the cutoff counts fill-ups only, and not hand-set or split ones', async () => {
+    const habits = cat('Habits');
+    const tapped = charge(4000, { categoryId: habits, source: 'auto' });
+    charge(4000, { categoryId: habits, source: 'auto' });
+    charge(5000);
+    charge(800);
+    charge(4000, { categoryId: cat('Shopping'), source: 'user' });
+    const split = charge(4000);
+    db.exec('UPDATE transactions SET is_split = 1 WHERE id = ?', split);
+    charge(4000, { categoryId: cat('Gas'), source: 'auto' });
+    await agrees(tapped, cat('Gas'), 2);
+  });
+
+  it('whole words only', async () => {
+    charge(4000, { merchant: 'Shellfish Shack' });
+    charge(4000);
+    await agrees(charge(4000), cat('Gas'), 1);
+  });
+
+  it('a private fix counts only my own card’s charges', async () => {
+    const myCard = personalCard(you);
+    const habits = cat('Habits');
+    const tapped = charge(700, { categoryId: habits, source: 'auto' });
+    charge(700, { categoryId: habits, source: 'auto', account: myCard });
+    charge(700, { categoryId: habits, source: 'auto' });
+    await agrees(tapped, yourFun, 1);
+  });
+
+  it('a shared fix skips my personal-card charges and my partner’s private ones', async () => {
+    const myCard = personalCard(you);
+    const habits = cat('Habits');
+    const partnerFun = db.rows<{ id: number }>('SELECT id FROM categories WHERE fun_member_id = ?', partner)[0]!.id;
+    charge(4000, { categoryId: yourFun, source: 'auto', privateTo: you, account: myCard });
+    charge(4000, { categoryId: partnerFun, source: 'auto', privateTo: partner });
+    charge(4000, { categoryId: habits, source: 'auto' });
+    await agrees(charge(4000, { categoryId: habits, source: 'auto' }), cat('Gas'), 1);
+  });
+
+  it('a check or a generic key would move nothing', async () => {
+    byName('CHECK 1024', 8000);
+    expect(await similar(byName('CHECK 1023', 15000), cat('Childcare'))).toEqual({ count: 0, merchant: '' });
+    byName('ZELLE', 1500);
+    await agrees(byName('ZELLE', 1500), cat('Gifts'), 0);
+  });
+
+  it('charges already in the picked category don’t count; without a category every match counts', async () => {
+    const gas = cat('Gas');
+    charge(4000, { categoryId: gas, source: 'auto' });
+    charge(4000);
+    const tapped = charge(4000);
+    expect((await similar(tapped, null)).count).toBe(2);
+    await agrees(tapped, gas, 1);
+  });
+
+  it('a split charge would move nothing (it can’t take a category)', async () => {
+    charge(4000);
+    const split = charge(4000);
+    db.exec('UPDATE transactions SET is_split = 1 WHERE id = ?', split);
+    expect(await similar(split, cat('Gas'))).toEqual({ count: 0, merchant: '' });
+  });
+
+  it('can’t peek at a partner’s private charge, or preview into their fun money', async () => {
+    const partnerFun = db.rows<{ id: number }>('SELECT id FROM categories WHERE fun_member_id = ?', partner)[0]!.id;
+    const theirs = charge(700, { categoryId: partnerFun, source: 'auto', privateTo: partner });
+    expect((await api(env, 'GET', `/transactions/${theirs}/similar`, undefined, YOU)).status).toBe(404);
+    expect((await api(env, 'GET', `/transactions/${charge(700)}/similar?categoryId=${partnerFun}`, undefined, YOU)).status).toBe(403);
+    expect((await api(env, 'GET', `/transactions/${charge(700)}/similar?categoryId=abc`, undefined, YOU)).status).toBe(400);
   });
 });

@@ -124,7 +124,7 @@ export function TransactionSheet({
 
       {!t.isSplit && (
         <Field label="Category" hint={categoryHint(t)}>
-          <CategorySelect value={t.categoryId} onChange={(id) => void update({ categoryId: id })} />
+          <CategorySelect value={t.categoryId} onChange={(id) => void update(id === null ? { categoryId: id } : { categoryId: id, alsoSimilar: true })} />
         </Field>
       )}
 
