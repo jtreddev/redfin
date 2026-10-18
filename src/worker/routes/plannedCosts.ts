@@ -40,13 +40,41 @@ function defaultsHere(categories: readonly CategoryRow[]) {
   }));
 }
 
-const ONLY_ONCE = `EXISTS (SELECT 1 FROM household WHERE id = 1 AND planned_costs_seeded_at IS NULL)`;
+/**
+ * The amount and category rows for the cost inserted by the statement just before (in the same
+ * batch). They find it with last_insert_rowid(), and do nothing when that insert added no row.
+ */
+function costChildStatements(db: D1Database, month: MonthKey, monthlyCents: number, categoryIds: readonly number[]): D1PreparedStatement[] {
+  return [
+    stmt(
+      db,
+      `INSERT INTO planned_cost_amounts (planned_cost_id, month, monthly_cents) SELECT last_insert_rowid(), ?, ? WHERE changes() = 1`,
+      month,
+      monthlyCents,
+    ),
+    // Right after the amount row, last_insert_rowid() is that row's rowid.
+    ...(categoryIds.length
+      ? [
+          stmt(
+            db,
+            `INSERT INTO planned_cost_categories (planned_cost_id, category_id)
+             SELECT a.planned_cost_id, v.value FROM planned_cost_amounts a, json_each(?) v
+              WHERE a.rowid = last_insert_rowid() AND changes() = 1`,
+            JSON.stringify(categoryIds),
+          ),
+        ]
+      : []),
+  ];
+}
 
 /**
- * Creates the default costs (Car, Health, Holidays & gifts) in one atomic batch. Every insert is
- * guarded by the seeded flag, which is set last, so two loads at once can't both seed.
+ * Creates the default costs (Car, Health, Holidays & gifts) in one atomic batch. The batch first
+ * claims the seeded flag, which only works while it is unset and no cost exists (a POST may have
+ * landed since the GET looked). Each insert needs that claim, and the k-th default needs exactly k
+ * costs before it, so a second load that somehow got the same claim adds nothing.
+ * When the claim fails because costs exist, the flag is still set at the end: never seed later.
  */
-async function seedDefaults(
+export async function seedDefaults(
   db: D1Database,
   categories: readonly CategoryRow[],
   spend: SpendMap,
@@ -54,8 +82,18 @@ async function seedDefaults(
   month: MonthKey,
   anyCosts: boolean,
 ): Promise<void> {
+  const claim = nowIso();
   const statements: D1PreparedStatement[] = [];
   if (!anyCosts) {
+    statements.push(
+      stmt(
+        db,
+        `UPDATE household SET planned_costs_seeded_at = ?
+          WHERE id = 1 AND planned_costs_seeded_at IS NULL AND NOT EXISTS (SELECT 1 FROM planned_costs)`,
+        claim,
+      ),
+    );
+    let seeded = 0;
     defaultsHere(categories).forEach((d, i) => {
       const ids = d.categoryIds;
       if (!ids.length) return;
@@ -63,22 +101,24 @@ async function seedDefaults(
         months.length ? suggestMonthly(spendIn(spend, ids, months[0]!, months[months.length - 1]!), months.length) : null,
         d.fallbackMonthlyCents,
       );
-      const newest = '(SELECT MAX(id) FROM planned_costs)';
       statements.push(
-        stmt(db, `INSERT INTO planned_costs (name, start_month, sort) SELECT ?, ?, ? WHERE ${ONLY_ONCE}`, d.name, month, (i + 1) * 10),
         stmt(
           db,
-          `INSERT INTO planned_cost_amounts (planned_cost_id, month, monthly_cents) SELECT ${newest}, ?, ? WHERE ${ONLY_ONCE}`,
+          `INSERT INTO planned_costs (name, start_month, sort) SELECT ?, ?, ?
+            WHERE EXISTS (SELECT 1 FROM household WHERE id = 1 AND planned_costs_seeded_at = ?)
+              AND (SELECT COUNT(*) FROM planned_costs) = ?`,
+          d.name,
           month,
-          suggested ?? d.fallbackMonthlyCents,
+          (i + 1) * 10,
+          claim,
+          seeded,
         ),
-        ...ids.map((id) =>
-          stmt(db, `INSERT OR IGNORE INTO planned_cost_categories (planned_cost_id, category_id) SELECT ${newest}, ? WHERE ${ONLY_ONCE}`, id),
-        ),
+        ...costChildStatements(db, month, suggested ?? d.fallbackMonthlyCents, ids),
       );
+      seeded += 1;
     });
   }
-  statements.push(stmt(db, 'UPDATE household SET planned_costs_seeded_at = ? WHERE id = 1 AND planned_costs_seeded_at IS NULL', nowIso()));
+  statements.push(stmt(db, 'UPDATE household SET planned_costs_seeded_at = ? WHERE id = 1 AND planned_costs_seeded_at IS NULL', claim));
   await db.batch(statements);
 }
 
@@ -173,37 +213,38 @@ async function validCategoryIds(db: D1Database, value: unknown, costId: number |
   for (const id of ids) {
     const category = categories.find((cat) => cat.id === id);
     if (!category) throw badRequest('That category doesn’t exist.');
+    const link = links.find((l) => l.categoryId === id);
+    // Already in this cost: keep it, even if it has since been archived.
+    if (link && link.costId === costId) continue;
+    if (link) throw new HttpError(409, `${category.name} is already part of ${link.costName}.`);
     if (category.funMemberId != null) throw badRequest('Fun Money can’t be part of a planned cost.');
     if (!isEligible(category)) throw badRequest(`${category.name} can’t be part of a planned cost.`);
-    const link = links.find((l) => l.categoryId === id);
-    if (link && link.costId !== costId) throw new HttpError(409, `${category.name} is already part of ${link.costName}.`);
   }
   return ids;
 }
 
-/** A start month from a year ago through this month. */
-function validStartMonth(value: unknown, month: MonthKey): MonthKey {
+/** A start month from a year ago through this month (or the one already stored, however old). */
+function validStartMonth(value: unknown, month: MonthKey, stored: MonthKey | null = null): MonthKey {
   const start = reqMonth(value, 'startMonth');
+  if (start === stored) return start;
   if (start > month || start < addMonths(month, -12)) throw badRequest('Pick a start month in the last year.');
   return start;
 }
+
+export const isUniqueViolation = (error: unknown) => error instanceof Error && /UNIQUE constraint failed/i.test(error.message);
 
 /** Another cost took one of the categories between the check and the write. */
 async function linkingCategories<T>(write: Promise<T>): Promise<T> {
   try {
     return await write;
   } catch (error) {
-    if (error instanceof Error && /UNIQUE|constraint/i.test(error.message)) {
+    if (isUniqueViolation(error)) {
       throw new HttpError(409, 'One of those categories is already part of another planned cost.');
     }
     throw error;
   }
 }
 
-const linkStatement = (db: D1Database, costId: number | null, categoryId: number) =>
-  costId === null
-    ? stmt(db, 'INSERT INTO planned_cost_categories (planned_cost_id, category_id) VALUES ((SELECT MAX(id) FROM planned_costs), ?)', categoryId)
-    : stmt(db, 'INSERT INTO planned_cost_categories (planned_cost_id, category_id) VALUES (?, ?)', costId, categoryId);
 
 plannedCosts.post('/planned-costs', async (c) => {
   const db = c.env.DB;
@@ -226,13 +267,7 @@ plannedCosts.post('/planned-costs', async (c) => {
         startMonth,
         startBalanceCents,
       ),
-      stmt(
-        db,
-        'INSERT INTO planned_cost_amounts (planned_cost_id, month, monthly_cents) VALUES ((SELECT MAX(id) FROM planned_costs), ?, ?)',
-        startMonth,
-        monthlyCents,
-      ),
-      ...categoryIds.map((id) => linkStatement(db, null, id)),
+      ...costChildStatements(db, startMonth, monthlyCents, categoryIds),
     ]),
   );
   return c.json({ id: results[0]!.meta.last_row_id }, 201);
@@ -243,12 +278,12 @@ plannedCosts.patch('/planned-costs/:id', async (c) => {
   const id = paramId(c);
   const month = monthOf(c.get('today'));
   const body = await readBody(c);
-  const exists = await first<{ id: number }>(db, 'SELECT id FROM planned_costs WHERE id = ?', id);
+  const exists = await first<{ startMonth: MonthKey }>(db, 'SELECT start_month AS startMonth FROM planned_costs WHERE id = ?', id);
   if (!exists) throw notFound();
 
   const updates = new Updates()
     .set('name', body.name === undefined ? undefined : reqStr(body.name, 'name', 60))
-    .set('start_month', body.startMonth === undefined ? undefined : validStartMonth(body.startMonth, month))
+    .set('start_month', body.startMonth === undefined ? undefined : validStartMonth(body.startMonth, month, exists.startMonth))
     .set('start_balance_cents', optInt(body.startBalanceCents, 'startBalanceCents') ?? undefined);
   const monthlyCents = body.monthlyCents === undefined ? undefined : reqInt(body.monthlyCents, 'monthlyCents', { min: 0 });
   const categoryIds = body.categoryIds === undefined ? undefined : await validCategoryIds(db, body.categoryIds, id);
@@ -273,7 +308,11 @@ plannedCosts.patch('/planned-costs/:id', async (c) => {
   }
   if (categoryIds !== undefined) {
     statements.push(stmt(db, 'DELETE FROM planned_cost_categories WHERE planned_cost_id = ?', id));
-    statements.push(...categoryIds.map((categoryId) => linkStatement(db, id, categoryId)));
+    statements.push(
+      ...categoryIds.map((categoryId) =>
+        stmt(db, 'INSERT INTO planned_cost_categories (planned_cost_id, category_id) VALUES (?, ?)', id, categoryId),
+      ),
+    );
   }
   await linkingCategories(db.batch(statements));
   return c.json({ ok: true });

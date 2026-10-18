@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Env } from '../src/worker/env';
+import { isUniqueViolation, seedDefaults } from '../src/worker/routes/plannedCosts';
+import { loadCategories } from '../src/worker/services/context';
 import { api } from './helpers/api';
 import { TestD1 } from './helpers/d1';
 import { testEnv } from './helpers/plaid';
@@ -248,6 +250,64 @@ describe('planned costs API', () => {
       expect((await api(env, 'PATCH', `/planned-costs/${(await list()).costs[0]!.id}`, {})).status).toBe(400);
       expect((await api(env, 'DELETE', '/planned-costs/999')).status).toBe(404);
     });
+  });
+
+  describe('saving a cost back unchanged', () => {
+    it('accepts its stored start month even when it is more than a year old', async () => {
+      const car = byName(await list(), 'Car');
+      db.exec("UPDATE planned_costs SET start_month = '2025-06' WHERE id = ?", car.id);
+      const res = await api(env, 'PATCH', `/planned-costs/${car.id}`, { name: 'Car', startMonth: '2025-06', categoryIds: car.categoryIds });
+      expect(res.status).toBe(200);
+      expect((await api(env, 'PATCH', `/planned-costs/${car.id}`, { startMonth: '2025-05' })).status).toBe(400);
+    });
+
+    it('keeps a linked category that has since been archived', async () => {
+      const body = await list();
+      const car = byName(body, 'Car');
+      db.exec('UPDATE categories SET archived = 1 WHERE id = ?', car.categoryIds[0]!);
+      expect((await api(env, 'PATCH', `/planned-costs/${car.id}`, { name: 'Car', categoryIds: car.categoryIds })).status).toBe(200);
+      expect(byName(await list(), 'Car').categoryIds).toEqual(car.categoryIds);
+      // Another cost still can't take it.
+      const health = byName(body, 'Health');
+      expect((await api(env, 'PATCH', `/planned-costs/${health.id}`, { categoryIds: car.categoryIds })).status).toBe(409);
+    });
+  });
+
+  it('never reuses the id of a deleted cost, and links categories to the new one', async () => {
+    await list();
+    const shopping = category('Fun & Wants', 'Shopping');
+    const first = (await (await api(env, 'POST', '/planned-costs', { name: 'A', monthlyCents: 100 })).json()) as { id: number };
+    await api(env, 'DELETE', `/planned-costs/${first.id}`);
+    const second = (await (await api(env, 'POST', '/planned-costs', { name: 'B', monthlyCents: 200, categoryIds: [shopping] })).json()) as { id: number };
+    expect(second.id).not.toBe(first.id);
+    expect(db.rows('SELECT planned_cost_id AS id, category_id AS cat FROM planned_cost_categories WHERE category_id = ?', shopping)).toEqual([
+      { id: second.id, cat: shopping },
+    ]);
+    expect(db.rows('SELECT monthly_cents AS cents FROM planned_cost_amounts WHERE planned_cost_id = ?', second.id)).toEqual([{ cents: 200 }]);
+  });
+
+  it('does not seed defaults beside a cost added while seeding', async () => {
+    // A POST lands after the GET read "no costs" but before its seeding batch runs.
+    await api(env, 'POST', '/planned-costs', { name: 'Mine', monthlyCents: 100 });
+    await seedDefaults(env.DB, await loadCategories(env.DB), new Map(), [], '2026-10', false);
+    expect(db.rows<{ name: string }>('SELECT name FROM planned_costs').map((r) => r.name)).toEqual(['Mine']);
+    expect(db.rows('SELECT COUNT(*) AS n FROM planned_cost_amounts')).toEqual([{ n: 1 }]);
+    expect(db.rows('SELECT COUNT(*) AS n FROM planned_cost_categories')).toEqual([{ n: 0 }]);
+    expect(db.rows('SELECT planned_costs_seeded_at AS at FROM household')[0]).toMatchObject({ at: expect.any(String) });
+  });
+
+  it('turns only unique-constraint failures into a conflict', () => {
+    expect(isUniqueViolation(new Error('D1_ERROR: UNIQUE constraint failed: planned_cost_categories.category_id: SQLITE_CONSTRAINT'))).toBe(true);
+    expect(isUniqueViolation(new Error('FOREIGN KEY constraint failed'))).toBe(false);
+    expect(isUniqueViolation(new Error('NOT NULL constraint failed: planned_costs.name'))).toBe(false);
+  });
+
+  it('is in the JSON export', async () => {
+    await list();
+    const body = (await (await api(env, 'GET', '/export/json')).json()) as Record<string, unknown[]>;
+    expect(body.plannedCosts).toHaveLength(3);
+    expect(body.plannedCostAmounts).toHaveLength(3);
+    expect(body.plannedCostCategories).toHaveLength(3);
   });
 
   it('counts spending since a start month older than a year (splits, refunds, ignored)', async () => {

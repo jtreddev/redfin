@@ -1,7 +1,8 @@
 -- Planned costs (sinking funds): a monthly set-aside for lumpy costs, tracked as a running balance.
 
 CREATE TABLE planned_costs (
-  id INTEGER PRIMARY KEY,
+  -- AUTOINCREMENT: a deleted cost's id is never handed to a new one.
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   -- 'YYYY-MM'; the start month's set-aside counts.
   start_month TEXT NOT NULL,
