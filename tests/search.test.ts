@@ -311,6 +311,62 @@ describe('changing many charges at once', () => {
     expect((await undo(res.moveId!)).status).toBe(404);
   });
 
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+  it('Undo leaves a charge split since alone', async () => {
+    const shopping = cat('Shopping');
+    const a = add({ name: 'COSTCO', cents: -9000, categoryId: shopping });
+    const b = add({ name: 'TARGET', cents: -2000, categoryId: shopping });
+    // Clearing the category: a later split also leaves it empty, so only a split guard tells them apart.
+    const res = await bulk({ ids: [a, b], set: { categoryId: null } });
+    await tick();
+    const split = await api(env, 'PUT', `/transactions/${a}/splits`, {
+      splits: [
+        { categoryId: cat('Groceries'), amountCents: -4000 },
+        { categoryId: shopping, amountCents: -5000 },
+      ],
+    });
+    expect(split.status).toBe(200);
+    const after = state(a);
+    expect(((await (await undo(res.moveId!)).json()) as { restored: number }).restored).toBe(1);
+    expect(state(a)).toEqual(after);
+    expect(state(a).category_id).toBeNull();
+    expect(db.rows<{ is_split: number }>('SELECT is_split FROM transactions WHERE id = ?', a)[0]!.is_split).toBe(1);
+    expect(state(b).category_id).toBe(shopping);
+  });
+
+  it('Undo leaves a charge re-picked by hand since, even to the same values', async () => {
+    const shopping = cat('Shopping');
+    const gifts = cat('Gifts');
+    const a = add({ name: 'TARGET', cents: -2000, categoryId: shopping });
+    const b = add({ name: 'AMAZON', cents: -3000, categoryId: shopping });
+    const res = await bulk({ ids: [a, b], set: { categoryId: gifts } });
+    await tick();
+    expect((await api(env, 'PATCH', `/transactions/${a}`, { categoryId: gifts })).status).toBe(200);
+    expect(((await (await undo(res.moveId!)).json()) as { restored: number }).restored).toBe(1);
+    expect(state(a)).toMatchObject({ category_id: gifts, category_source: 'user' });
+    expect(state(b)).toMatchObject({ category_id: shopping, category_source: 'auto' });
+  });
+
+  it('a kid-only change on an already-split charge undoes fine', async () => {
+    const k = kid();
+    const split = add({ name: 'COSTCO', cents: -9000 });
+    db.exec('UPDATE transactions SET is_split = 1 WHERE id = ?', split);
+    const before = state(split);
+    const res = await bulk({ ids: [split], set: { kidId: k, isIgnored: true } });
+    expect(state(split)).toMatchObject({ kid_id: k, is_ignored: 1 });
+    expect(((await (await undo(res.moveId!)).json()) as { restored: number }).restored).toBe(1);
+    expect(state(split)).toEqual(before);
+  });
+
+  it('refuses a category or kid that doesn’t exist, and records nothing', async () => {
+    const id = add({ name: 'X', cents: -100 });
+    expect((await api(env, 'POST', '/transactions/bulk', { ids: [id], set: { categoryId: 999999 } })).status).toBe(400);
+    expect((await api(env, 'POST', '/transactions/bulk', { ids: [id], set: { kidId: 999999 } })).status).toBe(400);
+    expect(db.rows('SELECT id FROM category_moves')).toEqual([]);
+    expect(state(id)).toMatchObject({ category_id: null, kid_id: null, category_source: null });
+  });
+
   it('refuses bad requests', async () => {
     const id = add({ name: 'X', cents: -100 });
     const post = (body: unknown) => api(env, 'POST', '/transactions/bulk', body);

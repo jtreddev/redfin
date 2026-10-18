@@ -317,6 +317,8 @@ transactions.get('/transactions/:id/similar', async (c) => {
   const categoryId = raw === undefined || raw === '' ? null : reqInt(raw, 'categoryId', { min: 1 });
   const ctx = await loadIngestContext(db);
   assertCategoryAllowed(ctx, categoryId, viewer.memberId);
+  // A split charge can't take a category, so "also file similar ones" has nothing to start from.
+  if (row.isSplit === 1) return c.json({ count: 0, merchant: '' });
   const stored = await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id);
   const found = stored ? await findSimilar(db, ctx, viewer, stored, categoryId) : null;
   return c.json({ count: found?.ids.length ?? 0, merchant: found?.learned?.matchText ?? '' });
@@ -468,6 +470,10 @@ transactions.post('/transactions/bulk', async (c) => {
   const edit = readEdit(ctx, body.set as Record<string, unknown>, viewer.memberId);
   if (!Object.keys(edit).length) throw badRequest('Nothing to change');
   const filing = edit.categoryId !== undefined || edit.isPrivate !== undefined;
+  if (edit.categoryId != null && !(await first(db, 'SELECT 1 AS x FROM categories WHERE id = ?', edit.categoryId))) {
+    throw badRequest('No such category.');
+  }
+  if (edit.kidId != null && !(await first(db, 'SELECT 1 AS x FROM kids WHERE id = ?', edit.kidId))) throw badRequest('No such kid.');
 
   // One bound list, whatever the size (D1 allows 100 parameters a statement).
   const rows = await all<TxnRow>(
@@ -482,41 +488,53 @@ transactions.post('/transactions/bulk', async (c) => {
       const k = applyEdit(ctx, row, edit, viewer.memberId);
       return { id: row.id, c: k.categoryId, k: k.kidId, p: k.privateMemberId, i: k.isIgnored ? 1 : 0 };
     });
-  const skipped = ids.length - changes.length;
-  if (!changes.length) return c.json({ updated: 0, skipped, moveId: null });
+  if (!changes.length) return c.json({ updated: 0, skipped: ids.length, moveId: null });
 
   const now = nowIso();
-  const move = await first<{ id: number }>(
-    db,
-    `INSERT INTO category_moves (member_id, kind, created_at) VALUES (?, 'bulk', ?) RETURNING id`,
-    viewer.memberId,
-    now,
-  );
-  if (!move) throw new Error('Could not record the change');
   const payload = JSON.stringify(changes);
   const field = (name: string) => `json_extract(j.value, '$.${name}')`;
-  // Snapshot and change in one atomic batch.
-  await db.batch([
+  // Re-checked inside the batch, so a charge made private or deleted, or split, since the read above is left alone.
+  const stillOk = (t: string) =>
+    `${t}.deleted_at IS NULL AND (${t}.private_member_id IS NULL OR ${t}.private_member_id = ?) AND NOT (? AND ${t}.is_split = 1)`;
+  // This request's move: the batch runs alone, so the newest bulk move of this person is the one just made.
+  const thisMove = `(SELECT MAX(id) FROM category_moves WHERE member_id = ? AND kind = 'bulk')`;
+  // Record, snapshot and change in one atomic batch. The changed charges carry the move's time in
+  // updated_at, which is how Undo knows a charge hasn't been touched since.
+  const [moveResult, , updateResult] = await db.batch([
+    stmt(db, `INSERT INTO category_moves (member_id, kind, created_at) VALUES (?, 'bulk', ?) RETURNING id`, viewer.memberId, now),
     stmt(
       db,
       `INSERT INTO category_move_items (move_id, transaction_id, old_category_id, old_source, old_reason, old_rule_id,
-         old_kid_id, old_private_member_id, old_is_ignored, new_category_id, new_kid_id, new_private_member_id, new_is_ignored)
-       SELECT ?, t.id, t.category_id, t.category_source, t.category_reason, t.rule_id, t.kid_id, t.private_member_id, t.is_ignored,
-              ${field('c')}, ${field('k')}, ${field('p')}, ${field('i')}
-         FROM json_each(?) j JOIN transactions t ON t.id = ${field('id')}`,
-      move.id,
+         old_kid_id, old_private_member_id, old_is_ignored, old_is_split, new_category_id, new_kid_id, new_private_member_id, new_is_ignored)
+       SELECT ${thisMove}, t.id, t.category_id, t.category_source, t.category_reason, t.rule_id, t.kid_id, t.private_member_id,
+              t.is_ignored, t.is_split, ${field('c')}, ${field('k')}, ${field('p')}, ${field('i')}
+         FROM json_each(?) j JOIN transactions t ON t.id = ${field('id')}
+        WHERE ${stillOk('t')}`,
+      viewer.memberId,
       payload,
+      viewer.memberId,
+      filing ? 1 : 0,
     ),
     stmt(
       db,
       `UPDATE transactions SET category_id = ${field('c')}, category_source = 'user', category_reason = NULL, rule_id = NULL,
          kid_id = ${field('k')}, private_member_id = ${field('p')}, is_ignored = ${field('i')}, updated_at = ?
-         FROM json_each(?) j WHERE transactions.id = ${field('id')}`,
+         FROM json_each(?) j WHERE transactions.id = ${field('id')} AND ${stillOk('transactions')}`,
       now,
       payload,
+      viewer.memberId,
+      filing ? 1 : 0,
+    ),
+    // Nothing left to change after all: no empty move to undo.
+    stmt(
+      db,
+      `DELETE FROM category_moves WHERE id = ${thisMove} AND NOT EXISTS (SELECT 1 FROM category_move_items i WHERE i.move_id = category_moves.id)`,
+      viewer.memberId,
     ),
   ]);
-  return c.json({ updated: changes.length, skipped, moveId: move.id });
+  const updated = updateResult?.meta.changes ?? 0;
+  const moveId = updated ? ((moveResult?.results?.[0] as { id: number } | undefined)?.id ?? null) : null;
+  return c.json({ updated, skipped: ids.length - updated, moveId });
 });
 
 transactions.post('/category-moves/:id/undo', async (c) => {

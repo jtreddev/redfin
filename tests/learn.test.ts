@@ -771,6 +771,13 @@ describe('how many similar charges a fix would move (preview)', () => {
     await agrees(tapped, gas, 1);
   });
 
+  it('a split charge would move nothing (it can’t take a category)', async () => {
+    charge(4000);
+    const split = charge(4000);
+    db.exec('UPDATE transactions SET is_split = 1 WHERE id = ?', split);
+    expect(await similar(split, cat('Gas'))).toEqual({ count: 0, merchant: '' });
+  });
+
   it('can’t peek at a partner’s private charge, or preview into their fun money', async () => {
     const partnerFun = db.rows<{ id: number }>('SELECT id FROM categories WHERE fun_member_id = ?', partner)[0]!.id;
     const theirs = charge(700, { categoryId: partnerFun, source: 'auto', privateTo: partner });

@@ -389,8 +389,9 @@ export async function undoMove(db: D1Database, viewer: Viewer, moveId: number): 
 }
 
 /**
- * Puts back a bulk change: every charge still exactly as the change left it (picked by hand, same
- * category, kid, privacy and "left out") gets its old values back; charges changed since are left alone.
+ * Puts back a bulk change: every charge untouched since (its updated_at is still the change's time, it
+ * hasn't been split or un-split, and it still holds what the change set) gets its old values back.
+ * Charges changed since in any way, even back to the same values, are left alone.
  */
 async function undoBulk(db: D1Database, moveId: number): Promise<{ restored: number }> {
   const [restore] = await db.batch([
@@ -404,6 +405,8 @@ async function undoBulk(db: D1Database, moveId: number): Promise<{ restored: num
          is_ignored = i.old_is_ignored, updated_at = ?
          FROM category_move_items i
         WHERE i.move_id = ? AND i.transaction_id = transactions.id
+          AND transactions.updated_at IS (SELECT m.created_at FROM category_moves m WHERE m.id = i.move_id)
+          AND transactions.is_split IS i.old_is_split
           AND transactions.category_source IS 'user' AND transactions.category_id IS i.new_category_id
           AND transactions.kid_id IS i.new_kid_id AND transactions.private_member_id IS i.new_private_member_id
           AND transactions.is_ignored IS i.new_is_ignored`,
