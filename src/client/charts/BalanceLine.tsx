@@ -1,7 +1,8 @@
 import type { ISODate } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import type { ProjectionEvent, ProjectionPoint } from '../../shared/projection';
-import { money, shortDate, weekdayDate } from '../format';
+import { useMoneyText } from '../amounts';
+import { shortDate, weekdayDate } from '../format';
 import { useActiveMonth, useWidth } from './frame';
 import { dollarsShort, rangeTicks } from './scale';
 import { Tooltip, type TooltipRow } from './Tooltip';
@@ -35,6 +36,7 @@ export function BalanceLine({
   today: ISODate;
   label: string;
 }) {
+  const money = useMoneyText();
   const [ref, width] = useWidth<HTMLDivElement>();
   const count = points.length;
   const focus = useActiveMonth(count, 0);
@@ -103,7 +105,7 @@ export function BalanceLine({
               {tickValues.map((t) => (
                 <g key={t}>
                   <line className={t === 0 ? 'chart-baseline' : 'chart-grid'} x1={LINE.left} x2={width - LINE.right} y1={yOf(t)} y2={yOf(t)} />
-                  <text className="chart-tick" x={LINE.left - 6} y={yOf(t)} dy="0.32em" textAnchor="end">
+                  <text className="chart-tick chart-amount" x={LINE.left - 6} y={yOf(t)} dy="0.32em" textAnchor="end">
                     {dollarsShort(t)}
                   </text>
                 </g>
@@ -122,7 +124,7 @@ export function BalanceLine({
               {cushion !== null && (
                 <>
                   <line className="chart-reference chart-cushion" x1={LINE.left} x2={width - LINE.right} y1={yOf(cushion)} y2={yOf(cushion)} />
-                  <text className="chart-label chart-label-quiet" x={width - LINE.right} y={yOf(cushion) - 5} textAnchor="end">
+                  <text className="chart-label chart-label-quiet chart-amount" x={width - LINE.right} y={yOf(cushion) - 5} textAnchor="end">
                     Cushion {dollarsShort(cushion)}
                   </text>
                 </>
@@ -132,7 +134,7 @@ export function BalanceLine({
               {lowestPoint && (
                 <>
                   <circle className="balance-dot" cx={lowX} cy={yOf(lowestPoint.balanceCents)} r={4} />
-                  <text className="chart-label" x={lowX} y={yOf(lowestPoint.balanceCents) + (yOf(lowestPoint.balanceCents) > baseline - 20 ? -10 : 18)} textAnchor={lowAnchor}>
+                  <text className="chart-label chart-amount" x={lowX} y={yOf(lowestPoint.balanceCents) + (yOf(lowestPoint.balanceCents) > baseline - 20 ? -10 : 18)} textAnchor={lowAnchor}>
                     {count > 1 ? `Lowest ${money(lowestPoint.balanceCents, { whole: true })}` : money(lowestPoint.balanceCents, { whole: true })}
                   </text>
                 </>
