@@ -1,9 +1,10 @@
 import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, errorMessage } from './api';
 import { go, useRoute, type Route } from './router';
+import { Icon, type IconName } from './icons';
 import { Activity } from './screens/Activity';
 import { Home } from './screens/Home';
-import { More } from './screens/More';
+import { More, MORE_ITEMS } from './screens/More';
 import { Plan } from './screens/Plan';
 import { Trends } from './screens/Trends';
 import { AppContext, type AppData, type ToastOptions } from './state';
@@ -11,13 +12,46 @@ import { recategorizeAll } from './sync';
 import type { Account, Category, Me } from './types';
 import { ErrorNote, Loading } from './ui';
 
-const TABS = [
-  { path: 'home', label: 'Home', icon: '⌂' },
-  { path: 'activity', label: 'Activity', icon: '☰' },
-  { path: 'trends', label: 'Trends', icon: '▥' },
-  { path: 'plan', label: 'Plan', icon: '▦' },
-  { path: 'more', label: 'More', icon: '⋯' },
+const TABS: { path: string; label: string; icon: IconName }[] = [
+  { path: 'home', label: 'Home', icon: 'home' },
+  { path: 'activity', label: 'Activity', icon: 'activity' },
+  { path: 'trends', label: 'Trends', icon: 'trends' },
+  { path: 'plan', label: 'Plan', icon: 'plan' },
+  { path: 'more', label: 'More', icon: 'more' },
 ];
+
+/** Screens that may use the wide (two-column) layout on a computer. */
+const WIDE = new Set(['trends', 'plan']);
+
+/** The app's mark: the month ribbon in miniature (the same drawing as the app icon). */
+function Mark() {
+  return (
+    <svg className="sidebar-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+      <rect width="32" height="32" rx="8" fill="var(--accent)" />
+      <rect x="6" y="13.5" width="9" height="5" rx="1.5" fill="var(--accent-ink)" />
+      <rect x="16.5" y="13.5" width="5" height="5" rx="1.5" fill="var(--accent-ink)" opacity="0.8" />
+      <rect x="23" y="13.5" width="2.5" height="5" rx="1" fill="var(--accent-ink)" opacity="0.6" />
+      <rect x="23.75" y="9" width="1.5" height="14" rx="0.75" fill="var(--accent-ink)" />
+    </svg>
+  );
+}
+
+function NavLink({ path, label, icon, active }: { path: string; label: string; icon: IconName; active: boolean }) {
+  return (
+    <a
+      href={`#/${path}`}
+      className={active ? 'active' : ''}
+      aria-current={active ? 'page' : undefined}
+      onClick={(e) => {
+        e.preventDefault();
+        go(path);
+      }}
+    >
+      <Icon name={icon} />
+      <span>{label}</span>
+    </a>
+  );
+}
 
 type BaseData = Omit<AppData, 'reload' | 'toast'>;
 
@@ -116,31 +150,34 @@ export function App() {
     return <div className="app">{error ? <ErrorNote message={error} onRetry={() => void reload()} /> : <Loading />}</div>;
   }
 
-  const top = route.path.split('/')[0];
+  const top = route.path.split('/')[0] ?? 'home';
+  // On a phone, More's screens light up the More tab; the side menu lists them, so it lights up the screen itself.
+  const sideActive = top === 'more' ? route.path : top;
   return (
     <AppContext.Provider value={{ ...base, reload, toast: showToast }}>
-      <main className={`app ${top === 'trends' ? 'app-wide' : ''}`}>
+      <a className="skip-link" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>
+        Skip to content
+      </a>
+      <nav className="sidebar" aria-label="Main">
+        <div className="sidebar-name">
+          <Mark />
+          <span>Family Budget</span>
+        </div>
+        {TABS.map((tab) => (
+          <NavLink key={tab.path} {...tab} active={sideActive === tab.path} />
+        ))}
+        {MORE_ITEMS.map((item) => (
+          <NavLink key={item.path} path={`more/${item.path}`} label={item.short} icon={item.icon} active={sideActive === `more/${item.path}`} />
+        ))}
+      </nav>
+      <main id="main" tabIndex={-1} className={`app ${WIDE.has(top) ? 'app-wide' : ''}`}>
         <ScreenErrorBoundary key={route.path}>
           <Screen route={route} />
         </ScreenErrorBoundary>
       </main>
       <nav className="tabbar" aria-label="Main">
         {TABS.map((tab) => (
-          <a
-            key={tab.path}
-            href={`#/${tab.path}`}
-            className={top === tab.path ? 'active' : ''}
-            aria-current={top === tab.path ? 'page' : undefined}
-            onClick={(e) => {
-              e.preventDefault();
-              go(tab.path);
-            }}
-          >
-            <span className="tab-icon" aria-hidden="true">
-              {tab.icon}
-            </span>
-            {tab.label}
-          </a>
+          <NavLink key={tab.path} {...tab} active={top === tab.path} />
         ))}
       </nav>
       {toast && (

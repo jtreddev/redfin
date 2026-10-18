@@ -380,7 +380,21 @@ a {
 
 .back {
   margin-left: -12px;
+  justify-self: start;
   align-self: flex-start;
+  padding-left: 6px;
+}
+
+.back .icon {
+  width: 20px;
+  height: 20px;
+}
+
+@media (min-width: 900px) {
+  /* The side menu lists every More screen, so the way back is already on screen. */
+  .back {
+    display: none;
+  }
 }
 
 .stack {
@@ -439,6 +453,11 @@ a {
 .card > h2,
 .card > .h2 {
   margin-bottom: 2px;
+}
+
+.card > .btn,
+.card > .cluster > .btn:only-child {
+  justify-self: start;
 }
 
 .card-button {
@@ -915,7 +934,6 @@ input[type='checkbox']:not(.switch) {
   display: grid;
   /* Long titles ellipsize instead of widening every row past the screen. */
   grid-template-columns: minmax(0, 1fr);
-  margin: 0 -8px;
   border-top: 1px solid var(--hairline);
 }
 
@@ -931,7 +949,7 @@ input[type='checkbox']:not(.switch) {
   gap: 12px;
   width: 100%;
   min-height: 56px;
-  padding: 10px 8px;
+  padding: 10px 0;
   border: none;
   border-bottom: 1px solid var(--hairline);
   background: transparent;
@@ -947,6 +965,8 @@ input[type='checkbox']:not(.switch) {
 .row-button:hover:not(:disabled),
 .row-button:active:not(:disabled) {
   background: var(--tint);
+  /* The pressed tint reaches a little past the text, without moving the hairlines. */
+  box-shadow: -8px 0 0 var(--tint), 8px 0 0 var(--tint);
 }
 
 .row-button:focus-visible {
@@ -999,7 +1019,7 @@ input[type='checkbox']:not(.switch) {
 }
 
 .date-heading {
-  padding: 18px 8px 6px;
+  padding: 18px 0 6px;
   border-bottom: 1px solid var(--hairline);
   color: var(--slate);
   font-size: var(--t-sm);
@@ -1036,8 +1056,10 @@ input[type='checkbox']:not(.switch) {
 }
 
 .chip + .chip,
-.row-sub .chip {
-  margin-left: 4px;
+.row-sub > .chip,
+.muted > .chip,
+.small > .chip {
+  margin-left: 6px;
 }
 
 /* ---------- Status ---------- */
@@ -1132,14 +1154,16 @@ input[type='checkbox']:not(.switch) {
 
 .weeks {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
   gap: 6px;
 }
 
 .week-pill {
   display: grid;
+  align-content: start;
   gap: 1px;
-  padding: 8px 4px;
+  min-width: 0;
+  padding: 8px 2px;
   border-radius: 10px;
   background: var(--tint);
   text-align: center;
@@ -1148,8 +1172,8 @@ input[type='checkbox']:not(.switch) {
 }
 
 .week-pill .money {
-  font-size: var(--t-sm);
-  font-weight: 600;
+  font-size: var(--t-xs);
+  font-weight: 650;
 }
 
 .week-pill.current {
@@ -1258,6 +1282,10 @@ input[type='checkbox']:not(.switch) {
     max-height: 86vh;
     border-radius: 16px;
   }
+}
+
+.sheet:focus {
+  outline: none;
 }
 
 .sheet-head {
@@ -1805,4 +1833,33 @@ table.compare thead th {
     gap: 0 48px;
     align-items: start;
   }
+}
+
+/* ---------- Small helpers ---------- */
+
+.block {
+  display: block;
+}
+
+.figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 40px;
+}
+
+.btn-flush {
+  justify-self: start;
+  margin-left: -12px;
+}
+
+.ribbon-go .icon {
+  width: 16px;
+  height: 16px;
+  vertical-align: -3px;
+}
+
+.home-top {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 8px;
 }

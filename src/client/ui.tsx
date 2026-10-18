@@ -1,6 +1,7 @@
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { addMonths } from '../shared/dates';
 import { centsToInput, inputToCents, money, monthLabel } from './format';
+import { Icon } from './icons';
 import { useApp } from './state';
 import type { Category } from './types';
 
@@ -21,15 +22,31 @@ export function Money({
   return <span className={`money ${resolved ? `tone-${resolved}` : ''} ${className}`}>{money(cents, { whole, signed })}</span>;
 }
 
-export function Card({ children, className = '', onClick }: { children: ReactNode; className?: string; onClick?: () => void }) {
+/**
+ * A quiet section of a screen: a hairline above and space around. `boxed` is for things that are genuinely
+ * separate (a bank connection, a kid). With `onClick` the whole section is a button, so it must not
+ * contain headings: use <strong className="h2"> for its title.
+ */
+export function Card({
+  children,
+  className = '',
+  onClick,
+  boxed = false,
+}: {
+  children: ReactNode;
+  className?: string;
+  onClick?: () => void;
+  boxed?: boolean;
+}) {
+  const classes = `card ${boxed ? 'card-boxed' : ''} ${className}`;
   if (onClick) {
     return (
-      <button type="button" className={`card card-button ${className}`} onClick={onClick}>
+      <button type="button" className={`${classes} card-button`} onClick={onClick}>
         {children}
       </button>
     );
   }
-  return <section className={`card ${className}`}>{children}</section>;
+  return <section className={classes}>{children}</section>;
 }
 
 export function PageHeader({ title, subtitle, action }: { title: string; subtitle?: ReactNode; action?: ReactNode }) {
@@ -52,6 +69,7 @@ export function Button({
   disabled,
   small,
   className = '',
+  pressed,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -60,15 +78,26 @@ export function Button({
   disabled?: boolean;
   small?: boolean;
   className?: string;
+  /** Makes it a toggle button (aria-pressed). */
+  pressed?: boolean;
 }) {
   return (
-    <button type={type} className={`btn btn-${variant} ${small ? 'btn-small' : ''} ${className}`} onClick={onClick} disabled={disabled}>
+    <button
+      type={type}
+      className={`btn btn-${variant} ${small ? 'btn-small' : ''} ${className}`}
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={pressed}
+    >
       {children}
     </button>
   );
 }
 
+/** A bottom sheet on a phone, a centred dialog on a computer. Focus moves in on open and back on close. */
 export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  const titleId = useId();
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
@@ -79,14 +108,29 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
       document.body.classList.remove('no-scroll');
     };
   }, [open, onClose]);
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    // An autoFocus field inside wins; otherwise the dialog itself takes focus.
+    if (!dialog.current?.contains(document.activeElement)) dialog.current?.focus();
+    return () => previous?.focus?.();
+  }, [open]);
   if (!open) return null;
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={dialog}
+        className="sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="sheet-head">
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button type="button" className="icon-btn" onClick={onClose} aria-label="Close">
-            ✕
+            <Icon name="close" />
           </button>
         </div>
         <div className="sheet-body">{children}</div>
@@ -170,11 +214,11 @@ export function MonthPicker({ month, onChange }: { month: string; onChange: (m: 
   return (
     <div className="month-picker">
       <button type="button" className="icon-btn" onClick={() => onChange(addMonths(month, -1))} aria-label="Previous month">
-        ‹
+        <Icon name="back" />
       </button>
-      <strong>{monthLabel(month)}</strong>
+      <strong aria-live="polite">{monthLabel(month)}</strong>
       <button type="button" className="icon-btn" onClick={() => onChange(addMonths(month, 1))} aria-label="Next month">
-        ›
+        <Icon name="forward" />
       </button>
     </div>
   );
@@ -267,8 +311,10 @@ export function KidSelect({ value, onChange }: { value: number | null; onChange:
   );
 }
 
+const STATUS_WORD = { ok: 'On track', low: 'Below your cushion', negative: 'Short' } as const;
+
 export function StatusDot({ status }: { status: 'ok' | 'low' | 'negative' }) {
-  return <span className={`dot dot-${status}`} aria-label={status} />;
+  return <span className={`dot dot-${status}`} role="img" aria-label={STATUS_WORD[status]} title={STATUS_WORD[status]} />;
 }
 
 export function Row({ children, onClick, className = '' }: { children: ReactNode; onClick?: () => void; className?: string }) {

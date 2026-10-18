@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { getDevUser, setDevUser } from '../api';
+import { Icon, type IconName } from '../icons';
 import { go } from '../router';
 import { useApp } from '../state';
 import { Button, Card, Field, PageHeader } from '../ui';
@@ -13,16 +14,17 @@ import { Kids } from './Kids';
 import { Rules } from './Rules';
 import { Settings } from './Settings';
 
-const MENU = [
-  { path: 'checkin', icon: '🤝', title: 'Monthly check-in', text: 'Review last month together and agree on the next one' },
-  { path: 'fun', icon: '🎈', title: 'Fun money', text: 'Personal allowances, no questions asked' },
-  { path: 'kids', icon: '🧒', title: 'Kids', text: 'What each kid costs, budgets, tax summaries' },
-  { path: 'accounts', icon: '🏦', title: 'Accounts & banks', text: 'Connect Chime, Capital One, Fidelity' },
-  { path: 'import', icon: '📄', title: 'Import a file', text: 'CSV, OFX or QFX downloads from your bank' },
-  { path: 'income', icon: '💵', title: 'Income & paydays', text: 'Paychecks that drive the weekly plan' },
-  { path: 'rules', icon: '🏷️', title: 'Rules', text: 'How transactions get sorted automatically' },
-  { path: 'settings', icon: '⚙️', title: 'Settings', text: 'Household, people, categories' },
-  { path: 'export', icon: '⬇️', title: 'Export your data', text: 'Everything, in open formats' },
+/** The More screens, in menu order. `short` is the side-menu label on a computer. */
+export const MORE_ITEMS: { path: string; icon: IconName; title: string; short: string; text: string }[] = [
+  { path: 'checkin', icon: 'checkin', title: 'Monthly check-in', short: 'Check-in', text: 'Review last month together and agree on the next one' },
+  { path: 'fun', icon: 'fun', title: 'Fun money', short: 'Fun money', text: 'Personal allowances, no questions asked' },
+  { path: 'kids', icon: 'kids', title: 'Kids', short: 'Kids', text: 'What each kid costs, budgets, tax summaries' },
+  { path: 'accounts', icon: 'accounts', title: 'Accounts & banks', short: 'Accounts', text: 'Connect Chime, Capital One, Fidelity' },
+  { path: 'import', icon: 'import', title: 'Import a file', short: 'Import', text: 'CSV, OFX or QFX downloads from your bank' },
+  { path: 'income', icon: 'income', title: 'Income & paydays', short: 'Income', text: 'Paychecks that drive the weekly plan' },
+  { path: 'rules', icon: 'rules', title: 'Rules', short: 'Rules', text: 'How transactions get sorted automatically' },
+  { path: 'settings', icon: 'settings', title: 'Settings', short: 'Settings', text: 'Household, people, categories' },
+  { path: 'export', icon: 'export', title: 'Export your data', short: 'Export', text: 'Everything, in open formats' },
 ];
 
 export function More({ sub, params }: { sub: string | undefined; params: URLSearchParams }) {
@@ -56,16 +58,16 @@ function MoreMenu() {
     <div className="stack">
       <PageHeader title="More" />
       <div className="list">
-        {MENU.map((item) => (
+        {MORE_ITEMS.map((item) => (
           <button key={item.path} type="button" className="row row-button" onClick={() => go(`more/${item.path}`)}>
-            <span style={{ fontSize: '1.4rem' }} aria-hidden="true">
-              {item.icon}
+            <span className="row-icon">
+              <Icon name={item.icon} />
             </span>
             <div className="row-main">
               <div className="row-title">{item.title}</div>
               <div className="row-sub">{item.text}</div>
             </div>
-            <span className="muted">›</span>
+            <Icon name="forward" className="row-chevron" />
           </button>
         ))}
       </div>
@@ -126,7 +128,8 @@ export function SubHeader({ title, subtitle, action }: { title: string; subtitle
   return (
     <>
       <Button small variant="ghost" onClick={() => go('more')} className="back">
-        ‹ More
+        <Icon name="back" />
+        More
       </Button>
       <PageHeader title={title} subtitle={subtitle} action={action} />
     </>
