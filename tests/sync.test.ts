@@ -321,6 +321,40 @@ describe('automatic categories on synced charges', () => {
     expect(row('t1').categoryId).not.toBeNull();
   });
 
+  it('re-sent history fills in detailed categories', async () => {
+    const { itemId } = await seedBank(db, env, 'chime');
+    const eatingOut = catId('Fun & Wants', 'Eating Out');
+    db.exec(`INSERT INTO transactions (account_id, date, amount_cents, name, source, plaid_txn_id, plaid_category, category_id, category_source)
+             VALUES ((SELECT id FROM accounts LIMIT 1), '2026-10-01', -900, 'CORNER SPOT', 'plaid', 't1', 'FOOD_AND_DRINK', ?, 'auto')`, eatingOut);
+    db.exec(`INSERT INTO transactions (account_id, date, amount_cents, name, source, plaid_txn_id, plaid_category, category_id, category_source)
+             VALUES ((SELECT id FROM accounts LIMIT 1), '2026-10-01', -800, 'CORNER SPOT', 'plaid', 't2', 'FOOD_AND_DRINK', ?, 'user')`, eatingOut);
+    const fastFood = { primary: 'FOOD_AND_DRINK', detailed: 'FOOD_AND_DRINK_FAST_FOOD' };
+    stubPlaid({
+      chime: [page([
+        plaidTxn('chime', 't1', '2026-10-01', 9, { name: 'CORNER SPOT', personal_finance_category: fastFood }),
+        plaidTxn('chime', 't2', '2026-10-01', 8, { name: 'CORNER SPOT', personal_finance_category: fastFood }),
+      ])],
+    });
+
+    const res = await api(env, 'POST', `/plaid/items/${itemId}/refresh-details`);
+    expect(await res.json()).toEqual({ ok: true });
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(db.rows('SELECT id FROM transactions')).toHaveLength(2);
+    expect(row('t1').detailed).toBe('FOOD_AND_DRINK_FAST_FOOD');
+    expect(row('t1').categoryId).not.toBe(eatingOut);
+    expect(row('t1').categoryId).toBe(catId('Habits', 'Coffee & Fast Food'));
+    expect(row('t2')).toMatchObject({ detailed: 'FOOD_AND_DRINK_FAST_FOOD', categoryId: eatingOut, source: 'user' });
+  });
+
+  it('refresh details is refused while a sync holds the bank', async () => {
+    const { itemId } = await seedBank(db, env, 'chime');
+    db.exec('UPDATE plaid_items SET cursor = ?, sync_lock_until = ? WHERE id = ?', 'c1', new Date(Date.now() + 30_000).toISOString(), itemId);
+    const res = await api(env, 'POST', `/plaid/items/${itemId}/refresh-details`);
+    expect(res.status).toBe(409);
+    expect(db.rows<{ cursor: string }>('SELECT cursor FROM plaid_items WHERE id = ?', itemId)[0]!.cursor).toBe('c1');
+  });
+
   it('splits are skipped', async () => {
     const { itemId, accountId } = await seedBank(db, env, 'chime');
     db.exec(

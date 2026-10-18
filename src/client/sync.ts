@@ -6,6 +6,8 @@ const waitIfBusy = (step: SyncStepResult) => (step.busy ? new Promise((resolve) 
 
 export interface SyncSummary {
   added: number;
+  /** Already-stored charges whose bank details were refreshed. */
+  refreshed?: number;
   errors: string[];
   /** Heads-ups like "still preparing your transactions". */
   notes?: string[];
@@ -34,17 +36,19 @@ export async function syncAllBanks(onStep?: (step: SyncStepResult) => void): Pro
 /** Pulls everything available for one bank (used right after connecting). */
 export async function syncOneBank(itemId: number, onStep?: (step: SyncStepResult) => void): Promise<SyncSummary> {
   let added = 0;
+  let refreshed = 0;
   const notes: string[] = [];
   for (let i = 0; i < 300; i++) {
     const step = await post<SyncStepResult>('/sync/step', { itemId });
     onStep?.(step);
     added += step.added;
+    refreshed += step.refreshed ?? 0;
     if (step.note) notes.push(step.note);
-    if (step.error) return { added, errors: [step.error], notes };
+    if (step.error) return { added, refreshed, errors: [step.error], notes };
     if (step.done) break;
     await waitIfBusy(step);
   }
-  return { added, errors: [], notes };
+  return { added, refreshed, errors: [], notes };
 }
 
 /** Re-derives automatic categories for all history, 500 charges at a time. Returns how many changed. */

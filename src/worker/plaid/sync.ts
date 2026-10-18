@@ -140,6 +140,8 @@ export interface SyncStepResult {
   added: number;
   modified: number;
   removed: number;
+  /** Charges already stored that Plaid re-sent, so their bank category details were refreshed. */
+  refreshed?: number;
   status: 'ok' | 'login_required' | 'error' | 'idle';
   error?: string;
   /** Friendly heads-up, e.g. history still loading. */
@@ -279,6 +281,7 @@ async function syncItem(env: Env, item: ItemRow, trigger: 'cron' | 'manual' | 'l
     const accountIdFor = new Map(accountRows.map((a) => [a.plaidAccountId, a.id]));
     const ctx = await loadIngestContext(db);
 
+    const refreshed = await refreshStored(db, ctx, page.added);
     const added = await applyAdded(db, ctx, page.added, accountIdFor);
     const modified = await applyModified(db, ctx, page.modified, accountIdFor);
     const removed = await applyRemoved(db, page.removed.map((r) => r.transaction_id));
@@ -315,7 +318,7 @@ async function syncItem(env: Env, item: ItemRow, trigger: 'cron' | 'manual' | 'l
       : !page.has_more && !allHistoryIn
         ? 'Recent transactions are in; older history is still loading and will sync automatically.'
         : undefined;
-    return { ...base, done: !page.has_more && single, added, modified, removed, status: 'ok', ...(note ? { note } : {}) };
+    return { ...base, done: !page.has_more && single, added, modified, removed, refreshed, status: 'ok', ...(note ? { note } : {}) };
   } catch (error) {
     const code = error instanceof PlaidError ? error.code : 'INTERNAL';
     // Plaid's messages are written for people; anything else stays in the logs.
@@ -354,6 +357,52 @@ async function finishRun(
     r.error ?? null,
     runId,
   );
+}
+
+/**
+ * Charges Plaid re-sends as "added" that we already have (after "Refresh bank details", or a replayed
+ * page): take its latest bank categories, then re-derive the automatic category. Hand-set and
+ * split rows only get the bank columns; reclassify leaves their category alone.
+ */
+async function refreshStored(
+  db: D1Database,
+  ctx: Awaited<ReturnType<typeof loadIngestContext>>,
+  added: readonly PlaidTransaction[],
+): Promise<number> {
+  if (!added.length) return 0;
+  const now = nowIso();
+  const ids = added.map((t) => t.transaction_id);
+  const existing = new Set(
+    (
+      await allByIds<{ plaidTxnId: string }>(
+        db,
+        (list) => `SELECT plaid_txn_id AS plaidTxnId FROM transactions WHERE plaid_txn_id IN (${list})`,
+        ids,
+      )
+    ).map((r) => r.plaidTxnId),
+  );
+  const resent = added.filter((t) => existing.has(t.transaction_id));
+  if (!resent.length) return 0;
+  await batchAll(
+    db,
+    resent.map((t) =>
+      stmt(
+        db,
+        'UPDATE transactions SET plaid_category = ?, plaid_category_detailed = ?, updated_at = ? WHERE plaid_txn_id = ?',
+        t.personal_finance_category?.primary ?? null,
+        t.personal_finance_category?.detailed ?? null,
+        now,
+        t.transaction_id,
+      ),
+    ),
+  );
+  const rows = await allByIds<StoredTxn>(
+    db,
+    (list) => `${STORED_SELECT} WHERE t.deleted_at IS NULL AND t.plaid_txn_id IN (${list})`,
+    resent.map((t) => t.transaction_id),
+  );
+  await reclassify(db, ctx, rows);
+  return resent.length;
 }
 
 async function applyAdded(

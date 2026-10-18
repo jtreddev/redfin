@@ -135,6 +135,21 @@ export function Accounts() {
     }
   }
 
+  async function refreshDetails(itemId: number) {
+    setBusy('Refreshing bank details…');
+    try {
+      await post(`/plaid/items/${itemId}/refresh-details`, {});
+      const result = await syncOneBank(itemId);
+      if (result.errors.length) toast(result.errors[0] ?? 'Sync problem', 'error');
+      else toast(`Updated ${plural(result.refreshed ?? 0, 'charge')}`);
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    } finally {
+      setBusy(null);
+      await Promise.all([reload(), status.reload()]);
+    }
+  }
+
   async function disconnect(itemId: number, name: string | null) {
     if (!window.confirm(`Disconnect ${name ?? 'this bank'}? Its history stays; it just stops syncing.`)) return;
     try {
@@ -194,6 +209,11 @@ export function Accounts() {
                 ) : (
                   <Button small variant="primary" onClick={() => void startLink(item.id)} disabled={Boolean(busy)}>
                     Reconnect
+                  </Button>
+                )}
+                {item.status === 'ok' && (
+                  <Button small variant="ghost" onClick={() => void refreshDetails(item.id)} disabled={Boolean(busy)}>
+                    Refresh bank details
                   </Button>
                 )}
                 <Button small variant="ghost" onClick={() => void disconnect(item.id, item.institutionName)}>

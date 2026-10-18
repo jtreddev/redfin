@@ -212,6 +212,7 @@ export interface SyncStepResult {
   added: number;
   modified: number;
   removed: number;
+  refreshed?: number;
   status: 'ok' | 'login_required' | 'error' | 'idle';
   error?: string;
   note?: string;

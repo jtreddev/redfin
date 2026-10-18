@@ -152,6 +152,30 @@ plaidRoutes.post('/plaid/items/:id/reconnected', async (c) => {
   return c.json({ ok: true });
 });
 
+/**
+ * Starts this bank's history over so Plaid re-sends every charge; re-sent charges get the bank's
+ * newest category details (see applyAdded). Refused while a sync holds the bank.
+ */
+plaidRoutes.post('/plaid/items/:id/refresh-details', async (c) => {
+  const db = c.env.DB;
+  const id = paramId(c);
+  const row = await first<{ id: number }>(
+    db,
+    `UPDATE plaid_items SET cursor = NULL, sync_start_cursor = NULL, has_more = 0, history_complete = 0, updated_at = ?
+      WHERE id = ? AND (sync_lock_until IS NULL OR sync_lock_until < ?) RETURNING id`,
+    nowIso(),
+    id,
+    nowIso(),
+  );
+  if (!row) {
+    if (await first(db, 'SELECT id FROM plaid_items WHERE id = ?', id)) {
+      throw new HttpError(409, 'A sync is running — try again in a minute');
+    }
+    throw notFound();
+  }
+  return c.json({ ok: true });
+});
+
 /** Disconnect: revokes access at Plaid; accounts and history stay (as import-only accounts). */
 plaidRoutes.delete('/plaid/items/:id', async (c) => {
   const db = c.env.DB;
