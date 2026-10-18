@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { monthEnd, monthStart } from '../../shared/dates';
 import { PRIVACY_SQL } from '../../shared/privacy';
+import { likeAnywhere, parseSearch } from '../../shared/search';
 import { GROUP_ORDER } from '../../shared/trends';
 import type { AppEnv } from '../env';
-import { all, allByIds, batchAll, first, nowIso, run, stmt, type Param } from '../lib/db';
+import { allByIds, batchAll, first, nowIso, run, stmt, type Param } from '../lib/db';
 import {
   badRequest,
   HttpError,
@@ -26,6 +27,17 @@ import { findSimilar, learnFromFix, undoMove } from '../services/learn';
 export const transactions = new Hono<AppEnv>();
 
 const TRENDS_GROUP_SECTION = new Map<string, string>(GROUP_ORDER.map((g) => [g.key, g.section]));
+
+/** Most ids one filter or bulk change takes. */
+const MAX_FILTER_IDS = 100;
+
+/**
+ * The categories a category filter covers. Today that is just the ones picked; once categories have
+ * sub-categories (categories.parent_id, migration 0007), a parent's children belong here too.
+ */
+function expandCategoryIds(ids: number[]): number[] {
+  return [...new Set(ids)];
+}
 
 export const TXN_SELECT = `SELECT t.id, t.account_id AS accountId, a.name AS accountName, a.type AS accountType,
   a.institution, t.date, t.amount_cents AS amountCents, t.name, t.merchant_name AS merchantName, t.memo, t.pending,
@@ -130,10 +142,14 @@ transactions.get('/transactions', async (c) => {
     where.push('t.account_id = ?');
     params.push(reqInt(q.accountId, 'accountId'));
   }
-  if (q.categoryId) {
-    const id = reqInt(q.categoryId, 'categoryId');
-    where.push('(t.category_id = ? OR EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id AND s.category_id = ?))');
-    params.push(id, id);
+  const categoryIds = (c.req.queries('categoryId') ?? []).flatMap((v) => v.split(',')).filter((v) => v.trim() !== '');
+  if (categoryIds.length) {
+    if (categoryIds.length > MAX_FILTER_IDS) throw badRequest(`At most ${MAX_FILTER_IDS} categories at once.`);
+    // One bound list (D1 allows 100 parameters a statement), matched against the charge and its split parts.
+    const list = JSON.stringify(expandCategoryIds(categoryIds.map((v) => reqInt(v.trim(), 'categoryId'))));
+    const inList = 'IN (SELECT value FROM json_each(?))';
+    where.push(`(t.category_id ${inList} OR EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id AND s.category_id ${inList}))`);
+    params.push(list, list);
   }
   if (q.group) {
     // The Trends groups, counted the way Trends counts them: your private charges are your fun money.
@@ -160,25 +176,60 @@ transactions.get('/transactions', async (c) => {
     where.push('t.private_member_id = ?');
     params.push(viewer.memberId);
   }
-  if (q.q) {
-    const like = `%${q.q.replace(/[%_]/g, '').slice(0, 60)}%`;
-    where.push('(t.name LIKE ? OR t.merchant_name LIKE ? OR t.notes LIKE ?)');
-    params.push(like, like, like);
+  const search = parseSearch((q.q ?? '').slice(0, 100));
+  if (search.text) {
+    // Case-insensitive (LIKE, ASCII). The bank's description, merchant, notes, and the category (or split parts') name.
+    const like = likeAnywhere(search.text.slice(0, 60));
+    const textMatch = `t.name LIKE ? ESCAPE '\\' OR t.memo LIKE ? ESCAPE '\\' OR t.merchant_name LIKE ? ESCAPE '\\'
+      OR t.normalized_merchant LIKE ? ESCAPE '\\' OR t.notes LIKE ? ESCAPE '\\'
+      OR EXISTS (SELECT 1 FROM categories qc WHERE qc.id = t.category_id AND qc.name LIKE ? ESCAPE '\\')
+      OR EXISTS (SELECT 1 FROM splits qs JOIN categories qc ON qc.id = qs.category_id
+                  WHERE qs.transaction_id = t.id AND qc.name LIKE ? ESCAPE '\\')`;
+    params.push(like, like, like, like, like, like, like);
+    // A bare amount ("45", "$45.12") also finds charges of that size, money in or out.
+    if (search.amount) {
+      where.push(`(${textMatch} OR ABS(t.amount_cents) BETWEEN ? AND ?)`);
+      params.push(search.amount.minCents, search.amount.maxCents);
+    } else {
+      where.push(`(${textMatch})`);
+    }
+  }
+  const minCents = [search.minCents, q.minCents ? reqInt(q.minCents, 'minCents', { min: 0 }) : null].filter((v) => v !== null);
+  const maxCents = [search.maxCents, q.maxCents ? reqInt(q.maxCents, 'maxCents', { min: 0 }) : null].filter((v) => v !== null);
+  if (minCents.length) {
+    where.push('ABS(t.amount_cents) >= ?');
+    params.push(Math.max(...minCents));
+  }
+  if (maxCents.length) {
+    where.push('ABS(t.amount_cents) <= ?');
+    params.push(Math.min(...maxCents));
   }
   if (q.ignored !== '1') where.push('t.is_ignored = 0');
 
   const limit = Math.min(200, Math.max(1, Number(q.limit) || 100));
   const offset = Math.max(0, Number(q.offset) || 0);
-  const rows = await all<TxnRow>(
-    db,
-    `${TXN_SELECT} WHERE ${where.join(' AND ')} ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ?`,
-    ...params,
-    limit + 1,
-    offset,
-  );
+  const filter = where.join(' AND ');
+  // The page and the totals for the whole result, in one round trip.
+  const [pageResult, totalsResult] = await db.batch([
+    stmt(db, `${TXN_SELECT} WHERE ${filter} ORDER BY t.date DESC, t.id DESC LIMIT ? OFFSET ?`, ...params, limit + 1, offset),
+    stmt(
+      db,
+      `SELECT COUNT(*) AS count,
+              COALESCE(SUM(CASE WHEN t.amount_cents < 0 THEN -t.amount_cents ELSE 0 END), 0) AS outCents,
+              COALESCE(SUM(CASE WHEN t.amount_cents > 0 THEN t.amount_cents ELSE 0 END), 0) AS inCents
+         FROM transactions t WHERE ${filter}`,
+      ...params,
+    ),
+  ]);
+  const rows = (pageResult?.results ?? []) as TxnRow[];
+  const totals = (totalsResult?.results?.[0] ?? { count: 0, outCents: 0, inCents: 0 }) as { count: number; outCents: number; inCents: number };
   const page = rows.slice(0, limit);
   const splits = await loadSplits(db, page.filter((r) => r.isSplit === 1).map((r) => r.id));
-  return c.json({ transactions: page.map((r) => toApi(r, splits)), hasMore: rows.length > limit });
+  return c.json({
+    transactions: page.map((r) => toApi(r, splits)),
+    hasMore: rows.length > limit,
+    totals: { count: totals.count, outCents: totals.outCents, inCents: totals.inCents },
+  });
 });
 
 transactions.get('/transactions/:id', async (c) => {
