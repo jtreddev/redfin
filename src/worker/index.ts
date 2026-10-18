@@ -10,6 +10,7 @@ import { core } from './routes/core';
 import { exportRoutes } from './routes/export';
 import { imports } from './routes/imports';
 import { planning } from './routes/planning';
+import { plannedCosts } from './routes/plannedCosts';
 import { plaidRoutes } from './routes/plaid';
 import { rules } from './routes/rules';
 import { transactions } from './routes/transactions';
@@ -38,7 +39,7 @@ app.use('/api/*', async (c, next) => {
 });
 app.use('/api/*', requireViewer);
 
-for (const routes of [core, transactions, rules, categorize, imports, budget, plaidRoutes, planning, exportRoutes]) {
+for (const routes of [core, transactions, rules, categorize, imports, budget, plaidRoutes, planning, plannedCosts, exportRoutes]) {
   app.route('/api', routes);
 }
 app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));

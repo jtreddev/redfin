@@ -9,6 +9,8 @@ export interface CheckinLine {
   budgetCents: Cents;
   /** Positive. */
   actualCents: Cents;
+  /** Part of budgetCents that comes from planned costs, not the typed line. */
+  plannedCostsCents?: Cents;
 }
 
 export interface MonthSummary {

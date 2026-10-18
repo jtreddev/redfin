@@ -668,6 +668,7 @@ async function checkinData(db: D1Database, month: MonthKey, today: ISODate, view
       kind: r.kind === 'income' ? 'income' : 'expense',
       budgetCents: r.budgetCents,
       actualCents: r.actualCents,
+      ...(r.plannedCostsCents ? { plannedCostsCents: r.plannedCostsCents } : {}),
     }));
   if (data.uncategorized.outCents > 0) {
     lines.push({ categoryId: -1, name: 'Not categorized yet', section: '', kind: 'expense', budgetCents: 0, actualCents: data.uncategorized.outCents });
@@ -806,7 +807,10 @@ planning.post('/checkins/:month/complete', async (c) => {
     data.lines.filter((l) => l.categoryId > 0 && decisions[String(l.categoryId)]),
     decisions as Record<number, OverspendDecision>,
   );
+  const plannedByCategory = new Map(data.lines.map((l) => [l.categoryId, l.plannedCostsCents ?? 0]));
   for (const line of changed) {
+    // Decisions are about the whole line; the typed line is that minus the planned-cost set-asides.
+    const handCents = Math.max(0, line.budgetCents - (plannedByCategory.get(line.categoryId) ?? 0));
     statements.push(
       stmt(
         db,
@@ -815,7 +819,7 @@ planning.post('/checkins/:month/complete', async (c) => {
            updated_by_member_id = excluded.updated_by_member_id, updated_at = ?`,
         nextMonth,
         line.categoryId,
-        line.budgetCents,
+        handCents,
         viewer.memberId,
         now,
       ),
