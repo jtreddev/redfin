@@ -86,7 +86,16 @@ function byAmount(charges: readonly RecurringInput[]): RecurringInput[][] {
  */
 export function detectRecurring(
   transactions: readonly RecurringInput[],
-  { today, amountTolerance = 0.1 }: { today?: ISODate; amountTolerance?: number } = {},
+  {
+    today,
+    amountTolerance = 0.1,
+    saved = new Map(),
+  }: {
+    today?: ISODate;
+    amountTolerance?: number;
+    /** Bills already saved, as "merchant|cadence" → expected amount, so their series keep their name. */
+    saved?: ReadonlyMap<string, Cents>;
+  } = {},
 ): RecurringSuggestion[] {
   const groups = new Map<string, RecurringInput[]>();
   for (const t of transactions) {
@@ -104,8 +113,18 @@ export function detectRecurring(
       const suggestion = seriesSuggestion(group, today, amountTolerance);
       if (suggestion) found.push(suggestion);
     }
-    // Bills are saved by merchant and cadence; the most frequent series keeps the plain merchant name.
-    found.sort((a, b) => b.occurrences - a.occurrences || Math.abs(b.expectedAmountCents) - Math.abs(a.expectedAmountCents));
+    // Bills are saved by merchant and cadence, so when one merchant has two series with the same cadence,
+    // the plain name goes to the one already saved under it (closest amount); otherwise the most frequent.
+    const distance = (s: RecurringSuggestion) => {
+      const amount = saved.get(`${s.merchant}|${s.cadence}`);
+      return amount === undefined ? Infinity : Math.abs(Math.abs(amount) - Math.abs(s.expectedAmountCents));
+    };
+    found.sort(
+      (a, b) =>
+        distance(a) - distance(b) ||
+        b.occurrences - a.occurrences ||
+        Math.abs(b.expectedAmountCents) - Math.abs(a.expectedAmountCents),
+    );
     const taken = new Set<string>();
     for (const s of found) {
       if (taken.has(s.cadence)) s.merchant = `${s.merchant} $${Math.round(Math.abs(s.expectedAmountCents) / 100)}`;

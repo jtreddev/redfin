@@ -82,7 +82,11 @@ planning.post('/recurring/detect', async (c) => {
     monthStart(addMonths(monthOf(today), -25)),
   );
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const suggestions = detectRecurring(rows, { today });
+  const saved = await all<{ merchant: string; cadence: string; cents: number }>(
+    db,
+    'SELECT merchant, cadence, expected_amount_cents AS cents FROM recurring_bills',
+  );
+  const suggestions = detectRecurring(rows, { today, saved: new Map(saved.map((b) => [`${b.merchant}|${b.cadence}`, b.cents])) });
   const now = nowIso();
 
   // Suggestions that weren't found again (a cancelled subscription) go; confirmed and dismissed bills stay.

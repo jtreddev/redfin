@@ -98,10 +98,10 @@ export function Income() {
       {found && found.length > 0 && (
         <Card>
           <h2>Found in your deposits</h2>
-          <p className="muted small">Check the details, choose whose paycheck it is, then save.</p>
+          <p className="muted small">Check the details, choose whose paycheck it is, then save. Saved income is visible to both of you.</p>
           <div className="list">
             {found.map((s) => (
-              <div key={s.merchant} className="row">
+              <div key={`${s.merchant}-${s.netPayCents}`} className="row">
                 <div className="row-main">
                   <div className="row-title">
                     {titleCase(s.merchant)} · {money(s.netPayCents)}
@@ -134,9 +134,9 @@ export function Income() {
           draft={editing !== 'new' && !('id' in editing) ? editing : undefined}
           onClose={() => setEditing(null)}
           onSaved={async () => {
-            const added = editing !== 'new' && !('id' in editing) ? editing.matchText : null;
+            const added = editing !== 'new' && !('id' in editing) ? editing : null;
             setEditing(null);
-            if (added) setFound((list) => list?.filter((s) => s.matchText !== added) ?? null);
+            if (added) setFound((list) => list?.filter((s) => s.matchText !== added.matchText || s.netPayCents !== added.netPayCents) ?? null);
             await sources.reload();
           }}
         />

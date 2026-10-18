@@ -2,7 +2,7 @@ import { addDays, addMonths, clampDay, diffDays, monthOf, parseDate, type ISODat
 import type { Cents } from './money';
 import { matchPaycheck } from './paychecks';
 import { nearestPayDate, payDatesBetween, type PayFrequency, type PaySchedule } from './paySchedule';
-import { normalizeText } from './rules';
+import { normalizeMerchant, normalizeText } from './rules';
 
 export interface DepositInput {
   id: number;
@@ -150,6 +150,22 @@ function latestDayOfMonth(date: ISODate, day: number): ISODate {
   return clampDay(monthOf(date), day);
 }
 
+/**
+ * Two paychecks with the same description (one payroll company, two jobs) come apart by amount.
+ * A jump of more than 40% starts a new series; overtime and raises stay in the same one.
+ */
+function byAmount(days: readonly Payday[]): Payday[][] {
+  const sorted = [...days].sort((a, b) => a.amountCents - b.amountCents);
+  const groups: Payday[][] = [];
+  let previous = 0;
+  for (const day of sorted) {
+    if (!groups.length || day.amountCents > previous * 1.4) groups.push([]);
+    groups[groups.length - 1]!.push(day);
+    previous = day.amountCents;
+  }
+  return groups;
+}
+
 /** Fewer paydays first: with an equal fit, the simpler schedule is the right one. */
 const SIMPLER: Record<PayFrequency, number> = { monthly: 0, semimonthly: 1, biweekly: 2, weekly: 3 };
 
@@ -170,17 +186,24 @@ function matchTextFor(merchant: string, rows: readonly DepositInput[]): string |
  * is checked with the same code that later recognizes paychecks, so adding it just works.
  */
 export function findPaychecks(deposits: readonly DepositInput[], { today }: { today: ISODate }): PaycheckSuggestion[] {
+  // Group by the description, not Plaid's merchant: two employers paying through Gusto both show as "Gusto".
   const groups = new Map<string, DepositInput[]>();
   for (const d of deposits) {
-    if (!d.merchant || d.amountCents < MIN_PAYCHECK_CENTS) continue;
-    const list = groups.get(d.merchant) ?? [];
+    const key = normalizeMerchant(d.name) || d.merchant;
+    if (!key || d.amountCents < MIN_PAYCHECK_CENTS) continue;
+    const list = groups.get(key) ?? [];
     list.push(d);
-    groups.set(d.merchant, list);
+    groups.set(key, list);
+  }
+
+  const series: { merchant: string; days: Payday[] }[] = [];
+  for (const [merchant, rows] of groups) {
+    for (const days of byAmount(paydaysOf(rows))) series.push({ merchant, days: days.sort((a, b) => a.n - b.n) });
   }
 
   const suggestions: PaycheckSuggestion[] = [];
-  for (const [merchant, rows] of groups) {
-    const days = paydaysOf(rows);
+  for (const { merchant, days } of series) {
+    const rows = days.flatMap((d) => d.rows);
     if (days.length < 3) continue;
     const firstDate = days[0]!.date;
     const lastDate = days[days.length - 1]!.date;

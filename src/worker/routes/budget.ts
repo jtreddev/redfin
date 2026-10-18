@@ -251,10 +251,17 @@ budget.get('/income-sources/suggestions', async (c) => {
     c.get('viewer').memberId,
   );
   // Recent paychecks are tagged; older ones from a source you already have aren't, so skip those too.
-  const sources = await all<{ matchText: string | null }>(db, 'SELECT match_text AS matchText FROM income_sources WHERE match_text IS NOT NULL');
-  const known = sources.map((s) => (s.matchText ?? '').toUpperCase().trim()).filter(Boolean);
+  // Same text and a similar amount: a second job paid the same way still shows up.
+  const sources = await all<{ matchText: string; netPayCents: number }>(
+    db,
+    'SELECT match_text AS matchText, net_pay_cents AS netPayCents FROM income_sources WHERE match_text IS NOT NULL',
+  );
+  const known = sources.map((s) => ({ text: s.matchText.toUpperCase().trim(), cents: s.netPayCents })).filter((k) => k.text);
   const suggestions = findPaychecks(deposits, { today }).filter(
-    (s) => !known.some((k) => s.matchText.includes(k) || k.includes(s.matchText)),
+    (s) =>
+      !known.some(
+        (k) => (s.matchText.includes(k.text) || k.text.includes(s.matchText)) && Math.abs(s.netPayCents - k.cents) <= k.cents * 0.4,
+      ),
   );
   return c.json(suggestions);
 });

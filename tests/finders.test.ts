@@ -60,6 +60,24 @@ describe('findPaychecks', () => {
     expect(found[0]).toMatchObject({ netPayCents: 190000, accountId: null });
   });
 
+  it('keeps two paychecks apart when both come through the same payroll company', () => {
+    // Plaid names the payer "Gusto" for both; the descriptions name the employers.
+    const yours = every(14, '2026-04-03').map((date) => deposit(date, 2143.18, 'ACME INC PAYROLL 8812', { merchant: 'GUSTO' }));
+    const theirs = every(14, '2026-04-10').map((date) => deposit(date, 1210, 'RIVER CLINIC PAYROLL 1194', { merchant: 'GUSTO' }));
+    const found = findPaychecks([...yours, ...theirs], { today: TODAY });
+    expect(found.map((s) => `${s.matchText} ${s.frequency} ${s.netPayCents}`)).toEqual([
+      'ACME INC PAYROLL biweekly 214318',
+      'RIVER CLINIC PAYROLL biweekly 121000',
+    ]);
+  });
+
+  it('splits one payer by amount when the descriptions are identical', () => {
+    const big = every(14, '2026-04-03').map((date) => deposit(date, 2400, 'GUSTO PAY 123456'));
+    const small = every(14, '2026-04-10').map((date) => deposit(date, 600, 'GUSTO PAY 654321'));
+    const found = findPaychecks([...big, ...small], { today: TODAY });
+    expect(found.map((s) => `${s.frequency} ${s.netPayCents}`)).toEqual(['biweekly 240000', 'biweekly 60000']);
+  });
+
   it('skips interest, irregular deposits, and paychecks that stopped', () => {
     const interest = every(30, '2026-01-31').map((date) => deposit(date, 1.23, 'INTEREST PAYMENT'));
     const zelle = ['2026-05-03', '2026-05-29', '2026-07-14', '2026-08-02', '2026-09-21'].map((date, i) => deposit(date, 75 + i * 40, 'ZELLE FROM SAM'));
@@ -153,6 +171,25 @@ describe('bills finder', () => {
       charge(addDays(today, -235), -13900, 'AMAZON PRIME MEMBERSHIP');
       await api(env, 'POST', '/recurring/detect');
       expect(bills()).toEqual([{ merchant: 'AMAZON PRIME MEMBERSHIP', status: 'suggested' }]);
+    });
+
+    it('keeps a confirmed bill on the same subscription when another one from that merchant gets more charges', async () => {
+      const today = todayIn('America/Chicago');
+      // A $9.99 plan you confirmed, and a $0.99 plan that has been charging longer.
+      for (let k = 1; k <= 4; k++) charge(addDays(today, -30 * k), -999, 'APPLE.COM/BILL');
+      for (let k = 1; k <= 9; k++) charge(addDays(today, -30 * k - 3), -99, 'APPLE.COM/BILL');
+      db.exec(
+        `INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, status) VALUES (?, 'Apple', 'monthly', -999, 'confirmed')`,
+        normalizeMerchant('APPLE.COM/BILL'),
+      );
+      await api(env, 'POST', '/recurring/detect');
+      const rows = db.rows<{ status: string; cents: number }>(
+        'SELECT status, expected_amount_cents AS cents FROM recurring_bills ORDER BY expected_amount_cents',
+      );
+      expect(rows).toEqual([
+        { status: 'confirmed', cents: -999 },
+        { status: 'suggested', cents: -99 },
+      ]);
     });
 
     it('drops old suggestions that stopped, but keeps ones you confirmed or dismissed', async () => {
