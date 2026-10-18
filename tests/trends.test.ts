@@ -32,6 +32,9 @@ const CATS: [number, string, string, CategoryKind, number | null][] = [
   [10, 'Income', 'Paychecks', 'income', null],
   [11, 'Transfers', 'Transfers', 'transfer', null],
   [12, 'Food', 'Misc', 'expense', null], // an old section left behind by the category migration
+  [13, 'Everyday', 'Medical', 'expense', null],
+  [14, 'Habits', 'Coffee & Fast Food', 'expense', null],
+  [15, 'Fun & Wants', 'Shopping', 'expense', null],
 ];
 const categories = CATS.map(([id, section, name, , funMemberId]) => ({ id, section, name, funMemberId }));
 const kindOf = (id: number | null): CategoryKind | null => (id === null ? null : (CATS.find((c) => c[0] === id)?.[3] ?? null));
@@ -274,25 +277,57 @@ describe('trends: what changed', () => {
 
   it('top 5 up (biggest first) and top 3 down (biggest drop first)', () => {
     const rows: [number, number[], number][] = [
-      [1, [0, 10000, 10000, 10000], 13000],
-      [2, [0, 10000, 10000, 10000], 15000],
+      [13, [0, 10000, 10000, 10000], 13000],
+      [14, [0, 10000, 10000, 10000], 15000],
       [3, [0, 10000, 10000, 10000], 14000],
       [4, [0, 10000, 10000, 10000], 16000],
       [5, [0, 10000, 10000, 10000], 12500],
       [6, [0, 10000, 10000, 10000], 17000],
       [7, [0, 10000, 10000, 10000], 5000],
       [8, [0, 10000, 10000, 10000], 2000],
-      [9, [0, 10000, 10000, 10000], 7000],
+      [15, [0, 10000, 10000, 10000], 7000],
       [12, [0, 10000, 10000, 10000], 0], // not a group category: never listed
     ];
     const changed = whatChanged(history(rows), '2026-10-31');
-    expect(changed.up.map((c) => c.categoryId)).toEqual([6, 4, 2, 3, 1]);
-    expect(changed.down.map((c) => c.categoryId)).toEqual([8, 7, 9]);
+    expect(changed.up.map((c) => c.categoryId)).toEqual([6, 4, 14, 3, 13]);
+    expect(changed.down.map((c) => c.categoryId)).toEqual([8, 7, 15]);
   });
 
   it('a category with no spending this month shows as down', () => {
-    const changed = whatChanged(history([[1, [0, 50000, 50000, 50000], 0]]), '2026-10-31');
-    expect(changed.down).toEqual([{ categoryId: 1, name: 'Housing', soFar: 0, usual: 50000, projected: 0, diff: -50000 }]);
+    const changed = whatChanged(history([[3, [0, 50000, 50000, 50000], 0]]), '2026-10-31');
+    expect(changed.down).toEqual([{ categoryId: 3, name: 'Groceries', soFar: 0, usual: 50000, projected: 0, diff: -50000 }]);
+  });
+
+  it('only everyday spending: Bills and Saving never listed (fixed-day payments would spike)', () => {
+    // Rent and savings land on the 1st; on day 10 they'd project to 3× usual. Groceries really did jump.
+    const txns: LedgerTxn[] = [];
+    for (const m of ['2026-07', '2026-08', '2026-09']) {
+      txns.push(txn(`${m}-01`, -150000, 1), txn(`${m}-01`, -32000, 2), txn(`${m}-01`, -30000, 9), txn(`${m}-12`, -40000, 3));
+    }
+    txns.push(txn('2026-10-01', -150000, 1), txn('2026-10-01', -32000, 2), txn('2026-10-01', -30000, 9), txn('2026-10-05', -30000, 3));
+    const t = trendsOf(txns);
+    const changed = whatChanged(t, '2026-10-10');
+    expect(changed.basis).toBe('this-month');
+    // Groceries: 30000 * 31 / 10 = 93000 vs 40000 usual.
+    expect(changed.up).toEqual([{ categoryId: 3, name: 'Groceries', soFar: 30000, usual: 40000, projected: 93000, diff: 53000 }]);
+    expect(changed.down).toEqual([]);
+    // A bill that really changed is still not listed: Trends' group chart shows Bills instead.
+    const skipped = whatChanged(trendsOf([...txns, txn('2026-10-02', -90000, 1)]), '2026-10-31');
+    expect([...skipped.up, ...skipped.down].map((c) => c.categoryId)).toEqual([3]);
+  });
+
+  it('the last-month basis (before day 7) leaves out Bills and Saving too', () => {
+    // September: rent up, savings down, habits up; usual from Jun–Aug.
+    const t = history([
+      [1, [150000, 150000, 150000, 200000], 0],
+      [9, [30000, 30000, 30000, 0], 0],
+      [5, [10000, 10000, 10000, 16000], 0],
+      [7, [20000, 20000, 20000, 10000], 0],
+    ]);
+    const early = whatChanged(t, '2026-10-03');
+    expect(early.basis).toBe('last-month');
+    expect(early.up.map((c) => [c.categoryId, c.diff])).toEqual([[5, 6000]]);
+    expect(early.down.map((c) => [c.categoryId, c.diff])).toEqual([[7, -10000]]);
   });
 
   it('usual counts from the household’s first month; a new category still averages with zeros', () => {

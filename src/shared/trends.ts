@@ -161,11 +161,16 @@ export interface Change {
 
 /** Changes smaller than this are noise. */
 const CHANGE_THRESHOLD_CENTS = 2000;
+/**
+ * Only everyday spending is compared. Bills and Saving (rent, loans, insurance, transfers to savings) land on
+ * fixed days, so scaling them by days elapsed makes false spikes.
+ */
+const CHANGE_GROUPS: ReadonlySet<GroupKey> = new Set(['everyday', 'habits', 'fun']);
 /** Before this day of the month there's too little to go on; compare last month instead. */
 const FIRST_COMPARABLE_DAY = 7;
 
 /**
- * Categories whose month differs most from usual. From day 7 on, this month so far scaled to the full
+ * Everyday, Habits and Fun & Wants categories whose month differs most from usual. From day 7 on, this month so far scaled to the full
  * month by days elapsed; before that, the last full month as it ended. Usual is the average of the 3
  * months before the month compared, from the household's first month with data on; with no such full
  * month there's nothing to compare, so no rows.
@@ -181,7 +186,7 @@ export function whatChanged(
   const start = usualStart(trends, index);
   if (index < 0 || start >= index) return { basis, up: [], down: [] };
 
-  const changes = trends.categories.map((c): Change => {
+  const changes = trends.categories.filter((c) => CHANGE_GROUPS.has(c.group)).map((c): Change => {
     const soFar = c.byMonth[index]!;
     const usual = average(c.byMonth, start, index);
     const projected = basis === 'this-month' ? Math.round((soFar * monthLength(month)) / day) : soFar;

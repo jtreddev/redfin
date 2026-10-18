@@ -297,8 +297,8 @@ function ChangesCard({ t }: { t: TrendsResponse }) {
       <h2>{basis === 'this-month' ? 'What changed this month' : `What changed in ${compared ? monthLabel(compared) : 'last month'}`}</h2>
       <p className="muted small">
         {basis === 'this-month'
-          ? 'This month so far, scaled up to a full month, compared with usual (the last 3 full months). Changes under $20 are left out.'
-          : 'It’s early in the month, so this compares last month with the 3 months before it. Changes under $20 are left out.'}
+          ? 'Everyday, Habits and Fun & Wants: this month so far, scaled up to a full month, compared with usual (the last 3 full months). Changes under $20 are left out.'
+          : 'Everyday, Habits and Fun & Wants: it’s early in the month, so this compares last month with the 3 months before it. Changes under $20 are left out.'}
       </p>
       {!hasUsual ? (
         <p className="muted">Needs a full month of history to compare with.</p>

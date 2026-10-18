@@ -67,10 +67,13 @@ Top to bottom (phone first, one column; two columns on wide screens):
 3. **One category over time** — a picker (default Habits; options: every category with
    activity, grouped by group) and a 12-month bar chart for it, with the usual (3-month
    average) as a thin reference line. Tooltip per bar.
-4. **What changed this month** — a list (not a chart): categories whose month-so-far, scaled
-   to the full month by days elapsed, differs most from their usual (top 5 up, top 3 down),
-   ignoring changes under $20. Each row: name, this month so far, usual, arrow + difference.
-   Before day 7 of a month, compare the last full month instead and say so.
+4. **What changed this month** — a list (not a chart): Everyday, Habits and Fun & Wants
+   categories whose month-so-far, scaled to the full month by days elapsed, differs most from
+   their usual (top 5 up, top 3 down), ignoring changes under $20. Bills and Saving categories
+   are left out: rent, loans, insurance and transfers to savings land on fixed days, so scaling
+   them by days elapsed makes false spikes (ruling P2-R6). Each row: name, this month so far,
+   usual, arrow + difference. Before day 7 of a month, compare the last full month instead (same
+   groups) and say so.
 5. **Table view** toggle on each chart (accessibility): the same numbers as a table.
 
 Empty states: under 2 months of data → "Trends fill in as history builds up" plus whatever
