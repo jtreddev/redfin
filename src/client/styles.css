@@ -58,6 +58,17 @@
   --chart-grid: var(--hairline);
   --chart-axis: var(--control);
   --chart-hover: rgb(27 36 48 / 4%);
+
+  /* The old token names, kept as aliases so styles written against them (e.g. a branch developed in
+     parallel) pick up the new palette in both modes. New code uses the names above. */
+  --bg: var(--paper);
+  --text: var(--ink);
+  --muted: var(--slate);
+  --border: var(--hairline);
+  --surface-2: var(--tint);
+  --brand: var(--accent);
+  --brand-ink: var(--accent-ink);
+  --brand-soft: var(--accent-soft);
   color-scheme: light;
 }
 
