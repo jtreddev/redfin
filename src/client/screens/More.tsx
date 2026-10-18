@@ -127,7 +127,7 @@ function DevUserSwitcher() {
 export function SubHeader({ title, subtitle, action }: { title: string; subtitle?: string; action?: React.ReactNode }) {
   return (
     <>
-      <Button small variant="ghost" onClick={() => go('more')} className="back">
+      <Button small variant="ghost" onClick={() => go('more')} className="back more-back">
         <Icon name="back" />
         More
       </Button>

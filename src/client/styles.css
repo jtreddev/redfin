@@ -287,8 +287,8 @@ a {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    width: var(--sidebar);
-    padding: 28px 12px 24px;
+    width: calc(var(--sidebar) + env(safe-area-inset-left));
+    padding: calc(28px + env(safe-area-inset-top)) 12px calc(24px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
     overflow-y: auto;
     border-right: 1px solid var(--hairline);
     background: var(--paper);
@@ -351,7 +351,7 @@ a {
 
   .app {
     max-width: none;
-    margin: 0 0 0 var(--sidebar);
+    margin: 0 0 0 calc(var(--sidebar) + env(safe-area-inset-left));
     padding: 40px 48px 64px;
   }
 
@@ -391,8 +391,8 @@ a {
 }
 
 @media (min-width: 900px) {
-  /* The side menu lists every More screen, so the way back is already on screen. */
-  .btn.back {
+  /* The side menu lists every More screen, so the way back to More is already on screen. */
+  .btn.more-back {
     display: none;
   }
 
