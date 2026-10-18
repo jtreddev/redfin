@@ -55,7 +55,7 @@ function NavLink({ path, label, icon, active }: { path: string; label: string; i
   );
 }
 
-type BaseData = Omit<AppData, 'reload' | 'toast'>;
+type BaseData = Omit<AppData, 'reload' | 'toast' | 'undoLast'>;
 
 /** Keeps a crash in one screen from blanking the whole app. */
 class ScreenErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
@@ -142,6 +142,17 @@ export function App() {
       .catch((e) => console.error('Background categorizing failed', e));
   }, [needsCategorizing, reload]);
 
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
+  const undoLast = useCallback(() => {
+    const action = toastRef.current?.action;
+    if (!action || action.label !== 'Undo') return false;
+    window.clearTimeout(timer.current);
+    setToast(null);
+    action.run();
+    return true;
+  }, []);
+
   const showToast = useCallback((text: string, tone: 'ok' | 'error' = 'ok', options: ToastOptions = {}) => {
     setToast({ text, tone, action: options.action });
     window.clearTimeout(timer.current);
@@ -154,9 +165,9 @@ export function App() {
 
   const top = route.path.split('/')[0] ?? 'home';
   // On a phone, More's screens light up the More tab; the side menu lists them, so it lights up the screen itself.
-  const sideActive = top === 'more' ? route.path : top;
+  const sideActive = top === 'more' ? route.path.split('/').slice(0, 2).join('/') : top;
   return (
-    <AppContext.Provider value={{ ...base, reload, toast: showToast }}>
+    <AppContext.Provider value={{ ...base, reload, toast: showToast, undoLast }}>
       <a className="skip-link" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>
         Skip to content
       </a>
@@ -165,7 +176,8 @@ export function App() {
           <Mark />
           <span>Family Budget</span>
         </div>
-        {TABS.map((tab) => (
+        {/* More's screens are listed here directly, so the side menu has no More entry. */}
+        {TABS.filter((tab) => tab.path !== 'more').map((tab) => (
           <NavLink key={tab.path} {...tab} active={sideActive === tab.path} />
         ))}
         {MORE_ITEMS.map((item) => (

@@ -5,6 +5,7 @@ import { go } from '../router';
 import { useApp } from '../state';
 import { Button, Card, Field, PageHeader } from '../ui';
 import { Accounts } from './Accounts';
+import { Categories } from './Categories';
 import { CheckIn } from './CheckIn';
 import { Export } from './Export';
 import { Fun } from './Fun';
@@ -19,11 +20,12 @@ export const MORE_ITEMS: { path: string; icon: IconName; title: string; short: s
   { path: 'checkin', icon: 'checkin', title: 'Monthly check-in', short: 'Check-in', text: 'Review last month together and agree on the next one' },
   { path: 'fun', icon: 'fun', title: 'Fun money', short: 'Fun money', text: 'Personal allowances, no questions asked' },
   { path: 'kids', icon: 'kids', title: 'Kids', short: 'Kids', text: 'What each kid costs, budgets, tax summaries' },
+  { path: 'categories', icon: 'categories', title: 'Categories', short: 'Categories', text: 'Add, rename, nest, reorder, hide or merge' },
   { path: 'accounts', icon: 'accounts', title: 'Accounts & banks', short: 'Accounts', text: 'Connect Chime, Capital One, Fidelity' },
   { path: 'import', icon: 'import', title: 'Import a file', short: 'Import', text: 'CSV, OFX or QFX downloads from your bank' },
   { path: 'income', icon: 'income', title: 'Income & paydays', short: 'Income', text: 'Paychecks that drive the weekly plan' },
   { path: 'rules', icon: 'rules', title: 'Rules', short: 'Rules', text: 'How transactions get sorted automatically' },
-  { path: 'settings', icon: 'settings', title: 'Settings', short: 'Settings', text: 'Household, people, categories' },
+  { path: 'settings', icon: 'settings', title: 'Settings', short: 'Settings', text: 'Household, people, simple or more tools' },
   { path: 'export', icon: 'export', title: 'Export your data', short: 'Export', text: 'Everything, in open formats' },
 ];
 
@@ -35,6 +37,8 @@ export function More({ sub, params }: { sub: string | undefined; params: URLSear
       return <Fun />;
     case 'kids':
       return <Kids />;
+    case 'categories':
+      return <Categories params={params} />;
     case 'accounts':
       return <Accounts />;
     case 'import':
@@ -53,7 +57,6 @@ export function More({ sub, params }: { sub: string | undefined; params: URLSear
 }
 
 function MoreMenu() {
-  const { me } = useApp();
   return (
     <div className="stack">
       <PageHeader title="More" />
@@ -71,18 +74,24 @@ function MoreMenu() {
           </button>
         ))}
       </div>
-      {me.devMode ? (
-        <DevUserSwitcher />
-      ) : (
-        <Card>
-          <p className="muted small">Signed in as {me.viewer.email}</p>
-          {/* Ends the Cloudflare Access session, so a shared device stops showing your private fun money. */}
-          <Button variant="secondary" onClick={() => window.location.assign('/cdn-cgi/access/logout')}>
-            Sign out
-          </Button>
-        </Card>
-      )}
+      <AccountCard />
     </div>
+  );
+}
+
+/** Who you are and Sign out (or, in local testing, who to act as). On More, and in Settings for the side menu. */
+export function AccountCard() {
+  const { me } = useApp();
+  return me.devMode ? (
+    <DevUserSwitcher />
+  ) : (
+    <Card>
+      <p className="muted small">Signed in as {me.viewer.email}</p>
+      {/* Ends the Cloudflare Access session, so a shared device stops showing your private fun money. */}
+      <Button variant="secondary" onClick={() => window.location.assign('/cdn-cgi/access/logout')}>
+        Sign out
+      </Button>
+    </Card>
   );
 }
 

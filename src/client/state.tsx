@@ -8,6 +8,8 @@ export interface AppData {
   accounts: Account[];
   reload: () => Promise<void>;
   toast: (text: string, tone?: 'ok' | 'error', options?: ToastOptions) => void;
+  /** Runs the Undo in the toast on screen, if there is one (the `u` shortcut). False when there's nothing to undo. */
+  undoLast: () => boolean;
 }
 
 export interface ToastOptions {

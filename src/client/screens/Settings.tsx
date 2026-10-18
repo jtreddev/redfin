@@ -1,13 +1,12 @@
 import { useState } from 'react';
-import { GROUPS, kindForGroup } from '../../shared/categorySet';
 import { formatCents } from '../../shared/money';
-import { errorMessage, patch, post } from '../api';
+import { errorMessage, patch } from '../api';
 import { go } from '../router';
 import { recategorizeAll } from '../sync';
 import { useApp } from '../state';
 import type { Member } from '../types';
 import { AmountInput, Button, Card, Field, Sheet, Toggle } from '../ui';
-import { SubHeader } from './More';
+import { AccountCard, SubHeader } from './More';
 
 const US_TIME_ZONES = [
   'America/New_York',
@@ -28,7 +27,6 @@ export function Settings() {
   const [recategorizing, setRecategorizing] = useState<number | null>(null);
   const [funStart, setFunStart] = useState(me.household.funMoneyStartDate ?? '');
   const [editingMember, setEditingMember] = useState<Member | null>(null);
-  const [categoriesOpen, setCategoriesOpen] = useState(false);
 
   async function save() {
     if (cutoff === null) {
@@ -41,6 +39,16 @@ export function Settings() {
       await patch('/household', { name, timezone, lowBalanceCents: low ?? 0, habitCutoffCents: cutoff, funMoneyStartDate: funStart || null });
       await reload();
       toast('Saved');
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    }
+  }
+
+  async function savePrefs(body: { hideSetup?: boolean; powerTools?: boolean }, done: string) {
+    try {
+      await patch('/me/prefs', body);
+      await reload();
+      toast(done);
     } catch (error) {
       toast(errorMessage(error), 'error');
     }
@@ -131,16 +139,36 @@ export function Settings() {
       </Card>
 
       <Card>
+        <h2>Just for you</h2>
+        <p className="muted small">Each of you decides these for yourself.</p>
+        <div className="stack-sm">
+          <Toggle
+            checked={!me.viewer.hideSetup}
+            onChange={(v) => void savePrefs({ hideSetup: !v }, v ? 'The setup checklist is back on Home' : 'Setup checklist hidden')}
+            label="Show the setup checklist"
+            hint="The “Getting set up” steps on Home. It also goes away once every step is done."
+          />
+          <Toggle
+            checked={me.viewer.powerTools}
+            onChange={(v) => void savePrefs({ powerTools: v }, v ? 'More tools are on' : 'More tools are off')}
+            label="Show more tools"
+            hint="Keyboard shortcuts, saved searches and Download CSV in Activity, and rule previews. Off keeps things simple."
+          />
+        </div>
+      </Card>
+
+      <Card>
         <h2>Organize</h2>
         <div className="cluster">
-          <Button onClick={() => setCategoriesOpen(true)}>Categories</Button>
+          <Button onClick={() => go('more/categories')}>Categories</Button>
           <Button onClick={() => go('more/kids')}>Kids</Button>
           <Button onClick={() => go('more/rules')}>Rules</Button>
         </div>
       </Card>
 
+      <AccountCard />
+
       {editingMember && <MemberSheet member={editingMember} onClose={() => setEditingMember(null)} />}
-      {categoriesOpen && <CategoriesSheet onClose={() => setCategoriesOpen(false)} />}
     </div>
   );
 }
@@ -185,72 +213,6 @@ function MemberSheet({ member, onClose }: { member: Member; onClose: () => void 
       <Button variant="primary" onClick={() => void save()} disabled={!name.trim()}>
         Save
       </Button>
-    </Sheet>
-  );
-}
-
-const GROUP_NAMES: string[] = Object.values(GROUPS);
-
-function CategoriesSheet({ onClose }: { onClose: () => void }) {
-  const { categories, sections, toast, reload } = useApp();
-  const [newName, setNewName] = useState<Record<number, string>>({});
-  const [kidScoped, setKidScoped] = useState<Record<number, boolean>>({});
-
-  async function add(sectionId: number) {
-    const name = newName[sectionId]?.trim();
-    if (!name) return;
-    const section = sections.find((s) => s.id === sectionId);
-    const kind = kindForGroup(section?.name ?? '');
-    try {
-      await post('/categories', { sectionId, name, kind, kidScoped: Boolean(kidScoped[sectionId]) });
-      setNewName((v) => ({ ...v, [sectionId]: '' }));
-      await reload();
-    } catch (error) {
-      toast(errorMessage(error), 'error');
-    }
-  }
-
-  async function toggleArchived(id: number, archived: boolean) {
-    try {
-      await patch(`/categories/${id}`, { archived });
-      await reload();
-    } catch (error) {
-      toast(errorMessage(error), 'error');
-    }
-  }
-
-  return (
-    <Sheet open onClose={onClose} title="Categories">
-      {sections
-        // Old sections left empty by the move to groups stay hidden.
-        .filter((s) => GROUP_NAMES.includes(s.name) || categories.some((c) => c.sectionId === s.id && !c.archived))
-        .map((section) => (
-          <div key={section.id} className="stack-sm">
-            <h3>{section.name}</h3>
-            {categories
-              .filter((c) => c.sectionId === section.id && c.funMemberId === null)
-              .map((c) => (
-                <Toggle key={c.id} checked={!c.archived} onChange={(on) => void toggleArchived(c.id, !on)} label={c.name} />
-              ))}
-            <div className="cluster" style={{ flexWrap: 'nowrap' }}>
-              <input
-                placeholder={`New ${section.name.toLowerCase()} category`}
-                value={newName[section.id] ?? ''}
-                onChange={(e) => setNewName((v) => ({ ...v, [section.id]: e.target.value }))}
-              />
-              <Button small onClick={() => void add(section.id)}>
-                Add
-              </Button>
-            </div>
-            {kindForGroup(section.name) === 'expense' && (
-              <Toggle
-                checked={Boolean(kidScoped[section.id])}
-                onChange={(v) => setKidScoped((s) => ({ ...s, [section.id]: v }))}
-                label="New category is per kid"
-              />
-            )}
-          </div>
-        ))}
     </Sheet>
   );
 }

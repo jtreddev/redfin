@@ -49,3 +49,14 @@ export function go(path: string, params?: Record<string, string | number | null 
   }
   window.scrollTo(0, 0);
 }
+
+/**
+ * Updates the current URL without a new history entry or a scroll to the top: for search boxes and
+ * filters, so Back leaves the screen instead of stepping through every keystroke.
+ */
+export function replaceRoute(path: string, query: string) {
+  const hash = `#/${path}${query ? `?${query}` : ''}`;
+  if (window.location.hash === hash) return;
+  window.history.replaceState(null, '', `/${hash}`);
+  window.dispatchEvent(new PopStateEvent('popstate'));
+}

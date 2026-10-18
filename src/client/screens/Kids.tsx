@@ -5,6 +5,9 @@ import { money } from '../format';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import type { Kid } from '../types';
+import { moveId } from '../categoryTree';
+import { Icon } from '../icons';
+import { KidFormSheet } from '../quickAdd';
 import { AmountInput, Button, Card, Empty, ErrorNote, Field, Loading, Money, MonthPicker, Progress, Sheet } from '../ui';
 import { SubHeader } from './More';
 
@@ -17,16 +20,54 @@ interface KidReport {
 }
 
 export function Kids() {
-  const { me, reload } = useApp();
+  const { me, reload, toast } = useApp();
   const [month, setMonth] = useState(monthOf(me.today));
   const report = useLoad(() => api<KidReport>(`/kids/report?from=${monthStart(month)}&to=${monthEnd(month)}`), [month]);
+  const all = useLoad(() => api<Kid[]>('/kids'), [me.kids.length]);
   const [editingKid, setEditingKid] = useState<Kid | 'new' | null>(null);
   const [budgetKid, setBudgetKid] = useState<KidReport['kids'][number] | null>(null);
   const year = Number(me.today.slice(0, 4));
+  const hidden = (all.data ?? []).filter((k) => k.archived);
+  // The report follows the kids' order; me.kids is the source of truth for it.
+  const ordered = report.data ? me.kids.map((k) => report.data!.kids.find((r) => r.id === k.id)).filter((k) => k !== undefined) : [];
+
+  async function refresh() {
+    await Promise.all([reload(), report.reload(), all.reload()]);
+  }
+
+  async function move(id: number, delta: number) {
+    const next = moveId(
+      me.kids.map((k) => k.id),
+      id,
+      delta,
+    );
+    if (!next) return;
+    try {
+      await post('/kids/reorder', { ids: next });
+      await refresh();
+      document.getElementById(`kid-${delta < 0 ? 'up' : 'down'}-${id}`)?.focus();
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    }
+  }
+
+  async function setHidden(kid: Kid, archived: boolean) {
+    try {
+      await patch(`/kids/${kid.id}`, { archived });
+      await refresh();
+      toast(archived ? `${kid.name} is hidden` : `${kid.name} is back`);
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    }
+  }
 
   return (
     <div className="stack">
-      <SubHeader title="Kids" action={<Button small onClick={() => setEditingKid('new')}>Add kid</Button>} />
+      <SubHeader title="Kids" />
+      <Button variant="primary" className="add-kid" onClick={() => setEditingKid('new')}>
+        <Icon name="plus" />
+        Add a kid
+      </Button>
       {me.kids.length === 0 ? (
         <Empty title="Add your kids">Then tag purchases to a kid to see what each one really costs.</Empty>
       ) : (
@@ -47,14 +88,14 @@ export function Kids() {
                   </Button>
                 </div>
               )}
-              {report.data.kids.map((kid) => (
+              {ordered.map((kid, index) => (
                 <Card key={kid.id} boxed>
                   <div className="spread">
                     <div className="cluster">
                       <span className="avatar" style={{ background: kid.color }}>
                         {kid.name.slice(0, 1)}
                       </span>
-                      <strong>{kid.name}</strong>
+                      <h2 className="h3">{kid.name}</h2>
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <Money cents={kid.totalCents} whole className="big" />
@@ -77,19 +118,38 @@ export function Kids() {
                       ))
                     )}
                   </div>
-                  <div className="cluster" style={{ marginTop: 10 }}>
-                    <Button small onClick={() => setBudgetKid(kid)}>
-                      Budgets
-                    </Button>
-                    <Button small variant="ghost" onClick={() => go('activity', { kid: kid.id, month })}>
-                      Purchases
-                    </Button>
-                    <a className="btn btn-small btn-ghost" href={`/api/kids/${kid.id}/tax-summary.csv?year=${year}`} download>
-                      {year} tax summary
-                    </a>
-                    <Button small variant="ghost" onClick={() => setEditingKid(kid)}>
-                      Edit
-                    </Button>
+                  <div className="spread kid-actions">
+                    <div className="cluster">
+                      <Button small onClick={() => setBudgetKid(kid)}>
+                        Budgets
+                      </Button>
+                      <Button small variant="ghost" onClick={() => go('activity', { kid: kid.id, month })}>
+                        Purchases
+                      </Button>
+                      <a className="btn btn-small btn-ghost" href={`/api/kids/${kid.id}/tax-summary.csv?year=${year}`} download>
+                        {year} tax summary
+                      </a>
+                      <Button small variant="ghost" onClick={() => setEditingKid(kid)}>
+                        Edit
+                      </Button>
+                    </div>
+                    {ordered.length > 1 && (
+                      <span className="reorder-btns">
+                        <button type="button" id={`kid-up-${kid.id}`} className="icon-btn" aria-label={`Move ${kid.name} up`} disabled={index === 0} onClick={() => void move(kid.id, -1)}>
+                          <Icon name="up" />
+                        </button>
+                        <button
+                          type="button"
+                          id={`kid-down-${kid.id}`}
+                          className="icon-btn"
+                          aria-label={`Move ${kid.name} down`}
+                          disabled={index === ordered.length - 1}
+                          onClick={() => void move(kid.id, 1)}
+                        >
+                          <Icon name="down" />
+                        </button>
+                      </span>
+                    )}
                   </div>
                 </Card>
               ))}
@@ -98,13 +158,53 @@ export function Kids() {
         </>
       )}
 
-      {editingKid && (
-        <KidSheet
-          kid={editingKid === 'new' ? null : editingKid}
+      {hidden.length > 0 && (
+        <section className="stack-sm" aria-labelledby="hidden-kids">
+          <div className="section-title">
+            <h2 id="hidden-kids" className="h3">
+              Hidden
+            </h2>
+          </div>
+          <div className="list">
+            {hidden.map((kid) => (
+              <div key={kid.id} className="row">
+                <span className="cluster">
+                  <span className="avatar" style={{ background: kid.color }}>
+                    {kid.name.slice(0, 1)}
+                  </span>
+                  <span>{kid.name}</span>
+                </span>
+                <Button small onClick={() => void setHidden(kid, false)}>
+                  Show again
+                </Button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {editingKid === 'new' && (
+        <KidFormSheet
+          kid={null}
           onClose={() => setEditingKid(null)}
-          onSaved={async () => {
+          onSaved={() => {
             setEditingKid(null);
-            await Promise.all([reload(), report.reload()]);
+            void refresh();
+          }}
+        />
+      )}
+      {editingKid && editingKid !== 'new' && (
+        <KidEditSheet
+          kid={editingKid}
+          onClose={() => setEditingKid(null)}
+          onHide={() => {
+            const kid = editingKid;
+            setEditingKid(null);
+            void setHidden(kid, true);
+          }}
+          onSaved={() => {
+            setEditingKid(null);
+            void refresh();
           }}
         />
       )}
@@ -123,59 +223,25 @@ export function Kids() {
   );
 }
 
-const COLORS = ['#e08a2c', '#3b82c4', '#8a5cd6', '#2e9e6b', '#d0457b', '#c2a12b'];
-
-function KidSheet({ kid, onClose, onSaved }: { kid: Kid | null; onClose: () => void; onSaved: () => Promise<void> }) {
-  const { toast, me } = useApp();
-  const [name, setName] = useState(kid?.name ?? '');
-  const [color, setColor] = useState(kid?.color ?? COLORS[me.kids.length % COLORS.length] ?? '#e08a2c');
-  const [birthDate, setBirthDate] = useState(kid?.birthDate ?? '');
-
-  async function save(archive = false) {
-    try {
-      if (kid) await patch(`/kids/${kid.id}`, archive ? { archived: true } : { name, color, birthDate: birthDate || null });
-      else await post('/kids', { name, color, birthDate: birthDate || null });
-      await onSaved();
-    } catch (error) {
-      toast(errorMessage(error), 'error');
-    }
-  }
-
-  return (
-    <Sheet open onClose={onClose} title={kid ? kid.name : 'Add a kid'}>
-      <Field label="Name">
-        <input value={name} onChange={(e) => setName(e.target.value)} />
-      </Field>
-      <Field label="Birthday (optional)">
-        <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} />
-      </Field>
-      <Field label="Color">
-        <div className="swatches">
-          {COLORS.map((c) => (
-            <button
-              key={c}
-              type="button"
-              aria-label={c}
-              onClick={() => setColor(c)}
-              aria-pressed={color === c}
-              className={`swatch ${color === c ? 'selected' : ''}`}
-              style={{ background: c }}
-            />
-          ))}
-        </div>
-      </Field>
-      <div className="cluster">
-        <Button variant="primary" onClick={() => void save()} disabled={!name.trim()}>
-          Save
-        </Button>
-        {kid && (
-          <Button variant="danger" onClick={() => void save(true)}>
-            Archive
+/** Editing a kid is the add form plus "Hide": hidden kids keep their history and can come back. */
+function KidEditSheet({ kid, onClose, onSaved, onHide }: { kid: Kid; onClose: () => void; onSaved: () => void; onHide: () => void }) {
+  const [hiding, setHiding] = useState(false);
+  if (hiding) {
+    return (
+      <Sheet open onClose={onClose} title={`Hide ${kid.name}?`}>
+        <p className="muted">{kid.name} leaves the kid pickers and this screen. Purchases stay tagged, and you can show them again here.</p>
+        <div className="cluster">
+          <Button variant="danger" onClick={onHide}>
+            Hide {kid.name}
           </Button>
-        )}
-      </div>
-    </Sheet>
-  );
+          <Button variant="ghost" onClick={() => setHiding(false)}>
+            Cancel
+          </Button>
+        </div>
+      </Sheet>
+    );
+  }
+  return <KidFormSheet kid={kid} onClose={onClose} onSaved={onSaved} onHide={() => setHiding(true)} />;
 }
 
 function KidBudgetSheet({ kid, month, onClose, onSaved }: { kid: KidReport['kids'][number]; month: string; onClose: () => void; onSaved: () => Promise<void> }) {

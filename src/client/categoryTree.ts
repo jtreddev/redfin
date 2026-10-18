@@ -96,7 +96,7 @@ export function categoryRules(c: Category, all: readonly Category[]): CategoryRu
   const relies = `The app looks for ${c.name} by name, so it keeps its name and group.`;
   return {
     rename: special ? relies : null,
-    moveGroup: special ? relies : c.parentId !== null ? 'Take it out of its parent first.' : null,
+    moveGroup: special ? `${c.name} stays in ${c.sectionName}, where the app looks for it.` : c.parentId !== null ? 'Take it out of its parent first.' : null,
     nest: special
       ? `The app relies on ${c.name}, so it stays a top-level category.`
       : hasChildren

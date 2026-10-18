@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { GROUP_ORDER } from '../../shared/trends';
-import { api, ApiError, errorMessage } from '../api';
+import { api, ApiError, errorMessage, patch } from '../api';
 import { money, monthLabel, plural, shortDate, timeAgo, weekdayDate } from '../format';
 import { Icon } from '../icons';
 import { ribbonLayout, usableCachedRibbon } from '../ribbon';
@@ -321,7 +321,7 @@ function NeedsLookCard({ h, onOpen }: { h: HomeResponse; onOpen: (t: Transaction
         ))}
       </div>
       {more > 0 && (
-        <Button small variant="ghost" className="btn-flush" onClick={() => go('activity', { filter: 'uncategorized' })}>
+        <Button small variant="ghost" className="btn-flush" onClick={() => go('activity', { needs: 1, month: 'all' })}>
           See all {needsLook.count}
         </Button>
       )}
@@ -380,7 +380,21 @@ function BillsCard({ h }: { h: HomeResponse }) {
 }
 
 function SetupChecklist() {
-  const { me } = useApp();
+  const { me, reload, toast } = useApp();
+  if (me.viewer.hideSetup) return null;
+
+  async function setHidden(hideSetup: boolean) {
+    try {
+      await patch('/me/prefs', { hideSetup });
+      await reload();
+      if (hideSetup) {
+        toast('Setup checklist hidden. Bring it back in Settings.', 'ok', { action: { label: 'Undo', run: () => void setHidden(false) } });
+      }
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    }
+  }
+
   const steps = [
     { done: me.setup.incomeSources > 0, label: 'Add your paycheck', path: 'more/income' },
     { done: me.setup.accounts > 0, label: 'Connect a bank or import a file', path: 'more/accounts' },
@@ -391,7 +405,12 @@ function SetupChecklist() {
   if (steps.every((s) => s.done)) return null;
   return (
     <Card>
-      <h2>Getting set up</h2>
+      <div className="spread">
+        <h2>Getting set up</h2>
+        <Button small variant="ghost" onClick={() => void setHidden(true)}>
+          Hide this
+        </Button>
+      </div>
       <div className="list">
         {steps.map((s) => (
           <button key={s.label} type="button" className="row row-button" onClick={() => go(s.path)} disabled={s.done}>

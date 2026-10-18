@@ -2163,3 +2163,551 @@ code {
   width: 16px;
   height: 16px;
 }
+
+/* ---------- Easy to change (project 5): categories, kids, search, select ---------- */
+
+h2.h3,
+.h3 {
+  font-size: var(--t-md);
+  font-weight: 600;
+}
+
+.plain-fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.plain-fieldset > legend {
+  padding: 0;
+  margin-bottom: 6px;
+}
+
+/* A row whose main part is its own button, with controls beside it. */
+.row.cat-row {
+  gap: 4px;
+  padding: 0;
+}
+
+.cat-open {
+  display: grid;
+  min-height: 52px;
+  padding: 8px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cat-open:disabled {
+  cursor: default;
+}
+
+.cat-open:hover:not(:disabled) .row-title {
+  color: var(--accent);
+}
+
+.cat-open:focus-visible {
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+.cat-child {
+  padding-left: 28px;
+}
+
+.cat-child .cat-open .row-title::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin: 0 8px 2px -2px;
+  border-left: 1.5px solid var(--control);
+  border-bottom: 1.5px solid var(--control);
+  border-bottom-left-radius: 3px;
+}
+
+.row.is-target {
+  background: var(--accent-soft);
+  box-shadow: -8px 0 0 var(--accent-soft), 8px 0 0 var(--accent-soft);
+}
+
+.row.is-dragging {
+  opacity: 0.45;
+}
+
+.row.is-over {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.drag-handle {
+  display: none;
+  color: var(--slate);
+  cursor: grab;
+}
+
+.drag-handle .icon {
+  width: 20px;
+  height: 20px;
+}
+
+@media (min-width: 900px) {
+  .drag-handle {
+    display: inline-grid;
+    margin-left: -12px;
+  }
+}
+
+.reorder-btns {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+.reorder-btns .icon-btn:disabled {
+  color: var(--control);
+  cursor: default;
+}
+
+.not-allowed {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.not-allowed .icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.inline-form > input,
+.inline-form > select {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.btn.add-inline {
+  justify-self: start;
+  margin-left: -12px;
+}
+
+.btn.add-inline .icon {
+  width: 18px;
+  height: 18px;
+}
+
+.add-form {
+  padding: 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+/* Activity: search, month, filters, results */
+
+.search-box {
+  position: relative;
+}
+
+.search-box > .icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  transform: translateY(-50%);
+  color: var(--slate);
+  pointer-events: none;
+}
+
+.search-box input {
+  padding-left: 42px !important;
+}
+
+.search-help {
+  margin: -10px 0 0;
+}
+
+.month-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.month-row .month-picker {
+  flex: 1 1 220px;
+}
+
+.icon-btn:disabled {
+  color: var(--control);
+  cursor: default;
+  background: transparent;
+}
+
+.chips {
+  position: relative;
+}
+
+.filter-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-chip .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.filter-chip-quiet {
+  border-style: dashed;
+  color: var(--slate);
+}
+
+.active-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.removable-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  max-width: 100%;
+  padding-left: 14px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--t-sm);
+  font-weight: 600;
+}
+
+.removable-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.removable-chip button {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.removable-chip button:hover {
+  background: rgb(63 74 166 / 10%);
+}
+
+.removable-chip .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.result-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.result-summary {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.result-bar .btn-ghost,
+.select-tools .btn-ghost {
+  margin-left: -12px;
+}
+
+.select-row {
+  justify-content: flex-start;
+}
+
+.select-row > .money {
+  margin-left: auto;
+}
+
+.select-row input[type='checkbox'] {
+  flex: none;
+  margin: 0 4px 0 0;
+}
+
+.row.is-selected {
+  background: var(--accent-soft);
+  box-shadow: -8px 0 0 var(--accent-soft), 8px 0 0 var(--accent-soft);
+}
+
+.is-selecting {
+  padding-bottom: 168px;
+}
+
+.bulk-bar {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  bottom: calc(var(--tabbar) + env(safe-area-inset-bottom) + 8px);
+  z-index: 45;
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--overlay-shadow);
+}
+
+.bulk-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.bulk-actions select {
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: var(--t-sm);
+}
+
+@media (min-width: 900px) {
+  .bulk-bar {
+    left: calc(var(--sidebar) + env(safe-area-inset-left) + 48px);
+    right: auto;
+    bottom: 24px;
+    width: min(760px, calc(100% - var(--sidebar) - 96px));
+    grid-template-columns: auto 1fr;
+    align-items: center;
+  }
+
+  .bulk-actions {
+    grid-template-columns: repeat(4, auto);
+    justify-content: end;
+  }
+
+  .is-selecting {
+    padding-bottom: 96px;
+  }
+}
+
+.check-group {
+  display: grid;
+  gap: 0;
+}
+
+.check-group > legend {
+  margin: 8px 0 4px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.check-row input[type='radio'] {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  accent-color: var(--accent);
+}
+
+.check-row input[type='checkbox'] {
+  flex: none;
+}
+
+.check-child {
+  padding-left: 34px;
+}
+
+.also-file {
+  align-items: flex-start;
+  font-size: var(--t-sm);
+}
+
+.also-file input[type='checkbox'] {
+  margin-top: 1px;
+}
+
+.sheet-actions {
+  position: sticky;
+  bottom: -24px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 -20px -24px;
+  padding: 12px 20px 24px;
+  border-top: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.edit-link {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-weight: 600;
+}
+
+.shortcut-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+}
+
+.shortcut-list > div {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.shortcut-list dt {
+  width: 3rem;
+}
+
+.shortcut-list dd {
+  margin: 0;
+}
+
+kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--control);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--surface);
+  font: inherit;
+  font-size: var(--t-sm);
+  font-weight: 650;
+}
+
+.saved-searches {
+  margin-bottom: -4px;
+}
+
+/* Plan: sub-categories under their parent; bills */
+
+.budget-child {
+  padding-left: 24px;
+}
+
+.budget-child .row-title::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin: 0 8px 2px -2px;
+  border-left: 1.5px solid var(--control);
+  border-bottom: 1.5px solid var(--control);
+  border-bottom-left-radius: 3px;
+}
+
+.bill-group {
+  margin: 8px 0 0;
+  font-size: var(--t-sm);
+  font-weight: 600;
+}
+
+.bill-row {
+  flex-wrap: wrap;
+}
+
+.bill-row .bill-actions {
+  flex: none;
+  flex-wrap: nowrap;
+  gap: 0;
+}
+
+.bill-row-suggested .bill-actions {
+  flex: 1 0 100%;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (min-width: 600px) {
+  .bill-row .bill-actions {
+    flex: none;
+  }
+}
+
+.bill-editor {
+  padding: 14px 0 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* Kids */
+
+.btn.add-kid {
+  justify-self: start;
+}
+
+.btn.add-kid .icon {
+  width: 20px;
+  height: 20px;
+}
+
+.kid-actions {
+  margin-top: 10px;
+  align-items: flex-end;
+}
+
+.reorder-btns .icon,
+.bulk-bar .btn .icon,
+.result-bar .btn .icon {
+  width: 18px;
+  height: 18px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .removable-chip button:hover {
+    background: rgb(143 152 236 / 14%);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .row.is-target {
+    transition: background-color 0.6s, box-shadow 0.6s;
+  }
+}
+
+/* The toast (Undo) sits above the bulk bar, not on it. */
+body:has(.bulk-bar) .toast {
+  bottom: calc(var(--tabbar) + env(safe-area-inset-bottom) + 150px);
+}
+
+@media (min-width: 900px) {
+  body:has(.bulk-bar) .toast {
+    bottom: 100px;
+  }
+}

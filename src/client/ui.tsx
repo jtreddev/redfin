@@ -1,7 +1,10 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type Ref } from 'react';
+import { createPortal } from 'react-dom';
 import { addMonths } from '../shared/dates';
 import { centsToInput, inputToCents, money, monthLabel } from './format';
+import { categoryTree, pickerOptions } from './categoryTree';
 import { Icon } from './icons';
+import { KidFormSheet, NewCategorySheet } from './quickAdd';
 import { useApp } from './state';
 import type { Category } from './types';
 
@@ -94,20 +97,33 @@ export function Button({
   );
 }
 
+/** Open sheets, innermost last: Escape closes only the top one, and the page scrolls again when none are open. */
+const openSheets: symbol[] = [];
+
 /** A bottom sheet on a phone, a centred dialog on a computer. Focus moves in on open and back on close. */
 export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title: string; children: ReactNode }) {
   const dialog = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const me = Symbol('sheet');
+    openSheets.push(me);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && openSheets[openSheets.length - 1] === me) {
+        e.stopPropagation();
+        closeRef.current();
+      }
+    };
     document.addEventListener('keydown', onKey);
     document.body.classList.add('no-scroll');
     return () => {
       document.removeEventListener('keydown', onKey);
-      document.body.classList.remove('no-scroll');
+      openSheets.splice(openSheets.indexOf(me), 1);
+      if (!openSheets.length) document.body.classList.remove('no-scroll');
     };
-  }, [open, onClose]);
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -116,7 +132,8 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
     return () => previous?.focus?.();
   }, [open]);
   if (!open) return null;
-  return (
+  // In a portal, so a sheet opened from inside a <label> (a picker's "＋ New") isn't part of that label.
+  return createPortal(
     <div className="sheet-backdrop" onClick={onClose}>
       <div
         ref={dialog}
@@ -135,7 +152,8 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
         </div>
         <div className="sheet-body">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -261,53 +279,141 @@ export function AmountInput({
   );
 }
 
-/** Category dropdown grouped by section. Hides your partner's fun money and archived categories. */
+const NEW = '__new';
+/** A sub-category's option reads "Habits › Snacks" (an optgroup can't nest, and the closed select shows it whole). */
+export function optionLabel(category: Category, categories: readonly Category[]): string {
+  const parent = category.parentId === null ? undefined : categories.find((c) => c.id === category.parentId);
+  return parent ? `${parent.name} › ${category.name}` : category.name;
+}
+
+/**
+ * Category dropdown grouped by group, sub-categories nested under their parent. Hides your partner's
+ * fun money and hidden categories. Ends with "＋ New category", which opens a small form and picks
+ * the new category (off by default when `filter` narrows the list).
+ */
 export function CategorySelect({
   value,
   onChange,
   noneLabel = 'Uncategorized',
   filter,
+  allowNew = !filter,
+  id,
+  selectRef,
+  disabled,
 }: {
   value: number | null;
   onChange: (id: number | null) => void;
   noneLabel?: string;
   filter?: (c: Category) => boolean;
+  allowNew?: boolean;
+  id?: string;
+  selectRef?: Ref<HTMLSelectElement>;
+  disabled?: boolean;
 }) {
-  const { categories, me } = useApp();
-  const visible = categories.filter(
-    (c) => (!c.archived || c.id === value) && (c.funMemberId === null || c.funMemberId === me.viewer.memberId) && (!filter || filter(c)),
+  const { categories, sections, me } = useApp();
+  const [creating, setCreating] = useState(false);
+  const groups = pickerOptions(
+    categoryTree(
+      sections,
+      categories,
+      (c) => (!c.archived || c.id === value) && (c.funMemberId === null || c.funMemberId === me.viewer.memberId) && (!filter || filter(c)),
+    ),
   );
-  const sections = [...new Set(visible.map((c) => c.sectionName))];
+  const current = categories.find((c) => c.id === value);
   return (
-    <select value={value ?? ''} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}>
-      <option value="">{noneLabel}</option>
-      {sections.map((section) => (
-        <optgroup key={section} label={section}>
-          {visible
-            .filter((c) => c.sectionName === section)
-            .map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
+    <>
+      <select
+        id={id}
+        ref={selectRef}
+        disabled={disabled}
+        value={value ?? ''}
+        onChange={(e) => {
+          if (e.target.value === NEW) {
+            // Leave the select showing the current value; the form picks the new one on save.
+            e.target.value = value === null ? '' : String(value);
+            setCreating(true);
+            return;
+          }
+          onChange(e.target.value ? Number(e.target.value) : null);
+        }}
+      >
+        <option value="">{noneLabel}</option>
+        {groups.map((g) => (
+          <optgroup key={g.section} label={g.section}>
+            {g.options.map(({ category }) => (
+              <option key={category.id} value={category.id}>
+                {optionLabel(category, categories)}
               </option>
             ))}
-        </optgroup>
-      ))}
-    </select>
+          </optgroup>
+        ))}
+        {allowNew && <option value={NEW}>＋ New category</option>}
+      </select>
+      {creating && (
+        <NewCategorySheet
+          defaultSectionId={current?.sectionId}
+          defaultParentId={current ? (current.parentId ?? null) : null}
+          onClose={() => setCreating(false)}
+          onCreated={(newId) => {
+            setCreating(false);
+            onChange(newId);
+          }}
+        />
+      )}
+    </>
   );
 }
 
-export function KidSelect({ value, onChange }: { value: number | null; onChange: (id: number | null) => void }) {
+/** Kid dropdown; "＋ Add a kid" opens the kid form and picks the new kid. Without kids (and adding), nothing. */
+export function KidSelect({
+  value,
+  onChange,
+  allowAdd = true,
+  noneLabel = 'No kid',
+  id,
+}: {
+  value: number | null;
+  onChange: (id: number | null) => void;
+  allowAdd?: boolean;
+  noneLabel?: string;
+  id?: string;
+}) {
   const { me } = useApp();
-  if (!me.kids.length) return null;
+  const [adding, setAdding] = useState(false);
+  if (!me.kids.length && !allowAdd) return null;
   return (
-    <select value={value ?? ''} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}>
-      <option value="">No kid</option>
-      {me.kids.map((k) => (
-        <option key={k.id} value={k.id}>
-          {k.name}
-        </option>
-      ))}
-    </select>
+    <>
+      <select
+        id={id}
+        value={value ?? ''}
+        onChange={(e) => {
+          if (e.target.value === NEW) {
+            e.target.value = value === null ? '' : String(value);
+            setAdding(true);
+            return;
+          }
+          onChange(e.target.value ? Number(e.target.value) : null);
+        }}
+      >
+        <option value="">{noneLabel}</option>
+        {me.kids.map((k) => (
+          <option key={k.id} value={k.id}>
+            {k.name}
+          </option>
+        ))}
+        {allowAdd && <option value={NEW}>＋ Add a kid</option>}
+      </select>
+      {adding && (
+        <KidFormSheet
+          kid={null}
+          onClose={() => setAdding(false)}
+          onSaved={(kidId) => {
+            setAdding(false);
+            if (kidId) onChange(kidId);
+          }}
+        />
+      )}
+    </>
   );
 }
 
