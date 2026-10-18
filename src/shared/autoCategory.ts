@@ -13,11 +13,22 @@ export type CategoryRef = readonly [section: string, name: string];
 
 export interface AutoContext {
   rules: readonly Rule[];
-  /** Confirmed bills: merchant key, signed expected amount, and the category they're filed under. */
-  bills: readonly { merchant: string; cents: number; categoryId: number | null; name: string }[];
+  /**
+   * Confirmed bills: merchant key, signed expected amount, the category they're filed under, and whose
+   * private bill it is (null = shared).
+   */
+  bills: readonly AutoBill[];
   /** Gas station charges under this are Habits. */
   cutoffCents: number;
   categoryIdOf: (ref: CategoryRef) => number | null;
+}
+
+export interface AutoBill {
+  merchant: string;
+  cents: number;
+  categoryId: number | null;
+  name: string;
+  privateMemberId?: number | null;
 }
 
 export interface AutoSubject {
@@ -29,6 +40,8 @@ export interface AutoSubject {
   amountCents: number;
   bankDetailed: string | null;
   bankPrimary: string | null;
+  /** The member whose personal card the charge is on, or null for a shared account. */
+  accountOwner?: number | null;
 }
 
 export interface AutoResult {
@@ -48,6 +61,12 @@ const NONE: AutoResult = { categoryId: null, ruleId: null, source: null, reason:
 /** The bill's key, or its "MERCHANT $9" variant for a second bill from the same merchant. */
 const billKeyMatches = (billMerchant: string, merchant: string) => billMerchant === merchant || billMerchant.startsWith(`${merchant} $`);
 
+/**
+ * Bills stay within the right person's accounts, like learned rules: a shared bill files charges on
+ * accounts that are nobody's personal card, a private one only charges on its person's personal card.
+ */
+export const billAppliesToAccount = (bill: AutoBill, accountOwner: number | null) => (bill.privateMemberId ?? null) === accountOwner;
+
 export function categorize(subject: AutoSubject, ctx: AutoContext): AutoResult {
   const rule = findRule(ctx.rules, subject);
   if (rule) {
@@ -64,7 +83,7 @@ export function categorize(subject: AutoSubject, ctx: AutoContext): AutoResult {
     // Two bills from one merchant (Netflix plans) can both be within range: take the closest amount.
     const gap = (b: { cents: number }) => Math.abs(Math.abs(b.cents) - Math.abs(subject.amountCents));
     const bill = ctx.bills
-      .filter((b) => b.categoryId != null && billKeyMatches(b.merchant, subject.merchant) && sameBill(b.cents, subject.amountCents))
+      .filter((b) => b.categoryId != null && billAppliesToAccount(b, subject.accountOwner ?? null) && billKeyMatches(b.merchant, subject.merchant) && sameBill(b.cents, subject.amountCents))
       .sort((a, b) => gap(a) - gap(b))[0];
     if (bill) return { categoryId: bill.categoryId, ruleId: null, source: 'auto', reason: `Matches your bill ${bill.name}` };
   }

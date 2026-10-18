@@ -2,7 +2,7 @@ import type { ISODate } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import { matchPaycheck } from '../../shared/paychecks';
 import { categorize, type AutoSubject } from '../../shared/autoCategory';
-import { normalizeMerchant, ruleAppliesToAccount, type CategorySource } from '../../shared/rules';
+import { findRule, normalizeMerchant, ruleAppliesToAccount, ruleMatches, type CategorySource, type Rule } from '../../shared/rules';
 import { looksLikeTransfer } from '../../shared/transfers';
 import { batchAll, nowIso, stmt } from '../lib/db';
 import type { IngestContext } from './context';
@@ -48,6 +48,7 @@ type Classifiable = Pick<
 >;
 
 const PAYCHECK_REASON = 'Matches your paycheck';
+const isSharedLearned = (rule: Rule) => !!rule.learned && rule.action.privateMemberId == null;
 const CARD_PAYMENT_REASON = 'Card payment';
 const PERSONAL_CARD_REASON = 'Your personal card';
 
@@ -90,6 +91,7 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
   }
 
   const subjectName = txn.memo ? `${txn.name} ${txn.memo}` : txn.name;
+  const accountOwner = ctx.privateAccountOwner.get(txn.accountId) ?? null;
   const subject: AutoSubject = {
     name: subjectName,
     merchantName: txn.merchantName ?? null,
@@ -98,10 +100,15 @@ export function classify(ctx: IngestContext, txn: Classifiable, current?: Partia
     amountCents: txn.amountCents,
     bankDetailed: txn.plaidCategoryDetailed ?? null,
     bankPrimary: txn.plaidCategory ?? null,
+    accountOwner,
   };
 
-  const accountOwner = ctx.privateAccountOwner.get(txn.accountId) ?? null;
-  const rules = ctx.rules.filter((rule) => ruleAppliesToAccount(rule, accountOwner));
+  let rules = ctx.rules.filter((rule) => ruleAppliesToAccount(rule, accountOwner));
+  // A shared learned rule never takes over a charge your own private rule files: it would un-private it.
+  const first = findRule(rules, subject);
+  if (first && isSharedLearned(first) && rules.some((r) => !r.learned && r.action.privateMemberId != null && ruleMatches(r, subject))) {
+    rules = rules.filter((r) => !isSharedLearned(r));
+  }
   let auto = categorize(subject, { ...ctx, rules });
   let ruleReason: string | null = null;
   let privateByRule = false;

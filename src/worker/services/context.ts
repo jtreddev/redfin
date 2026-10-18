@@ -1,5 +1,5 @@
 import type { CategoryKind } from '../../shared/actuals';
-import type { AutoContext, CategoryRef } from '../../shared/autoCategory';
+import type { AutoBill, AutoContext, CategoryRef } from '../../shared/autoCategory';
 import { SPECIAL } from '../../shared/categorySet';
 import type { ISODate } from '../../shared/dates';
 import type { IncomeSourceMatcher } from '../../shared/paychecks';
@@ -131,9 +131,9 @@ export async function loadIngestContext(db: D1Database): Promise<IngestContext> 
       'SELECT id, default_private_account_id AS defaultPrivateAccountId FROM members',
     ),
     loadCategories(db),
-    all<{ merchant: string; cents: number; categoryId: number | null; name: string }>(
+    all<AutoBill>(
       db,
-      `SELECT merchant, expected_amount_cents AS cents, category_id AS categoryId, name
+      `SELECT merchant, expected_amount_cents AS cents, category_id AS categoryId, name, private_member_id AS privateMemberId
          FROM recurring_bills WHERE status = 'confirmed' ORDER BY id`,
     ),
     first<{ habitCutoffCents: number }>(db, 'SELECT habit_cutoff_cents AS habitCutoffCents FROM household WHERE id = 1'),

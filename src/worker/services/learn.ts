@@ -121,6 +121,8 @@ export async function learnFromFix(
     privateTo,
   );
 
+  // A shared rule never re-files a private charge (yours, on a shared card) into shared view.
+  const sharedOnly = privateTo === null ? 'AND t.private_member_id IS NULL' : '';
   const column = learned.matchField === 'merchant' ? "COALESCE(t.merchant_name, '')" : "(t.name || ' ' || COALESCE(t.memo, ''))";
   const candidates = await all<Candidate>(
     db,
@@ -129,6 +131,7 @@ export async function learnFromFix(
       WHERE t.deleted_at IS NULL AND t.id != ? AND t.is_split = 0 AND t.is_ignored = 0
         AND (t.category_source IS NULL OR t.category_source != 'user')
         AND t.category_id IS NOT ? AND ${PRIVACY_SQL}
+        ${sharedOnly}
         AND (? IS NULL OR ABS(t.amount_cents) >= ?) AND (? IS NULL OR ABS(t.amount_cents) <= ?)
         AND UPPER(${column}) LIKE ? ESCAPE '\\'
       ORDER BY t.date DESC, t.id DESC LIMIT ${REFILE_LIMIT}`,

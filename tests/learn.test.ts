@@ -409,6 +409,57 @@ describe('fixing a charge', () => {
   });
 });
 
+describe('whose card it is', () => {
+  const partnerFunId = () => db.rows<{ id: number }>('SELECT id FROM categories WHERE fun_member_id = ?', partner)[0]!.id;
+
+  it('a partner’s private bill only files the partner’s own card charges', async () => {
+    const partnerFun = partnerFunId();
+    db.exec(
+      `INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, next_date, status, category_id, private_member_id)
+       VALUES ('SPOTIFY', 'Music', 'monthly', -1199, '2026-10-20', 'confirmed', ?, ?)`,
+      partnerFun,
+      partner,
+    );
+    const myCard = personalCard(you);
+    const theirCard = personalCard(partner);
+    const onMyCard = charge(1199, { merchant: 'Spotify', account: myCard });
+    const onShared = charge(1199, { merchant: 'Spotify' });
+    const onTheirCard = charge(1199, { merchant: 'Spotify', account: theirCard });
+
+    await api(env, 'POST', '/categorize/all', {});
+
+    expect(row(onMyCard)).toMatchObject({ category_id: yourFun, private_member_id: you });
+    expect(row(onShared).private_member_id).toBeNull();
+    expect(row(onShared).category_id).not.toBe(partnerFun);
+    expect(row(onShared).category_reason).not.toMatch(/Matches your bill/);
+    expect(row(onTheirCard)).toMatchObject({ category_id: partnerFun, private_member_id: partner, category_reason: 'Matches your bill Music' });
+  });
+
+  it('a shared fix leaves charges my own rule made private, at fix time and on later re-sorts', async () => {
+    db.exec(
+      `INSERT INTO rules (position, match_field, match_text, private_member_id, owner_member_id) VALUES (1, 'merchant', 'SHELL', ?, ?)`,
+      you,
+      you,
+    );
+    const myRule = db.rows<{ id: number }>('SELECT MAX(id) AS id FROM rules')[0]!.id;
+    const habits = cat('Habits');
+    const gas = cat('Gas');
+    const mine = charge(4000);
+    await api(env, 'POST', '/categorize/all', {});
+    const privateToMe = { category_id: yourFun, private_member_id: you, category_source: 'rule', rule_id: myRule };
+    expect(row(mine)).toMatchObject(privateToMe);
+
+    // I fix another Shell charge on the shared card as Gas: a shared learned rule that I can see my private charge from.
+    await fix(charge(4000, { categoryId: habits, source: 'auto' }), gas);
+    expect(learnedRules()[0]).toMatchObject({ category_id: gas, private_member_id: null });
+    expect(row(mine)).toMatchObject(privateToMe);
+
+    // Later re-sorts (recategorize, or a sync modify) keep it private too.
+    await api(env, 'POST', '/categorize/all', {});
+    expect(row(mine)).toMatchObject(privateToMe);
+  });
+});
+
 describe('rules screen and charge reasons', () => {
   type RuleItem = { id: number; matchText: string; learned: boolean; amountMinCents: number | null; amountMaxCents: number | null };
   const listRules = async (email = YOU) => (await (await api(env, 'GET', '/rules', undefined, email)).json()) as RuleItem[];
