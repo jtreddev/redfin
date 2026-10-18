@@ -2,34 +2,32 @@ import type { Timing } from './allocation';
 
 /**
  * Starter budget amounts, from the original spreadsheet's sample month (second-home
- * lines removed, a few kids lines added). They're placeholders to adjust, not advice.
+ * lines removed, a few kids lines added), summed into the current categories. Lines that
+ * merged bills with different due days are spread evenly. They're placeholders to adjust,
+ * not advice. Card paydowns are transfers now, so they have no line.
  */
 export const SUGGESTED_BUDGET: { section: string; category: string; dollars: number; timing: Timing; dueDay?: number }[] = [
-  { section: 'Housing', category: 'Mortgage / Rent', dollars: 1600, timing: 'due_day', dueDay: 1 },
-  { section: 'Utilities', category: 'Electric', dollars: 165, timing: 'due_day', dueDay: 12 },
-  { section: 'Utilities', category: 'Natural Gas', dollars: 55, timing: 'due_day', dueDay: 12 },
-  { section: 'Utilities', category: 'Water / Sewer', dollars: 70, timing: 'due_day', dueDay: 20 },
-  { section: 'Utilities', category: 'Trash', dollars: 35, timing: 'due_day', dueDay: 20 },
-  { section: 'Utilities', category: 'Internet', dollars: 75, timing: 'due_day', dueDay: 8 },
-  { section: 'Utilities', category: 'Mobile Phones', dollars: 200, timing: 'due_day', dueDay: 22 },
-  { section: 'Transportation', category: 'Car Payment', dollars: 200, timing: 'due_day', dueDay: 10 },
-  { section: 'Transportation', category: 'Fuel', dollars: 200, timing: 'even' },
-  { section: 'Transportation', category: 'Auto Insurance', dollars: 160, timing: 'due_day', dueDay: 5 },
-  { section: 'Transportation', category: 'Auto Maintenance', dollars: 90, timing: 'even' },
-  { section: 'Food', category: 'Groceries', dollars: 1200, timing: 'even' },
-  { section: 'Food', category: 'Dining Out', dollars: 200, timing: 'even' },
-  { section: 'Kids', category: 'School & Supplies', dollars: 100, timing: 'even' },
-  { section: 'Kids', category: 'Kids Clothing', dollars: 100, timing: 'even' },
-  { section: 'Kids', category: 'Activities & Sports', dollars: 100, timing: 'even' },
-  { section: 'Health', category: 'Health Insurance Premium', dollars: 600, timing: 'due_day', dueDay: 1 },
-  { section: 'Health', category: 'Medical & Prescriptions', dollars: 120, timing: 'even' },
-  { section: 'Health', category: 'Fitness', dollars: 60, timing: 'due_day', dueDay: 3 },
-  { section: 'Debt Payments', category: 'Credit Card Paydown', dollars: 250, timing: 'due_day', dueDay: 25 },
-  { section: 'Personal & Household', category: 'Subscriptions & Streaming', dollars: 75, timing: 'due_day', dueDay: 14 },
-  { section: 'Personal & Household', category: 'Clothing', dollars: 100, timing: 'even' },
-  { section: 'Personal & Household', category: 'Household Goods', dollars: 120, timing: 'even' },
-  { section: 'Personal & Household', category: 'Pets', dollars: 90, timing: 'even' },
-  { section: 'Personal & Household', category: 'Gifts & Misc', dollars: 80, timing: 'even' },
-  { section: 'Savings & Goals', category: 'Emergency Fund', dollars: 400, timing: 'due_day', dueDay: 5 },
-  { section: 'Savings & Goals', category: 'Retirement — Roth', dollars: 500, timing: 'due_day', dueDay: 5 },
+  { section: 'Bills', category: 'Housing', dollars: 1600, timing: 'due_day', dueDay: 1 },
+  // Electric 165, natural gas 55, water 70, trash 35.
+  { section: 'Bills', category: 'Utilities', dollars: 325, timing: 'even' },
+  { section: 'Bills', category: 'Internet', dollars: 75, timing: 'due_day', dueDay: 8 },
+  { section: 'Bills', category: 'Phone', dollars: 200, timing: 'due_day', dueDay: 22 },
+  { section: 'Bills', category: 'Loans', dollars: 200, timing: 'due_day', dueDay: 10 },
+  // Auto 160, health premium 600.
+  { section: 'Bills', category: 'Insurance', dollars: 760, timing: 'even' },
+  // Streaming 75, fitness 60.
+  { section: 'Bills', category: 'Subscriptions', dollars: 135, timing: 'even' },
+  { section: 'Everyday', category: 'Groceries', dollars: 1200, timing: 'even' },
+  { section: 'Everyday', category: 'Gas', dollars: 200, timing: 'even' },
+  { section: 'Everyday', category: 'Car Upkeep', dollars: 90, timing: 'even' },
+  // Household goods 120, pets 90.
+  { section: 'Everyday', category: 'Household & Personal', dollars: 210, timing: 'even' },
+  { section: 'Everyday', category: 'Medical', dollars: 120, timing: 'even' },
+  // School 100, clothing 100, activities 100.
+  { section: 'Everyday', category: 'Kids', dollars: 300, timing: 'even' },
+  { section: 'Fun & Wants', category: 'Eating Out', dollars: 200, timing: 'even' },
+  { section: 'Fun & Wants', category: 'Shopping', dollars: 100, timing: 'even' },
+  { section: 'Fun & Wants', category: 'Gifts', dollars: 80, timing: 'even' },
+  // Emergency fund 400, Roth 500.
+  { section: 'Saving', category: 'Savings & Planned Costs', dollars: 900, timing: 'due_day', dueDay: 5 },
 ];

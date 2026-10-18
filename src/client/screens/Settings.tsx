@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { GROUPS, kindForGroup } from '../../shared/categorySet';
 import { errorMessage, patch, post } from '../api';
 import { go } from '../router';
 import { useApp } from '../state';
@@ -155,6 +156,8 @@ function MemberSheet({ member, onClose }: { member: Member; onClose: () => void 
   );
 }
 
+const GROUP_NAMES: string[] = Object.values(GROUPS);
+
 function CategoriesSheet({ onClose }: { onClose: () => void }) {
   const { categories, sections, toast, reload } = useApp();
   const [newName, setNewName] = useState<Record<number, string>>({});
@@ -164,9 +167,9 @@ function CategoriesSheet({ onClose }: { onClose: () => void }) {
     const name = newName[sectionId]?.trim();
     if (!name) return;
     const section = sections.find((s) => s.id === sectionId);
-    const kind = section?.name === 'Income' ? 'income' : section?.name === 'Savings & Goals' ? 'savings' : section?.name === 'Debt Payments' ? 'debt' : section?.name === 'Transfers' ? 'transfer' : 'expense';
+    const kind = kindForGroup(section?.name ?? '');
     try {
-      await post('/categories', { sectionId, name, kind, kidScoped: Boolean(kidScoped[sectionId]) || section?.name === 'Kids' });
+      await post('/categories', { sectionId, name, kind, kidScoped: Boolean(kidScoped[sectionId]) });
       setNewName((v) => ({ ...v, [sectionId]: '' }));
       await reload();
     } catch (error) {
@@ -186,12 +189,13 @@ function CategoriesSheet({ onClose }: { onClose: () => void }) {
   return (
     <Sheet open onClose={onClose} title="Categories">
       {sections
-        .filter((s) => s.name !== 'Fun Money')
+        // Old sections left empty by the move to groups stay hidden.
+        .filter((s) => GROUP_NAMES.includes(s.name) || categories.some((c) => c.sectionId === s.id && !c.archived))
         .map((section) => (
           <div key={section.id} className="stack-sm">
             <h3>{section.name}</h3>
             {categories
-              .filter((c) => c.sectionId === section.id)
+              .filter((c) => c.sectionId === section.id && c.funMemberId === null)
               .map((c) => (
                 <Toggle key={c.id} checked={!c.archived} onChange={(on) => void toggleArchived(c.id, !on)} label={c.name} />
               ))}
@@ -205,7 +209,7 @@ function CategoriesSheet({ onClose }: { onClose: () => void }) {
                 Add
               </Button>
             </div>
-            {section.name !== 'Kids' && section.name !== 'Income' && (
+            {kindForGroup(section.name) === 'expense' && (
               <Toggle
                 checked={Boolean(kidScoped[section.id])}
                 onChange={(v) => setKidScoped((s) => ({ ...s, [section.id]: v }))}

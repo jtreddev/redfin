@@ -1,5 +1,6 @@
 import { ledgerEntries, monthActuals, type CategoryKind } from '../../shared/actuals';
 import type { Timing } from '../../shared/allocation';
+import { SPECIAL } from '../../shared/categorySet';
 import {
   addDays,
   addMonths,
@@ -95,7 +96,7 @@ export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthD
     let budgetCents = line?.budgetCents ?? 0;
     let timing: Timing = line?.timing ?? 'even';
 
-    if (c.sectionName === 'Income' && c.name === 'Paychecks' && sources.length) {
+    if (c.sectionName === SPECIAL.paychecks[0] && c.name === SPECIAL.paychecks[1] && sources.length) {
       computed = 'paychecks';
       budgetCents = paycheckBudget;
       timing = 'due_day';

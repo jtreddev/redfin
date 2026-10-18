@@ -1,4 +1,5 @@
 import type { CategoryKind } from '../../shared/actuals';
+import { SPECIAL } from '../../shared/categorySet';
 import type { ISODate } from '../../shared/dates';
 import type { IncomeSourceMatcher } from '../../shared/paychecks';
 import type { PayFrequency, PaySchedule } from '../../shared/paySchedule';
@@ -142,7 +143,8 @@ export async function loadIngestContext(db: D1Database): Promise<IngestContext> 
     ),
     funCategoryOwner,
     funCategoryByMember,
-    paychecksCategoryId: findSpecialCategory(categories, 'Income', 'Paychecks'),
-    cardPaymentCategoryId: findSpecialCategory(categories, 'Transfers', 'Credit Card Payment'),
+    paychecksCategoryId: findSpecialCategory(categories, ...SPECIAL.paychecks),
+    // Card payments are transfers.
+    cardPaymentCategoryId: findSpecialCategory(categories, ...SPECIAL.transfers),
   };
 }

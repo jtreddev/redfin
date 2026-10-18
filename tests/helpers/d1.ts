@@ -50,15 +50,29 @@ class Statement {
   }
 }
 
+const MIGRATIONS = join(import.meta.dirname, '../../migrations');
+
+function migrationFiles(): string[] {
+  return readdirSync(MIGRATIONS).filter((f) => f.endsWith('.sql')).sort();
+}
+
 export class TestD1 {
   readonly sqlite = new DatabaseSync(':memory:');
 
-  constructor() {
+  /** Applies every migration, or only those up to and including `upTo` (a prefix like '0002'). */
+  constructor(options: { upTo?: string } = {}) {
     this.sqlite.exec('PRAGMA foreign_keys = ON');
-    const dir = join(import.meta.dirname, '../../migrations');
-    for (const file of readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()) {
-      this.sqlite.exec(readFileSync(join(dir, file), 'utf8'));
+    for (const file of migrationFiles()) {
+      if (options.upTo && file.slice(0, options.upTo.length) > options.upTo) break;
+      this.migrate(file);
     }
+  }
+
+  /** Applies one migration, named by its file name or number prefix ('0003'). */
+  migrate(prefix: string): void {
+    const file = migrationFiles().find((f) => f.startsWith(prefix));
+    if (!file) throw new Error(`No migration ${prefix}`);
+    this.sqlite.exec(readFileSync(join(MIGRATIONS, file), 'utf8'));
   }
 
   prepare(sql: string): Statement {

@@ -1,5 +1,6 @@
 import type { MiddlewareHandler } from 'hono';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { GROUPS } from '../../shared/categorySet';
 import { todayIn } from '../../shared/dates';
 import type { AppEnv, Env, HouseholdSettings, Viewer } from '../env';
 import { first, run } from '../lib/db';
@@ -104,10 +105,11 @@ async function createMember(db: D1Database, email: string): Promise<Viewer> {
   await run(
     db,
     `INSERT OR IGNORE INTO categories (section_id, name, kind, fun_member_id, sort)
-     SELECT id, ?, 'expense', ?, ? FROM sections WHERE name = 'Fun Money'`,
+     SELECT id, ?, 'expense', ?, ? FROM sections WHERE name = ?`,
     `${name}'s Fun Money`,
     member.memberId,
     member.memberId,
+    GROUPS.fun,
   );
   return member;
 }

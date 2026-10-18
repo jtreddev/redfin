@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { ledgerEntries } from '../../shared/actuals';
 import { draftNextBudget, summarizeMonth, type CheckinLine, type OverspendDecision } from '../../shared/checkin';
+import { GROUPS } from '../../shared/categorySet';
 import { addMonths, minDate, monthEnd, monthOf, monthStart, type ISODate, type MonthKey } from '../../shared/dates';
 import { planPayoff } from '../../shared/debt';
 import { goalProgress } from '../../shared/goals';
@@ -366,10 +367,11 @@ planning.post('/goals', async (c) => {
       db,
       `INSERT INTO categories (section_id, name, kind, sort)
        SELECT id, ?, 'savings', (SELECT COALESCE(MAX(sort), 0) + 10 FROM categories WHERE section_id = sections.id)
-         FROM sections WHERE name = 'Savings & Goals'
+         FROM sections WHERE name = ?
        ON CONFLICT (section_id, name) DO UPDATE SET archived = 0
        RETURNING id`,
       name,
+      GROUPS.saving,
     );
     categoryId = created?.id ?? null;
   }
