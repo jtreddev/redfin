@@ -467,6 +467,24 @@ describe('what a fix learns', () => {
     expect(row(inflow)).toMatchObject({ category_id: transfers, category_source: 'auto' });
   });
 
+  it('re-files other punctuated charges found by name, whole words only, and later syncs agree', async () => {
+    const coffee = cat('Coffee & Fast Food');
+    const tapped = byName('CHICK-FIL-A #123', 1200);
+    const other = byName('CHICK-FIL-A #456', 900);
+    const decoy = byName('CHICK-FIL-ADE STAND', 500);
+
+    const body = await fix(tapped, coffee);
+    expect(body.move).toMatchObject({ moved: 1, merchant: 'CHICK-FIL-A' });
+    expect(learnedRules()[0]).toMatchObject({ match_field: 'name', match_text: 'CHICK-FIL-A', category_id: coffee });
+    expect(row(other)).toMatchObject({ category_id: coffee, category_source: 'rule' });
+    expect(row(decoy).category_id).not.toBe(coffee);
+
+    const later = byName('CHICK-FIL-A #789', 700);
+    await api(env, 'POST', '/categorize/all', {});
+    expect(row(later)).toMatchObject({ category_id: coffee, category_source: 'rule' });
+    expect(row(decoy).category_id).not.toBe(coffee);
+  });
+
   it('re-files whole-word matches only', async () => {
     const gas = cat('Gas');
     const shellfish = charge(4000, { merchant: 'Shellfish Shack' });
@@ -477,6 +495,28 @@ describe('what a fix learns', () => {
     expect(row(shellfish).category_id).not.toBe(gas);
     await api(env, 'POST', '/categorize/all', {});
     expect(row(shellfish).category_id).not.toBe(gas);
+  });
+});
+
+describe('hand-linking a transfer', () => {
+  it('my private personal-card charge stays private and in my fun money, through later re-sorts', async () => {
+    const myCard = personalCard(you);
+    const mine = charge(4000, { merchant: 'Cash Move', account: myCard });
+    const other = charge(-4000, { merchant: 'Cash In' });
+    await api(env, 'POST', '/categorize/all', {});
+    expect(row(mine)).toMatchObject({ category_id: yourFun, private_member_id: you });
+
+    const res = await api(env, 'POST', `/transactions/${mine}/link-transfer`, { otherId: other }, YOU);
+    expect(res.status).toBe(200);
+    const transfers = db.rows<{ id: number }>(`SELECT id FROM categories WHERE kind = 'transfer' AND archived = 0`)[0]!.id;
+    const check = async () => {
+      expect(row(mine)).toMatchObject({ category_id: yourFun, private_member_id: you });
+      expect(row(other)).toMatchObject({ category_id: transfers, private_member_id: null });
+      expect((await api(env, 'GET', `/transactions/${mine}`, undefined, PARTNER)).status).toBe(404);
+    };
+    await check();
+    await api(env, 'POST', '/categorize/all', {});
+    await check();
   });
 });
 

@@ -452,11 +452,40 @@ transactions.post('/transactions/:id/link-transfer', async (c) => {
   if (row.accountId === other.accountId) throw badRequest('A transfer moves money between two different accounts.');
   if (row.amountCents !== -other.amountCents) throw badRequest('Transfer amounts must match (one in, one out).');
   const now = nowIso();
+  const ctx = await loadIngestContext(db);
+  // A paired half is filed as a transfer and shared. A charge that was private (say, on your personal card)
+  // stays private and in its person's fun money: linking pins that as a hand choice, which you can still change.
+  const keepPrivate = [row, other]
+    .filter((t) => t.privateMemberId !== null && t.categorySource !== 'user' && t.isSplit === 0)
+    .map((t) => {
+      const k = enforceFunMoney(ctx, {
+        categoryId: t.categoryId,
+        categorySource: 'user',
+        categoryReason: null,
+        ruleId: null,
+        kidId: t.kidId,
+        privateMemberId: t.privateMemberId,
+        isIgnored: t.isIgnored === 1,
+        incomeSourceId: t.incomeSourceId,
+        payDate: t.payDate,
+        normalizedMerchant: '',
+      });
+      return stmt(
+        db,
+        `UPDATE transactions SET category_id = ?, category_source = 'user', category_reason = NULL, rule_id = NULL,
+           private_member_id = ?, updated_at = ? WHERE id = ?`,
+        k.categoryId,
+        k.privateMemberId,
+        now,
+        t.id,
+      );
+    });
   await batchAll(db, [
     stmt(db, 'UPDATE transactions SET transfer_pair_id = ?, updated_at = ? WHERE id = ?', other.id, now, row.id),
     stmt(db, 'UPDATE transactions SET transfer_pair_id = ?, updated_at = ? WHERE id = ?', row.id, now, other.id),
     stmt(db, 'DELETE FROM transfer_unlinks WHERE (a_id = ? AND b_id = ?) OR (a_id = ? AND b_id = ?)', row.id, other.id, other.id, row.id),
+    ...keepPrivate,
   ]);
-  await rederive(db, [row.id, other.id]);
+  await rederive(db, [row.id, other.id], ctx);
   return c.json({ ok: true });
 });

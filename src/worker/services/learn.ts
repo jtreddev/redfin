@@ -79,12 +79,27 @@ function ruleFor(ctx: IngestContext, txn: StoredTxn): Rule | null {
   // A check number or "ATM" says nothing about where money went: those fixes are saved but teach nothing.
   if (!isLearnableKey(merchant)) return null;
   if (ruleMatches(rule, subject)) return rule;
-  // Keys drop punctuation ("CHICK-FIL-A" → "CHICK FIL A"), which the raw text may not contain.
+  // Keys drop punctuation ("CHICK-FIL-A" → "CHICK FIL A"), which the raw text may not contain:
+  // learn the key's words as the charge spells them ("CHICK-FIL-A #123" → "CHICK-FIL-A").
+  const spelled = spelledKey(merchant, matchField === 'merchant' ? txn.merchantName : subject.name);
+  if (spelled) {
+    const asSpelled = { ...rule, matchText: spelled };
+    if (isLearnableKey(spelled) && ruleMatches(asSpelled, subject)) return asSpelled;
+  }
   if (txn.merchantName?.trim()) {
     const whole = { ...rule, matchText: normalizeText(txn.merchantName) };
     if (isLearnableKey(whole.matchText) && ruleMatches(whole, subject)) return whole;
   }
   return null;
+}
+
+/** The key's words, whole and in order, as they appear in `text` with its own punctuation between them. */
+function spelledKey(key: string, text: string | null | undefined): string | null {
+  const words = key.split(' ').filter(Boolean);
+  if (!words.length) return null;
+  const between = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^A-Z0-9]+');
+  const found = new RegExp(`(?<![A-Z0-9])${between}(?![A-Z0-9])`).exec(normalizeText(text));
+  return found ? found[0] : null;
 }
 
 /** The tapped charge's category as it was before the fix, so Undo can put it back. */

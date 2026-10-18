@@ -3,7 +3,7 @@ import { findImportedTwin } from '../../shared/dedupe';
 import type { Env } from '../env';
 import { all, allByIds, batchAll, first, nowIso, placeholders, run, stmt } from '../lib/db';
 import { loadIngestContext } from '../services/context';
-import { insertTransactions, reclassify, STORED_SELECT, type IncomingTxn, type StoredTxn } from '../services/ingest';
+import { insertTransactions, reclassify, rederive, STORED_SELECT, type IncomingTxn, type StoredTxn } from '../services/ingest';
 import { matchTransfers } from '../services/transfers';
 import {
   dollarsOrNull,
@@ -312,7 +312,7 @@ async function syncItem(env: Env, item: ItemRow, trigger: 'cron' | 'manual' | 'l
     const refreshed = await refreshStored(db, ctx, page.added);
     const added = await applyAdded(db, ctx, page.added, accountIdFor);
     const modified = await applyModified(db, ctx, page.modified, accountIdFor);
-    const removed = await applyRemoved(db, page.removed.map((r) => r.transaction_id));
+    const removed = await applyRemoved(db, ctx, page.removed.map((r) => r.transaction_id));
 
     const dates = [...page.added, ...page.modified].map((t) => t.date).sort();
     if (dates.length) await matchTransfers(db, dates[0] as ISODate, dates[dates.length - 1] as ISODate, ctx);
@@ -601,6 +601,7 @@ async function applyModified(
 ): Promise<number> {
   if (!modified.length) return 0;
   const now = nowIso();
+  // A modify without the bank's category keeps the one already stored, as a re-sent charge does.
   const statements = modified.flatMap((t) => {
     const accountId = accountIdFor.get(t.account_id);
     if (accountId === undefined) return [];
@@ -609,7 +610,8 @@ async function applyModified(
       stmt(
         db,
         `UPDATE transactions SET account_id = ?, date = ?, amount_cents = ?, name = ?, merchant_name = ?, pending = ?,
-           plaid_category = ?, plaid_category_detailed = ?, updated_at = ? WHERE plaid_txn_id = ?`,
+           plaid_category = COALESCE(?, plaid_category), plaid_category_detailed = COALESCE(?, plaid_category_detailed),
+           updated_at = ? WHERE plaid_txn_id = ?`,
         accountId,
         incoming.date,
         incoming.amountCents,
@@ -629,11 +631,33 @@ async function applyModified(
   return statements.length;
 }
 
-/** Removed rows are soft-deleted first so a later "posted" version can still inherit your edits. */
-async function applyRemoved(db: D1Database, ids: readonly string[]): Promise<number> {
+/**
+ * Removed rows are soft-deleted first so a later "posted" version can still inherit your edits.
+ * The other half of a removed transfer is no longer a transfer: it is unpaired and sorted again.
+ * Nobody unlinked the pair by hand, so the survivor may still pair with something else later.
+ */
+async function applyRemoved(
+  db: D1Database,
+  ctx: Awaited<ReturnType<typeof loadIngestContext>>,
+  ids: readonly string[],
+): Promise<number> {
   if (!ids.length) return 0;
   const now = nowIso();
-  await batchAll(db, ids.map((id) => stmt(db, 'UPDATE transactions SET deleted_at = ? WHERE plaid_txn_id = ? AND deleted_at IS NULL', now, id)));
+  const pairs = await allByIds<{ id: number; pairId: number }>(
+    db,
+    (list) => `SELECT id, transfer_pair_id AS pairId FROM transactions
+                WHERE deleted_at IS NULL AND transfer_pair_id IS NOT NULL AND plaid_txn_id IN (${list})`,
+    ids,
+  );
+  await batchAll(db, [
+    ...ids.map((id) =>
+      stmt(db, 'UPDATE transactions SET deleted_at = ?, transfer_pair_id = NULL WHERE plaid_txn_id = ? AND deleted_at IS NULL', now, id),
+    ),
+    ...pairs.map((p) =>
+      stmt(db, 'UPDATE transactions SET transfer_pair_id = NULL, updated_at = ? WHERE id = ? AND transfer_pair_id = ?', now, p.pairId, p.id),
+    ),
+  ]);
+  await rederive(db, pairs.map((p) => p.pairId), ctx);
   return ids.length;
 }
 
