@@ -38,7 +38,7 @@ The pieces are worked out as follows:
   - A recurring bill dated today or earlier counts as paid when a matching charge (the same matching as
     "bill went up": merchant, `sameBill`, shared or private the same way) came in on or after 5 days before
     that date. It rolls to its next occurrence instead, because `next_date` only refreshes on "Find them"
-    and today's cash already has the charge in it (P6-R8).
+    and today's cash already has the charge in it (P6-R8). The charge must be within 15% of the usual amount, so a partial payment or another purchase from the same store doesn't count (P6-R8b; cost: a bill that went up more than 15% shows as still due until its usual amount is updated).
   - A payday that falls in next month still needs next month's due-day lines (P6-R3b, replacing
     P6-R3). For the window after the month ends, use next month's due-day expense lines when its
     budget exists. When it doesn't yet, carry this month's due-day expense lines forward at their

@@ -248,6 +248,11 @@ describe('GET /api/forecast', () => {
       expect((await forecast()).projection.events.map((e) => e.name)).not.toContain('Power');
     });
 
+    it('doesn’t count a charge far from the usual amount as paying it', async () => {
+      charge('2026-10-15', -3000, { normalized_merchant: 'phone' });
+      expect(phone(await forecast())).toEqual(['2026-10-19']);
+    });
+
     it('ignores a charge from a partner’s private spending', async () => {
       charge('2026-10-15', -5200, { normalized_merchant: 'phone', private_member_id: partner });
       expect(phone(await forecast())).toEqual(['2026-10-19']);

@@ -389,6 +389,8 @@ export async function funMoneyBalances(
 const STALE_GRACE_DAYS = 3;
 /** A charge this many days before a bill's date (or any time after) pays it. */
 const PAID_EARLY_DAYS = 5;
+/** A charge pays a bill only when it's within this share of the usual amount (a partial payment or another purchase doesn't). */
+const PAID_AMOUNT_SLACK = 0.15;
 
 export interface UpcomingBill {
   name: string;
@@ -487,7 +489,9 @@ export async function upcomingBills(
     // Roll stale dates forward (the charge probably happened; detection refreshes it later).
     for (let guard = 0; date < addDays(today, -STALE_GRACE_DAYS) && guard < 60; guard++) date = nextOccurrence(date, r.cadence);
     // A date today or earlier with a matching charge since (or up to 5 days before it) is paid: the next one is due.
-    const paidOn = lastCharge.get(r.id)?.date;
+    const paid = lastCharge.get(r.id);
+    const usual = Math.abs(r.expectedAmountCents);
+    const paidOn = paid && Math.abs(Math.abs(paid.amountCents) - usual) <= usual * PAID_AMOUNT_SLACK ? paid.date : undefined;
     for (let guard = 0; date <= today && paidOn !== undefined && paidOn >= addDays(date, -PAID_EARLY_DAYS) && guard < 60; guard++) {
       date = nextOccurrence(date, r.cadence);
     }
