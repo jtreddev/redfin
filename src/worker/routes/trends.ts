@@ -23,6 +23,9 @@ trends.get('/trends', async (c) => {
   const monthsBack = (n: number) => Array.from({ length: n }, (_, i) => addMonths(current, i - n + 1));
   const wide = monthsBack(Math.max(shown, MONTHS_FOR_CHANGES));
 
+  // The ledger loads from the start of the wide range only. That's enough to find where history begins
+  // for "usual": it looks back at most 4 months (last month plus the 3 before it), all inside the wide
+  // range, so history starting any earlier clamps nothing.
   const [ledger, categoryRows] = await Promise.all([
     loadLedger(db, monthStart(wide[0]!), monthEnd(current)),
     loadCategories(db),

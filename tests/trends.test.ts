@@ -181,6 +181,25 @@ describe('trends: monthly totals by group', () => {
     expect(t.usual.bills).toBe(0);
   });
 
+  it('usual counts only full months since the household’s history began', () => {
+    // One full month of history (September): usual is that month, not a third of it.
+    const one = trendsOf([txn('2026-09-10', -30000, 3), txn('2026-10-02', -100, 3)]);
+    expect(one.historyStart).toBe('2026-09');
+    expect(one.usual.everyday).toBe(30000);
+    // Two full months: their average.
+    const two = trendsOf([txn('2026-08-10', -20000, 3), txn('2026-09-10', -40000, 3)]);
+    expect(two.historyStart).toBe('2026-08');
+    expect(two.usual.everyday).toBe(30000);
+    // History begins with an income deposit: that month still counts (as zero for spending).
+    const paid = trendsOf([txn('2026-08-01', 300000, 10), txn('2026-09-10', -30000, 3)]);
+    expect(paid.usual.everyday).toBe(15000);
+    // Only the current month: nothing to average.
+    const none = trendsOf([txn('2026-10-02', -5000, 3)]);
+    expect(none.historyStart).toBe('2026-10');
+    expect(none.usual.everyday).toBe(0);
+    expect(trendsOf([]).historyStart).toBeNull();
+  });
+
   it('privacy: a partner’s private charges only count in their own Fun Money', () => {
     const t = trendsOf([
       txn('2026-09-03', -4000, 8, { privateMemberId: ALEX }),
@@ -256,6 +275,33 @@ describe('trends: what changed', () => {
   it('a category with no spending this month shows as down', () => {
     const changed = whatChanged(history([[1, [0, 50000, 50000, 50000], 0]]), '2026-10-31');
     expect(changed.down).toEqual([{ categoryId: 1, name: 'Housing', soFar: 0, usual: 50000, projected: 0, diff: -50000 }]);
+  });
+
+  it('usual counts from the household’s first month; a new category still averages with zeros', () => {
+    // One full month of history: $300 usual, so $600 by the 31st is up $300.
+    const one = whatChanged(trendsOf([txn('2026-09-10', -30000, 3), txn('2026-10-02', -60000, 3)]), '2026-10-31');
+    expect(one.up).toEqual([{ categoryId: 3, name: 'Groceries', soFar: 60000, usual: 30000, projected: 60000, diff: 30000 }]);
+    // Two full months: their average.
+    const two = whatChanged(
+      trendsOf([txn('2026-08-10', -20000, 3), txn('2026-09-10', -40000, 3), txn('2026-10-02', -60000, 3)]),
+      '2026-10-31',
+    );
+    expect(two.up.map((c) => [c.categoryId, c.usual])).toEqual([[3, 30000]]);
+    // Household history from July; Gas first appears in September, so its usual is (0 + 0 + 30000) / 3.
+    const established = whatChanged(
+      trendsOf([txn('2026-07-10', -10000, 3), txn('2026-09-10', -30000, 4), txn('2026-10-02', -30000, 4)]),
+      '2026-10-31',
+    );
+    expect(established.up.map((c) => [c.categoryId, c.usual, c.diff])).toEqual([[4, 10000, 20000]]);
+    expect(established.down.map((c) => [c.categoryId, c.usual])).toEqual([[3, 3333]]);
+  });
+
+  it('no rows when there is no full month of history to compare with', () => {
+    const t = trendsOf([txn('2026-10-02', -50000, 3)]);
+    expect(whatChanged(t, '2026-10-20')).toEqual({ basis: 'this-month', up: [], down: [] });
+    // Before day 7 the compared month is September, and nothing came before it.
+    const sep = trendsOf([txn('2026-09-10', -50000, 3)]);
+    expect(whatChanged(sep, '2026-10-03')).toEqual({ basis: 'last-month', up: [], down: [] });
   });
 
   it('before day 7, compares the last full month with the 3 months before it', () => {
@@ -405,6 +451,19 @@ describe('GET /api/trends', () => {
       [groceries, 10000, 30000],
       [habits, 1000, 3000],
     ]);
+  });
+
+  it('a new household’s usual is its one full month, not a third of it', async () => {
+    await twoPeople();
+    const groceries = categoryId('Everyday', 'Groceries');
+    charge('2026-09-10', -30000, groceries);
+    charge('2026-10-02', -60000, groceries);
+    for (const query of ['?months=3', '?months=12']) {
+      const body = await trends(query);
+      expect(body.historyStart).toBe('2026-09');
+      expect(body.usual.everyday).toBe(30000);
+      expect(body.changed.up.map((c) => [c.categoryId, c.usual])).toEqual([[groceries, 30000]]);
+    }
   });
 
   it('lists only categories with activity in the months shown', async () => {

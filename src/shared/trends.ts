@@ -33,16 +33,35 @@ export interface Trends {
   uncategorizedByMonth: Cents[];
   /** Group categories with any activity in the range. */
   categories: { id: number; name: string; group: GroupKey; byMonth: Cents[] }[];
-  /** Average of the last 3 full months. */
+  /**
+   * Average of the last 3 full months, counting only months on or after `historyStart` (fewer when
+   * history is shorter; 0 when there is no full month yet).
+   */
   usual: Record<GroupKey, Cents>;
+  /**
+   * The first month with any ledger data among the entries given (it may be before `months[0]`); null when
+   * there is none. "Usual" never averages months before it.
+   */
+  historyStart: MonthKey | null;
 }
 
 /** How many full months "usual" averages. */
 const USUAL_MONTHS = 3;
 
-/** Average of the (up to) 3 values before `index`; 0 when there are none. */
-function usualBefore(byMonth: readonly Cents[], index: number): Cents {
-  const window = byMonth.slice(Math.max(0, index - USUAL_MONTHS), Math.max(0, index));
+/**
+ * Where the "usual" window before `index` starts: 3 months back, but never before the household's
+ * first month with data. The window is empty (start ≥ index) when there's no full month to average.
+ */
+function usualStart(trends: Pick<Trends, 'months' | 'historyStart'>, index: number): number {
+  const { months, historyStart } = trends;
+  if (historyStart === null) return index;
+  const first = historyStart <= months[0]! ? 0 : months.indexOf(historyStart);
+  return Math.max(index - USUAL_MONTHS, first < 0 ? index : first);
+}
+
+/** Average of byMonth[start..index); 0 when that's empty. */
+function average(byMonth: readonly Cents[], start: number, index: number): Cents {
+  const window = byMonth.slice(Math.max(0, start), Math.max(0, index));
   if (window.length === 0) return 0;
   return Math.round(window.reduce((sum, v) => sum + v, 0) / window.length);
 }
@@ -62,8 +81,12 @@ export function buildTrends({ entries, categories, months, today }: TrendsInput)
   const uncategorizedByMonth = zeros();
   const byCategory = new Map<number, Cents[]>();
 
+  const lastMonth = months[months.length - 1];
+  let historyStart: MonthKey | null = null;
   for (const entry of entries) {
-    const index = monthIndex.get(monthOf(entry.date));
+    const month = monthOf(entry.date);
+    if (lastMonth !== undefined && month <= lastMonth && (historyStart === null || month < historyStart)) historyStart = month;
+    const index = monthIndex.get(month);
     if (index === undefined) continue;
 
     let categoryId = entry.categoryId;
@@ -75,6 +98,7 @@ export function buildTrends({ entries, categories, months, today }: TrendsInput)
       categoryId = fun;
       flow = flowCents({ kind: 'expense', amountCents: entry.amountCents });
     } else if (categoryId === null) {
+      // Uncategorized deposits are left out: they're as often refunds or transfers as income.
       if (entry.amountCents < 0) uncategorizedByMonth[index]! -= entry.amountCents;
       continue;
     } else {
@@ -96,6 +120,7 @@ export function buildTrends({ entries, categories, months, today }: TrendsInput)
   }
 
   const current = monthIndex.get(partialMonth) ?? months.length;
+  const start = usualStart({ months: [...months], historyStart }, current);
   const groups = GROUP_ORDER.map((g) => ({ key: g.key, name: g.name, byMonth: groupTotals.get(g.key)! }));
   const groupRank = new Map(GROUP_ORDER.map((g, i) => [g.key, i]));
   const rows = categories
@@ -110,7 +135,8 @@ export function buildTrends({ entries, categories, months, today }: TrendsInput)
     incomeByMonth,
     uncategorizedByMonth,
     categories: rows,
-    usual: Object.fromEntries(groups.map((g) => [g.key, usualBefore(g.byMonth, current)])) as Record<GroupKey, Cents>,
+    usual: Object.fromEntries(groups.map((g) => [g.key, average(g.byMonth, start, current)])) as Record<GroupKey, Cents>,
+    historyStart,
   };
 }
 
@@ -131,7 +157,8 @@ const FIRST_COMPARABLE_DAY = 7;
 /**
  * Categories whose month differs most from usual. From day 7 on, this month so far scaled to the full
  * month by days elapsed; before that, the last full month as it ended. Usual is the average of the 3
- * months before the month compared.
+ * months before the month compared, from the household's first month with data on; with no such full
+ * month there's nothing to compare, so no rows.
  */
 export function whatChanged(
   trends: Trends,
@@ -141,11 +168,12 @@ export function whatChanged(
   const basis = day < FIRST_COMPARABLE_DAY ? 'last-month' : 'this-month';
   const month = basis === 'this-month' ? monthOf(today) : addMonths(monthOf(today), -1);
   const index = trends.months.indexOf(month);
-  if (index < 0) return { basis, up: [], down: [] };
+  const start = usualStart(trends, index);
+  if (index < 0 || start >= index) return { basis, up: [], down: [] };
 
   const changes = trends.categories.map((c): Change => {
     const soFar = c.byMonth[index]!;
-    const usual = usualBefore(c.byMonth, index);
+    const usual = average(c.byMonth, start, index);
     const projected = basis === 'this-month' ? Math.round((soFar * monthLength(month)) / day) : soFar;
     return { categoryId: c.id, name: c.name, soFar, usual, projected, diff: projected - usual };
   });
