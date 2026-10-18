@@ -6,18 +6,18 @@ import { api, errorMessage, patch, post } from '../api';
 import { money, monthShortLabel, shortDate } from '../format';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
-import { AmountInput, Button, Card, CategorySelect, Empty, ErrorNote, Field, Loading, Money, PageHeader, Progress, Segmented, Sheet } from '../ui';
+import { AmountInput, Button, Card, CategorySelect, Empty, ErrorNote, Field, Loading, Money, Progress, Segmented, Sheet } from '../ui';
 
 type Tab = 'goals' | 'debts';
 
+/** The Goals view inside Plan (#/plan?view=goals&tab=debts). */
 export function Goals({ params }: { params: URLSearchParams }) {
   const tab = (params.get('tab') as Tab) || 'goals';
   return (
     <div className="stack">
-      <PageHeader title="Goals" />
       <Segmented
         value={tab}
-        onChange={(t) => go('goals', { tab: t })}
+        onChange={(t) => go('plan', { view: 'goals', tab: t })}
         options={[
           { value: 'goals', label: 'Savings goals' },
           { value: 'debts', label: 'Debt payoff' },

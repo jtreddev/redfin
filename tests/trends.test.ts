@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ledgerEntries, type CategoryKind, type LedgerSplit, type LedgerTxn } from '../src/shared/actuals';
 import type { ISODate, MonthKey } from '../src/shared/dates';
-import { buildTrends, GROUP_ORDER, whatChanged, type GroupKey, type Trends } from '../src/shared/trends';
+import { buildTrends, GROUP_ORDER, usualOf, whatChanged, type GroupKey, type Trends } from '../src/shared/trends';
 import type { Env } from '../src/worker/env';
 import { loadCategories } from '../src/worker/services/context';
 import { loadLedger } from '../src/worker/services/ledger';
@@ -198,6 +198,24 @@ describe('trends: monthly totals by group', () => {
     expect(none.historyStart).toBe('2026-10');
     expect(none.usual.everyday).toBe(0);
     expect(trendsOf([]).historyStart).toBeNull();
+  });
+
+  it('usualOf: one category\u2019s usual, by the same rule as the groups\u2019', () => {
+    const t = trendsOf([
+      txn('2026-06-10', -99900, 3),
+      txn('2026-07-10', -10000, 3),
+      txn('2026-08-10', -20000, 3),
+      txn('2026-09-10', -30001, 3),
+      txn('2026-10-10', -500000, 3),
+      txn('2026-09-10', -1000, 5),
+    ]);
+    expect(usualOf(t, category(t, 3)!.byMonth)).toBe(20000);
+    expect(usualOf(t, category(t, 5)!.byMonth)).toBe(333);
+    for (const g of t.groups) expect(usualOf(t, g.byMonth)).toBe(t.usual[g.key]);
+    // Short history: only the full months since it began.
+    const one = trendsOf([txn('2026-09-10', -30000, 4), txn('2026-10-02', -100, 4)]);
+    expect(usualOf(one, category(one, 4)!.byMonth)).toBe(30000);
+    expect(usualOf(trendsOf([txn('2026-10-02', -5000, 4)]), [0, 0, 0, 0, 5000])).toBe(0);
   });
 
   it('privacy: a partner’s private charges only count in their own Fun Money', () => {
@@ -492,6 +510,36 @@ describe('GET /api/trends', () => {
       ['Gas', 'everyday', 4200],
     ]);
     expect(body.categories.some((c) => archived.has(c.id))).toBe(false);
+  });
+
+  it('Activity group filter: a group\u2019s transactions in a month, private ones only as your own fun money', async () => {
+    const { you, partner, partnerFun } = await twoPeople();
+    const groceries = categoryId('Everyday', 'Groceries');
+    const gas = categoryId('Everyday', 'Gas');
+    const housing = categoryId('Bills', 'Housing');
+    charge('2026-09-10', -5000, groceries, null, 'MARKET');
+    charge('2026-09-11', -3000, gas, null, 'FUEL STOP');
+    charge('2026-08-11', -3000, gas, null, 'AUGUST FUEL'); // another month
+    charge('2026-09-12', -90000, housing, null, 'RENT');
+    charge('2026-09-13', -2500, groceries, you, 'MY TREAT'); // private: counts as your fun money
+    charge('2026-09-14', -4000, partnerFun, partner, 'PARTNER SPA');
+    charge('2026-09-15', -6000, null, null, 'SPLIT SHOP');
+    const splitId = db.rows<{ id: number }>("SELECT id FROM transactions WHERE name = 'SPLIT SHOP'")[0]!.id;
+    db.exec('UPDATE transactions SET is_split = 1 WHERE id = ?', splitId);
+    db.exec('INSERT INTO splits (transaction_id, category_id, amount_cents) VALUES (?, ?, ?), (?, ?, ?)', splitId, groceries, -4000, splitId, housing, -2000);
+
+    const names = async (query: string, email?: string) => {
+      const res = await api(env, 'GET', `/transactions?${query}`, undefined, email);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { transactions: { name: string }[] };
+      return body.transactions.map((t) => t.name).sort();
+    };
+    expect(await names('month=2026-09&group=everyday')).toEqual(['FUEL STOP', 'MARKET', 'SPLIT SHOP']);
+    expect(await names('month=2026-09&group=bills')).toEqual(['RENT', 'SPLIT SHOP']);
+    expect(await names('month=2026-09&group=fun')).toEqual(['MY TREAT']);
+    expect(await names('month=2026-09&group=fun', PARTNER)).toEqual(['PARTNER SPA']);
+    expect(await names('group=everyday')).toEqual(['AUGUST FUEL', 'FUEL STOP', 'MARKET', 'SPLIT SHOP']);
+    for (const bad of ['food', 'constructor']) expect((await api(env, 'GET', `/transactions?group=${bad}`)).status).toBe(400);
   });
 
   it('3,000 rows stay fast', async () => {

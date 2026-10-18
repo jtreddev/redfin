@@ -7,7 +7,8 @@ describe('chart scale: niceMax and ticks', () => {
     expect(niceMax(100_000)).toBe(100_000); // already round
     expect(niceMax(123_456)).toBe(150_000); // $1,234.56 → $1,500
     expect(niceMax(812_345)).toBe(1_000_000); // $8,123 → $10,000
-    expect(niceMax(4_200)).toBe(6_000); // $42 → $60 (steps of $20)
+    expect(niceMax(4_200)).toBe(5_000); // $42 → $50
+    expect(niceMax(430_000)).toBe(500_000); // $4,300 → $5,000, not $6,000
   });
 
   it('never returns 0, so an empty chart still has an axis', () => {
@@ -17,14 +18,17 @@ describe('chart scale: niceMax and ticks', () => {
   });
 
   it('ticks run from 0 to niceMax in equal whole-dollar steps', () => {
-    expect(ticks(95_000)).toEqual([0, 25_000, 50_000, 75_000, 100_000]);
+    expect(ticks(95_000)).toEqual([0, 20_000, 40_000, 60_000, 80_000, 100_000]);
     expect(ticks(123_456)).toEqual([0, 50_000, 100_000, 150_000]);
     expect(ticks(95_000, 2)).toEqual([0, 50_000, 100_000]);
-    for (const max of [1, 999, 4_200, 95_000, 123_456, 812_345, 7_654_321]) {
+    for (const max of [1, 999, 4_200, 95_000, 120_000, 123_456, 430_000, 812_345, 7_654_321]) {
       const t = ticks(max);
       expect(t[0]).toBe(0);
       expect(t.at(-1)).toBe(niceMax(max));
       expect(t.every((v) => v % 100 === 0)).toBe(true);
+      expect(t.length).toBeLessThanOrEqual(6);
+      // Every tick reads exactly in its short form (no $1,250 shown as "$1.3k").
+      for (const v of t.filter((v) => v >= 100_000)) expect(Math.round(Number(dollarsShort(v).slice(1, -1)) * 100_000)).toBe(v);
     }
   });
 });

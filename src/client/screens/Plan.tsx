@@ -22,11 +22,14 @@ import {
   StatusDot,
   Toggle,
 } from '../ui';
+import { Goals } from './Goals';
 
 type Tab = 'budget' | 'weeks' | 'bills';
 
 export function Plan({ params }: { params: URLSearchParams }) {
   const { me } = useApp();
+  // Goals live here as their own view (#/plan?view=goals); its own tab param picks goals or debts.
+  const goals = params.get('view') === 'goals';
   const tab = (params.get('tab') as Tab) || 'budget';
   const month = params.get('month') ?? monthOf(me.today);
   const setRoute = (next: { tab?: Tab; month?: string }) => go('plan', { tab, month, ...next });
@@ -34,19 +37,26 @@ export function Plan({ params }: { params: URLSearchParams }) {
   return (
     <div className="stack">
       <PageHeader title="Plan" />
-      <Segmented
-        value={tab}
-        onChange={(t) => setRoute({ tab: t })}
+      <Segmented<Tab | 'goals'>
+        value={goals ? 'goals' : tab}
+        onChange={(t) => (t === 'goals' ? go('plan', { view: 'goals' }) : go('plan', { tab: t, month: params.get('month') }))}
         options={[
           { value: 'budget', label: 'Budget' },
           { value: 'weeks', label: 'Weeks' },
           { value: 'bills', label: 'Bills' },
+          { value: 'goals', label: 'Goals' },
         ]}
       />
-      <MonthPicker month={month} onChange={(m) => setRoute({ month: m })} />
-      {tab === 'budget' && <BudgetView month={month} />}
-      {tab === 'weeks' && <WeeksView month={month} />}
-      {tab === 'bills' && <BillsView month={month} />}
+      {goals ? (
+        <Goals params={params} />
+      ) : (
+        <>
+          <MonthPicker month={month} onChange={(m) => setRoute({ month: m })} />
+          {tab === 'budget' && <BudgetView month={month} />}
+          {tab === 'weeks' && <WeeksView month={month} />}
+          {tab === 'bills' && <BillsView month={month} />}
+        </>
+      )}
     </div>
   );
 }

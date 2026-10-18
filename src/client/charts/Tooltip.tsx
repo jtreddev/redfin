@@ -10,7 +10,7 @@ export interface TooltipRow {
   onClick?: () => void;
 }
 
-const WIDTH = 196;
+const WIDTH = 212;
 const OFFSET = 14;
 
 /**

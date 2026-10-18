@@ -7,22 +7,22 @@ const DOLLAR = 100;
 /** An empty chart still gets an axis up to $100. */
 const EMPTY_MAX = 100 * DOLLAR;
 
-/** The smallest readable step (1, 2, 2.5 or 5 × 10ⁿ whole dollars) at least `raw` cents. */
+/** The smallest readable step (1, 2 or 5 × 10ⁿ whole dollars) at least `raw` cents. */
 function niceStep(raw: number): number {
   let magnitude = DOLLAR;
   while (magnitude * 10 <= raw) magnitude *= 10;
-  for (const m of [1, 2, 2.5, 5, 10]) {
-    const step = magnitude * m;
-    if (step % DOLLAR !== 0) continue; // $2.50 isn't a whole dollar
-    if (step >= raw) return step;
-  }
+  for (const m of [1, 2, 5]) if (magnitude * m >= raw) return magnitude * m;
   return magnitude * 10;
 }
 
-/** Axis ticks from 0 up to a readable top at or above `max`, in about `count` equal steps. */
+/**
+ * Axis ticks from 0 up to a readable top at or above `max`: the smallest step that covers `max` in at most
+ * `count + 1` steps, so the top sits close above the data. Steps are 1, 2 or 5 × 10ⁿ dollars (never 2.5, whose
+ * ticks like $1,250 would read as "$1.3k").
+ */
 export function ticks(max: number, count = 4): number[] {
   const top = max > 0 ? max : EMPTY_MAX;
-  const step = niceStep(top / count);
+  const step = niceStep(top / (count + 1));
   const steps = Math.ceil(top / step);
   return Array.from({ length: steps + 1 }, (_, i) => i * step);
 }

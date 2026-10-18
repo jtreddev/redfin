@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { GROUP_ORDER } from '../../shared/trends';
 import { api, errorMessage, post } from '../api';
 import { monthLabel, weekdayDate } from '../format';
 import { go } from '../router';
@@ -22,6 +23,7 @@ export function Activity({ params }: { params: URLSearchParams }) {
   const kidId = params.get('kid');
   const batch = params.get('batch');
   const accountId = params.get('account');
+  const group = params.get('group');
 
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
@@ -49,10 +51,11 @@ export function Activity({ params }: { params: URLSearchParams }) {
       if (kidId) qs.set('kidId', kidId);
       if (batch) qs.set('importBatchId', batch);
       if (accountId) qs.set('accountId', accountId);
+      if (group) qs.set('group', group);
       if (query) qs.set('q', query);
       return api<{ transactions: Transaction[]; hasMore: boolean }>(`/transactions?${qs}`);
     },
-    [filter, categoryId, month, kidId, batch, accountId, query],
+    [filter, categoryId, month, kidId, batch, accountId, group, query],
   );
 
   useEffect(() => {
@@ -92,6 +95,7 @@ export function Activity({ params }: { params: URLSearchParams }) {
       kid: kidId,
       batch,
       account: accountId,
+      group,
       ...next,
     };
     go('activity', merged);
@@ -121,6 +125,7 @@ export function Activity({ params }: { params: URLSearchParams }) {
     kidId && me.kids.find((k) => String(k.id) === kidId)?.name,
     batch && 'One import',
     accountId && accounts.find((a) => String(a.id) === accountId)?.name,
+    group && (GROUP_ORDER.find((g) => g.key === group)?.name ?? group),
   ].filter(Boolean);
 
   return (

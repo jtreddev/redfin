@@ -2,10 +2,10 @@ import { Component, useCallback, useEffect, useRef, useState, type ReactNode } f
 import { api, errorMessage } from './api';
 import { go, useRoute, type Route } from './router';
 import { Activity } from './screens/Activity';
-import { Goals } from './screens/Goals';
 import { Home } from './screens/Home';
 import { More } from './screens/More';
 import { Plan } from './screens/Plan';
+import { Trends } from './screens/Trends';
 import { AppContext, type AppData, type ToastOptions } from './state';
 import { recategorizeAll } from './sync';
 import type { Account, Category, Me } from './types';
@@ -14,8 +14,8 @@ import { ErrorNote, Loading } from './ui';
 const TABS = [
   { path: 'home', label: 'Home', icon: '⌂' },
   { path: 'activity', label: 'Activity', icon: '☰' },
+  { path: 'trends', label: 'Trends', icon: '▥' },
   { path: 'plan', label: 'Plan', icon: '▦' },
-  { path: 'goals', label: 'Goals', icon: '◎' },
   { path: 'more', label: 'More', icon: '⋯' },
 ];
 
@@ -42,6 +42,16 @@ class ScreenErrorBoundary extends Component<{ children: ReactNode }, { error: Er
   }
 }
 
+/** Goals moved under Plan: old #/goals links land on #/plan?view=goals (replacing, so Back doesn't bounce). */
+function GoalsRedirect({ params }: { params: URLSearchParams }) {
+  useEffect(() => {
+    const next = new URLSearchParams(params);
+    next.set('view', 'goals');
+    window.location.replace(`/#/plan?${next}`);
+  }, [params]);
+  return null;
+}
+
 function Screen({ route }: { route: Route }) {
   const [top, sub] = route.path.split('/');
   switch (top) {
@@ -49,8 +59,10 @@ function Screen({ route }: { route: Route }) {
       return <Activity params={route.params} />;
     case 'plan':
       return <Plan params={route.params} />;
+    case 'trends':
+      return <Trends />;
     case 'goals':
-      return <Goals params={route.params} />;
+      return <GoalsRedirect params={route.params} />;
     case 'more':
       return <More sub={sub} params={route.params} />;
     default:
@@ -107,7 +119,7 @@ export function App() {
   const top = route.path.split('/')[0];
   return (
     <AppContext.Provider value={{ ...base, reload, toast: showToast }}>
-      <main className="app">
+      <main className={`app ${top === 'trends' ? 'app-wide' : ''}`}>
         <ScreenErrorBoundary key={route.path}>
           <Screen route={route} />
         </ScreenErrorBoundary>

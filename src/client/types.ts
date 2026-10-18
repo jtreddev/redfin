@@ -2,6 +2,7 @@ import type { CategoryKind } from '../shared/actuals';
 import type { Timing } from '../shared/allocation';
 import type { Forecast, ForecastWeek } from '../shared/forecast';
 import type { SafeToSpend } from '../shared/safeToSpend';
+import type { Trends, whatChanged } from '../shared/trends';
 
 export interface Member {
   id: number;
@@ -218,3 +219,6 @@ export interface SyncStepResult {
   note?: string;
   busy?: boolean;
 }
+
+/** GET /api/trends */
+export type TrendsResponse = Trends & { changed: ReturnType<typeof whatChanged> };

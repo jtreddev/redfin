@@ -4,7 +4,7 @@ import { money, monthLabel, plural, shortDate, timeAgo, weekdayDate } from '../f
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import { syncAllBanks } from '../sync';
-import type { HomeResponse, Transaction } from '../types';
+import type { HomeResponse, Transaction, TrendsResponse } from '../types';
 import { Button, Card, ErrorNote, Loading, Money, PageHeader } from '../ui';
 import { TransactionSheet } from './TransactionSheet';
 
@@ -98,6 +98,7 @@ export function Home() {
           <SafeToSpendCard h={h} />
 
           <NeedsLookCard h={h} onOpen={setOpen} />
+          <ThisMonthCard />
 
           <FunMoneyCard h={h} />
           <BillsCard h={h} />
@@ -126,6 +127,36 @@ export function Home() {
         />
       )}
     </div>
+  );
+}
+
+const THIS_MONTH_GROUPS = ['bills', 'everyday', 'habits'] as const;
+
+/** Bills, Everyday and Habits so far this month, each with its usual month; taps through to Trends. */
+function ThisMonthCard() {
+  const trends = useLoad(() => api<TrendsResponse>('/trends?months=3'), []);
+  const t = trends.data;
+  if (!t) return null; // a quiet extra: no spinner or error on Home
+  const current = t.months.indexOf(t.partialMonth);
+  return (
+    <Card onClick={() => go('trends')}>
+      <div className="spread">
+        <h2>This month so far</h2>
+        <span className="muted small">Trends ›</span>
+      </div>
+      <div className="this-month-rows">
+        {THIS_MONTH_GROUPS.map((key) => {
+          const group = t.groups.find((g) => g.key === key)!;
+          return (
+            <div key={key}>
+              <div className="muted small">{group.name}</div>
+              <Money cents={group.byMonth[current] ?? 0} whole className="this-month-value" />
+              <div className="muted small">{t.usual[key] > 0 ? `usually ${money(t.usual[key], { whole: true })}` : 'no usual yet'}</div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }
 

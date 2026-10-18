@@ -96,7 +96,14 @@ export function StackedBars({
               if (e.pointerType !== 'mouse') return;
               focus.hover(bands(width, count).indexAt(e.clientX - e.currentTarget.getBoundingClientRect().left));
             }}
+            // Touch and pen act on pointerup (a scroll cancels it); the mouse on click.
+            onPointerUp={(e) => {
+              if (e.pointerType === 'mouse') return;
+              const i = bands(width, count).indexAt(e.clientX - e.currentTarget.getBoundingClientRect().left);
+              select(i, (e.target as Element).getAttribute('data-series'));
+            }}
             onClick={(e) => {
+              if (focus.isTouch()) return;
               const i = bands(width, count).indexAt(e.clientX - e.currentTarget.getBoundingClientRect().left);
               select(i, (e.target as Element).getAttribute('data-series'));
             }}

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { monthEnd, monthStart } from '../../shared/dates';
 import { PRIVACY_SQL } from '../../shared/privacy';
+import { GROUP_ORDER } from '../../shared/trends';
 import type { AppEnv } from '../env';
 import { all, allByIds, batchAll, first, nowIso, run, stmt, type Param } from '../lib/db';
 import {
@@ -23,6 +24,8 @@ import { enforceFunMoney, insertTransactions, rederive, STORED_SELECT, type Clas
 import { learnFromFix, undoMove } from '../services/learn';
 
 export const transactions = new Hono<AppEnv>();
+
+const TRENDS_GROUP_SECTION = new Map<string, string>(GROUP_ORDER.map((g) => [g.key, g.section]));
 
 export const TXN_SELECT = `SELECT t.id, t.account_id AS accountId, a.name AS accountName, a.type AS accountType,
   a.institution, t.date, t.amount_cents AS amountCents, t.name, t.merchant_name AS merchantName, t.memo, t.pending,
@@ -131,6 +134,15 @@ transactions.get('/transactions', async (c) => {
     const id = reqInt(q.categoryId, 'categoryId');
     where.push('(t.category_id = ? OR EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id AND s.category_id = ?))');
     params.push(id, id);
+  }
+  if (q.group) {
+    // The Trends groups, counted the way Trends counts them: your private charges are your fun money.
+    const section = TRENDS_GROUP_SECTION.get(q.group);
+    if (!section) throw badRequest('Unknown group.');
+    const inGroup = 'SELECT c.id FROM categories c JOIN sections sec ON sec.id = c.section_id WHERE sec.name = ?';
+    const filed = `(t.category_id IN (${inGroup}) OR EXISTS (SELECT 1 FROM splits s WHERE s.transaction_id = t.id AND s.category_id IN (${inGroup})))`;
+    where.push(q.group === 'fun' ? `(t.private_member_id IS NOT NULL OR ${filed})` : `(t.private_member_id IS NULL AND ${filed})`);
+    params.push(section, section);
   }
   if (q.kidId) {
     const id = reqInt(q.kidId, 'kidId');

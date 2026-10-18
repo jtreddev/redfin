@@ -59,7 +59,7 @@ export function Bars({
               if (e.pointerType !== 'mouse') return;
               focus.hover(bands(width, count).indexAt(e.clientX - e.currentTarget.getBoundingClientRect().left));
             }}
-            onClick={(e) => focus.pin(bands(width, count).indexAt(e.clientX - e.currentTarget.getBoundingClientRect().left))}
+            onPointerUp={(e) => focus.pin(bands(width, count).indexAt(e.clientX - e.currentTarget.getBoundingClientRect().left))}
           >
             <Axes width={width} months={months} tickValues={tickValues} max={max} partialIndex={partialIndex} active={active} />
             {values.map((v, i) => {

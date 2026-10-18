@@ -140,6 +140,16 @@ export function buildTrends({ entries, categories, months, today }: TrendsInput)
   };
 }
 
+/**
+ * The usual monthly amount of one row of `trends` (a category's or a group's byMonth): the average of the
+ * last 3 full months before the current one, counting only months since the household's history began.
+ */
+export function usualOf(trends: Pick<Trends, 'months' | 'partialMonth' | 'historyStart'>, byMonth: readonly Cents[]): Cents {
+  const index = trends.months.indexOf(trends.partialMonth);
+  const current = index < 0 ? trends.months.length : index;
+  return average(byMonth, usualStart(trends, current), current);
+}
+
 export interface Change {
   categoryId: number;
   name: string;
