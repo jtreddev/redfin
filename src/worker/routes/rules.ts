@@ -119,6 +119,7 @@ rules.patch('/rules/:id', async (c) => {
   const rule = await ownedRule(db, paramId(c), viewerId);
   const body = await readBody(c);
   const ignore = optBool(body.ignore, 'ignore');
+  const applyToExisting = optBool(body.applyToExisting, 'applyToExisting');
   const categoryId = optInt(body.categoryId, 'categoryId', { min: 1 });
   const makePrivate = typeof categoryId === 'number' && (await isOwnFunCategory(db, categoryId, viewerId));
   const updates = new Updates()
@@ -133,7 +134,7 @@ rules.patch('/rules/:id', async (c) => {
   if (updates.empty) throw badRequest('Nothing to update');
   await run(db, `UPDATE rules SET ${updates.sets.join(', ')}, updated_at = ? WHERE id = ?`, ...updates.params, nowIso(), rule.id);
   const text = typeof body.matchText === 'string' ? body.matchText : rule.matchText;
-  const updated = (await applyToMatching(db, rule.matchText)) + (text !== rule.matchText ? await applyToMatching(db, text) : 0);
+  const updated = applyToExisting === false ? 0 : (await applyToMatching(db, rule.matchText)) + (text !== rule.matchText ? await applyToMatching(db, text) : 0);
   return c.json({ ok: true, updated });
 });
 
@@ -169,29 +170,45 @@ rules.post('/rules/reorder', async (c) => {
   return c.json({ ok: true });
 });
 
-/** How many visible transactions a rule would match, with a few examples. */
+/**
+ * How many charges a rule would match (only ones the viewer may see), with up to 5 examples.
+ * Matches like a saved rule: text anywhere in the name and/or merchant, optionally on one account.
+ * With categoryId, `wouldChange` counts matches applying the rule would re-file (hand-set ones never change).
+ */
 rules.post('/rules/preview', async (c) => {
   const db = c.env.DB;
   const viewer = c.get('viewer');
   const body = await readBody(c);
-  const text = reqStr(body.matchText, 'matchText', 120).toUpperCase().replace(/[%_]/g, '');
+  const text = reqStr(body.matchText, 'matchText', 120).toUpperCase().replace(/[%_]/g, '').replace(/\s+/g, ' ').trim();
+  if (text.length < 2) throw badRequest('Match text is too short.');
   const field = oneOf(body.matchField, 'matchField', MATCH_FIELDS) ?? 'any';
   const column =
     field === 'name'
-      ? "UPPER(t.name) LIKE ?1"
+      ? 'UPPER(t.name) LIKE ?'
       : field === 'merchant'
-        ? "UPPER(COALESCE(t.merchant_name, '')) LIKE ?1"
-        : "(UPPER(t.name) LIKE ?1 OR UPPER(COALESCE(t.merchant_name, '')) LIKE ?1)";
+        ? "UPPER(COALESCE(t.merchant_name, '')) LIKE ?"
+        : "(UPPER(t.name) LIKE ? OR UPPER(COALESCE(t.merchant_name, '')) LIKE ?)";
   const accountId = optInt(body.accountId, 'accountId', { min: 1 }) ?? null;
-  const where = `t.deleted_at IS NULL AND ${column} AND (?2 IS NULL OR t.account_id = ?2)
-    AND (t.private_member_id IS NULL OR t.private_member_id = ?3)`;
+  const categoryId = optInt(body.categoryId, 'categoryId', { min: 1 }) ?? null;
+  const where = `t.deleted_at IS NULL AND ${column} AND (? IS NULL OR t.account_id = ?) AND ${PRIVACY_SQL}`;
   const like = `%${text}%`;
-  const [count, examples] = await Promise.all([
-    first<{ n: number }>(db, `SELECT COUNT(*) AS n FROM transactions t WHERE ${where}`, like, accountId, viewer.memberId),
-    all(db, `SELECT t.id, t.date, t.name, t.amount_cents AS amountCents FROM transactions t WHERE ${where} ORDER BY t.date DESC LIMIT 5`, like, accountId, viewer.memberId),
+  const params = [...(field === 'any' ? [like, like] : [like]), accountId, accountId, viewer.memberId];
+  const [counts, sample] = await Promise.all([
+    first<{ n: number; changes: number }>(
+      db,
+      `SELECT COUNT(*) AS n,
+              COALESCE(SUM(CASE WHEN ${categoryId === null ? '0' : '1'} = 1 AND (t.category_source IS NULL OR t.category_source != 'user')
+                                 AND t.category_id IS NOT ${categoryId ?? 'NULL'} THEN 1 ELSE 0 END), 0) AS changes
+         FROM transactions t WHERE ${where}`,
+      ...params,
+    ),
+    all(
+      db,
+      `SELECT t.id, t.date, t.name, t.amount_cents AS amountCents FROM transactions t WHERE ${where} ORDER BY t.date DESC, t.id DESC LIMIT 5`,
+      ...params,
+    ),
   ]);
-  void PRIVACY_SQL;
-  return c.json({ count: count?.n ?? 0, examples });
+  return c.json({ count: counts?.n ?? 0, wouldChange: counts?.changes ?? 0, sample, examples: sample });
 });
 
 /** Re-applies all rules to past transactions in chunks: call again with the returned afterId until done. */
