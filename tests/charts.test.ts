@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { barPath, dollarsShort, labelsFit, monthTick, niceMax, stackLayout, ticks } from '../src/client/charts/scale';
+import { barPath, dollarsShort, labelsFit, monthTick, niceMax, rangeTicks, stackLayout, ticks } from '../src/client/charts/scale';
 
 describe('chart scale: niceMax and ticks', () => {
   it('rounds the top of the axis up to a readable step', () => {
@@ -114,5 +114,27 @@ describe('chart layout: labels and month ticks', () => {
     expect(monthTick('2026-01', true)).toBe('J');
     expect(monthTick('2026-01', false)).toBe('Jan');
     expect(monthTick('2026-09', false)).toBe('Sep');
+  });
+});
+
+describe('chart scale: rangeTicks', () => {
+  it('matches ticks when nothing is below 0', () => {
+    expect(rangeTicks(40_000, 95_000)).toEqual(ticks(95_000));
+  });
+
+  it('keeps 0 on the axis and rounds both ends out to whole steps', () => {
+    expect(rangeTicks(-30_000, 120_000)).toEqual([-50_000, 0, 50_000, 100_000, 150_000]);
+    for (const [lo, hi] of [
+      [-1, 1],
+      [-250_000, -10_000],
+      [-4_200, 812_345],
+    ] as const) {
+      const t = rangeTicks(lo, hi);
+      expect(t).toContain(0);
+      expect(t[0]).toBeLessThanOrEqual(lo);
+      expect(t.at(-1)).toBeGreaterThanOrEqual(hi);
+      expect(t.every((v) => v % 100 === 0)).toBe(true);
+      expect(t.length).toBeLessThanOrEqual(7);
+    }
   });
 });

@@ -12,6 +12,7 @@ import type { HomeResponse, Transaction, TrendsResponse } from '../types';
 import { Button, Card, ErrorNote, Loading, Money, PageHeader } from '../ui';
 import { BillIncreasesCard } from './BillIncreases';
 import { TransactionSheet } from './TransactionSheet';
+import { UntilPayday } from './UntilPayday';
 
 const CACHE_KEY = 'fin.home';
 /** This month's trends, cached beside Home (its own key, so an older 'fin.home' cache still reads). */
@@ -124,6 +125,7 @@ export function Home() {
             <SafeToSpend h={h} />
             {trends && <MonthRibbon t={trends} />}
           </div>
+          <UntilPayday refresh={h} />
 
           <NeedsLookCard h={h} onOpen={setOpen} />
           <BillIncreasesCard items={h.billIncreases} onChanged={() => home.reload()} />

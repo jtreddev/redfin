@@ -32,6 +32,20 @@ export function niceMax(max: number): number {
   return ticks(max).at(-1)!;
 }
 
+/**
+ * Axis ticks for a domain that can go below 0 (a cash balance): 0 is always on the axis, the ends round out
+ * to whole steps (1, 2 or 5 × 10ⁿ dollars) and there are at most `count + 2` steps in all.
+ */
+export function rangeTicks(lo: number, hi: number, count = 4): number[] {
+  const low = Math.min(0, lo);
+  const high = Math.max(0, hi);
+  if (low === 0) return ticks(high, count);
+  const step = niceStep((high - low) / (count + 1));
+  const first = Math.floor(low / step);
+  const last = Math.max(1, Math.ceil(high / step));
+  return Array.from({ length: last - first + 1 }, (_, i) => (first + i) * step);
+}
+
 /** "$950", "$1.2k", "$12k": whole dollars, compact from $1,000. */
 export function dollarsShort(cents: number): string {
   const dollars = Math.round(Math.abs(cents) / DOLLAR);

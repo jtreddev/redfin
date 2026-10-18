@@ -190,6 +190,9 @@ export interface StartingBalance {
   source: 'manual' | 'bank' | 'previous_month' | 'none';
 }
 
+/** The accounts that count as cash: shown checking and savings, never cards or loans. */
+export const CASH_ACCOUNTS_WHERE = "is_cash = 1 AND hidden = 0 AND type NOT IN ('credit', 'loan')";
+
 /** Cash on day 1: typed in, worked back from bank balances, or carried from last month's forecast. */
 async function startingBalance(
   db: D1Database,
@@ -210,7 +213,7 @@ async function startingBalance(
     const cash = await first<{ total: number; counted: number }>(
       db,
       `SELECT COALESCE(SUM(current_balance_cents), 0) AS total, COUNT(current_balance_cents) AS counted
-         FROM accounts WHERE is_cash = 1 AND hidden = 0 AND type NOT IN ('credit', 'loan')`,
+         FROM accounts WHERE ${CASH_ACCOUNTS_WHERE}`,
     );
     if (!cash?.counted) return { cents: 0, source: 'none' };
     const movement = await first<{ net: number }>(
@@ -390,13 +393,34 @@ export interface UpcomingBill {
   categoryId: number | null;
 }
 
-/** Due-day budget lines not yet paid this month, plus confirmed recurring bills coming up. */
+/**
+ * A month's due-day spending lines at their full budget, as bills on their due day: the same lines the
+ * forecast counts (no income, paychecks or fun money; a sub-category whose parent has a line is in the parent).
+ */
+function dueDayLines(rows: readonly BudgetRow[], month: MonthKey): UpcomingBill[] {
+  const byId = new Map(rows.map((r) => [r.categoryId, r]));
+  const hasLine = (r: BudgetRow | undefined) => r !== undefined && (r.lineId !== null || r.computed === 'planned_costs');
+  return rows
+    .filter((r) => r.timing === 'due_day' && r.dueDay != null && r.kind !== 'income' && r.kind !== 'transfer' && r.budgetCents > 0)
+    .filter((r) => hasLine(r) && !(r.parentId !== null && hasLine(byId.get(r.parentId))))
+    .map((r) => ({ name: r.name, date: clampDay(month, r.dueDay!), amountCents: r.budgetCents, overdue: false, source: 'budget', categoryId: r.categoryId }));
+}
+
+/**
+ * Due-day budget lines not yet paid this month, plus confirmed recurring bills coming up. The horizon is a
+ * number of days from today, or `until` a date; with `repeat`, a recurring bill shows every time it comes up
+ * before then (weekly ones more than once), not only next time.
+ *
+ * With `until` in a later month, that month's due-day lines come too (P6-R3b): from its budget, or, when it
+ * has none yet, this month's lines carried forward at their full amount. A confirmed bill in the same
+ * category that month takes the line's place.
+ */
 export async function upcomingBills(
   db: D1Database,
   planner: Planner,
   today: ISODate,
   viewerId: number,
-  horizonDays = 21,
+  horizon: number | { until: ISODate; repeat?: boolean; laterMonths?: boolean } = 21,
 ): Promise<UpcomingBill[]> {
   const bills: UpcomingBill[] = [];
   for (const row of planner.data.rows) {
@@ -415,15 +439,30 @@ export async function upcomingBills(
       WHERE status = 'confirmed' AND next_date IS NOT NULL AND (private_member_id IS NULL OR private_member_id = ?)`,
     viewerId,
   );
-  const horizon = addDays(today, horizonDays);
+  const until = typeof horizon === 'number' ? addDays(today, horizon) : horizon.until;
+  const repeat = typeof horizon !== 'number' && horizon.repeat === true;
   const budgetCategories = new Set(bills.map((b) => b.categoryId));
   for (const r of recurring) {
     let date = r.nextDate as ISODate;
     // Roll stale dates forward (the charge probably happened; detection refreshes it later).
     for (let guard = 0; date < addDays(today, -3) && guard < 60; guard++) date = nextOccurrence(date, r.cadence);
-    if (date > horizon) continue;
-    if (r.categoryId != null && budgetCategories.has(r.categoryId) && monthOf(date) === planner.month) continue;
-    bills.push({ name: r.name, date, amountCents: Math.abs(r.amount), overdue: date < today, source: 'recurring', categoryId: r.categoryId });
+    for (let guard = 0; date <= until && guard < 60; guard++, date = nextOccurrence(date, r.cadence)) {
+      if (!(r.categoryId != null && budgetCategories.has(r.categoryId) && monthOf(date) === planner.month)) {
+        bills.push({ name: r.name, date, amountCents: Math.abs(r.amount), overdue: date < today, source: 'recurring', categoryId: r.categoryId });
+      }
+      if (!repeat) break;
+    }
+  }
+
+  if (typeof horizon !== 'number' && horizon.laterMonths) {
+    for (let month = addMonths(planner.month, 1); month <= monthOf(until); month = addMonths(month, 1)) {
+      const budgeted = await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM budget_lines WHERE month = ?', month);
+      const rows = budgeted?.n ? (await loadMonth(db, month)).rows : planner.data.rows;
+      const billed = new Set(bills.filter((b) => b.source === 'recurring' && monthOf(b.date) === month).map((b) => b.categoryId));
+      for (const line of dueDayLines(rows, month)) {
+        if (line.date <= until && !billed.has(line.categoryId)) bills.push(line);
+      }
+    }
   }
   return bills.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : b.amountCents - a.amountCents));
 }
