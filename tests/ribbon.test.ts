@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { ribbonLayout } from '../src/client/ribbon';
+import { ribbonLayout, usableCachedRibbon } from '../src/client/ribbon';
+
+describe('cached month ribbon', () => {
+  it('is used only in the month it was made', () => {
+    const cached = { partialMonth: '2026-10' };
+    expect(usableCachedRibbon(cached, '2026-10-31')).toBe(cached);
+    expect(usableCachedRibbon(cached, '2026-11-01')).toBeNull();
+    expect(usableCachedRibbon(null, '2026-10-18')).toBeNull();
+  });
+});
 
 describe('month ribbon layout', () => {
   it('scales to the usual month while spending is under it', () => {

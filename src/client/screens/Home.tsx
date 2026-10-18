@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { GROUP_ORDER } from '../../shared/trends';
 import { api, ApiError, errorMessage } from '../api';
 import { money, monthLabel, plural, shortDate, timeAgo, weekdayDate } from '../format';
 import { Icon } from '../icons';
-import { ribbonLayout } from '../ribbon';
+import { ribbonLayout, usableCachedRibbon } from '../ribbon';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import { syncAllBanks } from '../sync';
@@ -32,39 +32,38 @@ function store(key: string, value: unknown) {
   }
 }
 
-interface HomeData {
-  home: HomeResponse;
-  /** This month and "usual" (the server always averages the last 3 full months), for the ribbon; null when it couldn't load. */
-  trends: TrendsResponse | null;
-}
-
 export function Home() {
   const { me, toast, reload } = useApp();
   const [offline, setOffline] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
   const [open, setOpen] = useState<Transaction | null>(null);
 
-  // Home and this month's trends load together, so the ribbon arrives with everything else instead of popping in.
-  const home = useLoad(async (): Promise<HomeData> => {
+  const home = useLoad(async () => {
     try {
-      const [data, trends] = await Promise.all([
-        api<HomeResponse>('/home'),
-        api<TrendsResponse>('/trends?months=3').catch((error: unknown) => {
-          if (error instanceof ApiError && error.status === 0) throw error;
-          return null;
-        }),
-      ]);
+      const data = await api<HomeResponse>('/home');
       store(CACHE_KEY, data);
-      if (trends) store(TRENDS_CACHE_KEY, trends);
       setOffline(false);
-      return { home: data, trends };
+      return data;
     } catch (error) {
       const offlineHome = error instanceof ApiError && error.status === 0 ? cached<HomeResponse>(CACHE_KEY) : null;
       if (!offlineHome) throw error;
       setOffline(true);
-      return { home: offlineHome, trends: cached<TrendsResponse>(TRENDS_CACHE_KEY) };
+      return offlineHome;
     }
   }, []);
+
+  // The ribbon loads on its own and can never hold Home up or put it offline: any failure falls back to this
+  // month's cached ribbon, or none. The cached one also shows while it loads, so it doesn't pop in.
+  const cachedRibbon = useMemo(() => usableCachedRibbon(cached<TrendsResponse>(TRENDS_CACHE_KEY), me.today), [me.today]);
+  const ribbon = useLoad(async (): Promise<TrendsResponse | null> => {
+    try {
+      const data = await api<TrendsResponse>('/trends?months=3');
+      store(TRENDS_CACHE_KEY, data);
+      return data;
+    } catch {
+      return cachedRibbon;
+    }
+  }, [cachedRibbon]);
 
   async function syncNow() {
     setSyncing('Syncing…');
@@ -74,7 +73,7 @@ export function Home() {
       });
       if (result.errors.length) toast(result.errors[0] ?? 'A bank had a problem syncing', 'error');
       else toast(result.added ? `${plural(result.added, 'new transaction')}` : 'Everything is up to date');
-      await Promise.all([home.reload(), reload()]);
+      await Promise.all([home.reload(), ribbon.reload(), reload()]);
     } catch (error) {
       toast(errorMessage(error), 'error');
     } finally {
@@ -82,8 +81,8 @@ export function Home() {
     }
   }
 
-  const h = home.data?.home;
-  const trends = home.data?.trends ?? null;
+  const h = home.data;
+  const trends = ribbon.data !== undefined ? ribbon.data : cachedRibbon;
   return (
     <div className="stack home">
       <PageHeader
@@ -149,7 +148,7 @@ export function Home() {
           txn={open}
           onClose={() => setOpen(null)}
           // Undo can arrive after the sheet has closed: just refresh Home.
-          onChanged={() => void home.reload()}
+          onChanged={() => void Promise.all([home.reload(), ribbon.reload()])}
         />
       )}
     </div>
@@ -305,7 +304,12 @@ function NeedsLookCard({ h, onOpen }: { h: HomeResponse; onOpen: (t: Transaction
           <button key={t.id} type="button" className="row row-button" onClick={() => onOpen(t)}>
             <div className="row-main">
               <div className="row-title">
-                {t.isPrivate && <span className="sr-only">Private: </span>}
+                {t.isPrivate && (
+                  <span className="private-mark" title="My fun money: only you see this">
+                    <Icon name="lock" />
+                    <span className="sr-only">Private: </span>
+                  </span>
+                )}
                 {t.merchantName ?? t.name}
               </div>
               <div className="row-sub">

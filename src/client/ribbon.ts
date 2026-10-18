@@ -1,3 +1,5 @@
+import { monthOf } from '../shared/dates';
+
 /**
  * Geometry for Home's month ribbon: this month's spending so far, split by group, on one bar, with a mark
  * where a usual month ends. Everything is a percentage of the track. The track spans whichever is larger,
@@ -23,4 +25,12 @@ export function ribbonLayout(values: readonly number[], usual: number): RibbonLa
     usualAt: usual > 0 ? pct(usual) : null,
     total,
   };
+}
+
+/**
+ * A cached ribbon is only shown in the month it was made: after the month turns, last month's spending
+ * would read as this month's.
+ */
+export function usableCachedRibbon<T extends { partialMonth: string }>(cached: T | null, today: string): T | null {
+  return cached && cached.partialMonth === monthOf(today) ? cached : null;
 }
