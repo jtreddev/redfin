@@ -35,14 +35,19 @@ The pieces are worked out as follows:
   with money still left, plus confirmed recurring bills with stale dates rolled forward and
   categories that have a due-day line skipped. Its horizon is set to the payday.
   - Bills that are overdue or due today land on tomorrow (P6-R2).
-  - A payday that falls in next month still needs next month's due-day lines. For the window
-    after the month ends, use only recurring bills, because next month's budget may not exist
-    (P6-R3).
+  - A payday that falls in next month still needs next month's due-day lines (P6-R3b, replacing
+    P6-R3). For the window after the month ends, use next month's due-day expense lines when its
+    budget exists. When it doesn't yet, carry this month's due-day expense lines forward at their
+    full budget on the same due day (clamped). The same skip rules apply: no income, paychecks or
+    fun money lines, and a confirmed recurring bill in the same category that month takes the
+    line's place, so nothing is counted twice.
 - **Daily spend.** Use the Trends "usual" (`usualOf` in trends.ts, the last 3 full months)
   for the everyday, habits and fun groups, each divided by 30.4. Bills and Saving are left
   out, because events cover them (P6-R4).
   - Fun Money totals count as group totals only, under the same privacy rules as Trends. No
     partner's private charge is ever listed.
+  - Confirmed bills filed under Everyday, Habits or Fun are taken out of their group's usual as
+    monthly amounts (never below 0), because they're already events.
   - Usual is 0 when there's no history.
 - **Planned-cost set-asides are not subtracted** (P6-R5). They are tracked balances, and the
   money doesn't leave the account. *Cost if wrong:* the result looks rosier by the

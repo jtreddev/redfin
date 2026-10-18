@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   fallbackLastDate,
+  monthlyEquivalent,
   nextPayday,
   NO_PAYDAY_NOTE,
   projectToPayday,
   yearlyChangeCents,
   type ProjectionEvent,
   type ProjectionInput,
+  usualLessBills,
 } from '../src/shared/projection';
 
 const TODAY = '2026-10-18'; // a Sunday
@@ -146,5 +148,27 @@ describe('projectToPayday', () => {
       expect(p.events).toEqual([]);
       expect(p.dayBeforeCents - projectToPayday(base).dayBeforeCents).toBe(4_000);
     });
+  });
+});
+
+describe('usual spending less bills', () => {
+  it('turns a bill into a monthly amount', () => {
+    expect(monthlyEquivalent(1_000, 'weekly')).toBe(4_333);
+    expect(monthlyEquivalent(1_000, 'biweekly')).toBe(2_167);
+    expect(monthlyEquivalent(1_500, 'monthly')).toBe(1_500);
+    expect(monthlyEquivalent(3_000, 'quarterly')).toBe(1_000);
+    expect(monthlyEquivalent(12_000, 'yearly')).toBe(1_000);
+  });
+
+  it('takes bills out of their group, never below 0', () => {
+    const usual = { bills: 90_000, everyday: 30_000, habits: 5_000, fun: 2_000, saving: 10_000 };
+    expect(
+      usualLessBills(usual, [
+        { group: 'fun', cadence: 'monthly', amountCents: 1_500 },
+        { group: 'habits', cadence: 'weekly', amountCents: 2_000 },
+        { group: 'bills', cadence: 'monthly', amountCents: 50_000 },
+        { group: null, cadence: 'monthly', amountCents: 9_999 },
+      ]),
+    ).toEqual({ everyday: 30_000, habits: 0, fun: 500 });
   });
 });

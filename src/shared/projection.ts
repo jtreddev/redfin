@@ -1,6 +1,8 @@
 import { addDays, addMonths, addMonthsToDate, diffDays, monthEnd, monthOf, type ISODate } from './dates';
 import type { Cents } from './money';
 import { payDatesBetween, type PaySchedule } from './paySchedule';
+import type { Cadence } from './recurring';
+import type { GroupKey } from './trends';
 
 /**
  * "Until payday": cash from today to the day before the next payday, day by day. Pure, so the client can
@@ -114,6 +116,27 @@ export function nextPayday(sources: readonly PaydaySource[], today: ISODate): Pa
 export function fallbackLastDate(today: ISODate): ISODate {
   const end = monthEnd(monthOf(today));
   return diffDays(end, today) >= 7 ? end : monthEnd(addMonths(monthOf(today), 1));
+}
+
+/** A bill's amount as a monthly average. */
+export function monthlyEquivalent(amountCents: Cents, cadence: Cadence): Cents {
+  const perYear = { weekly: 52, biweekly: 26, monthly: 12, quarterly: 4, yearly: 1 }[cadence];
+  return Math.round((amountCents * perYear) / 12);
+}
+
+/**
+ * Usual monthly spending in the groups the daily rate covers, less the confirmed bills filed in each group (as
+ * monthly amounts), never below 0. Those bills come out as events, so they mustn't be in the daily rate too.
+ */
+export function usualLessBills(
+  usual: Record<GroupKey, Cents>,
+  bills: readonly { group: GroupKey | null; cadence: Cadence; amountCents: Cents }[],
+): Record<'everyday' | 'habits' | 'fun', Cents> {
+  const out = { everyday: usual.everyday, habits: usual.habits, fun: usual.fun };
+  for (const b of bills) {
+    if (b.group === 'everyday' || b.group === 'habits' || b.group === 'fun') out[b.group] -= monthlyEquivalent(Math.abs(b.amountCents), b.cadence);
+  }
+  return { everyday: Math.max(0, out.everyday), habits: Math.max(0, out.habits), fun: Math.max(0, out.fun) };
 }
 
 /** Cents per day after a what-if (whole cents). */

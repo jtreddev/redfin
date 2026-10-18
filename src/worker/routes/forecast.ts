@@ -8,8 +8,10 @@ import {
   projectToPayday,
   type ProjectionEvent,
   type ProjectionInput,
+  usualLessBills,
 } from '../../shared/projection';
-import { buildTrends } from '../../shared/trends';
+import type { Cadence } from '../../shared/recurring';
+import { buildTrends, GROUP_ORDER } from '../../shared/trends';
 import type { AppEnv } from '../env';
 import { all, first } from '../lib/db';
 import { loadIncomeSources, scheduleOf } from '../services/context';
@@ -31,7 +33,7 @@ forecast.get('/forecast', async (c) => {
   const viewer = c.get('viewer');
   const household = c.get('household');
 
-  const [cash, sources, received, planner, trendsInput] = await Promise.all([
+  const [cash, sources, received, planner, trendsInput, confirmed] = await Promise.all([
     first<{ total: number; counted: number }>(
       db,
       `SELECT COALESCE(SUM(current_balance_cents), 0) AS total, COUNT(current_balance_cents) AS counted FROM accounts WHERE ${CASH_ACCOUNTS_WHERE}`,
@@ -46,6 +48,12 @@ forecast.get('/forecast', async (c) => {
     ),
     buildPlanner(db, monthOf(today), household, today),
     loadTrendsInput(db, monthsBack(today, USUAL_MONTHS), today),
+    all<{ categoryId: number; cadence: Cadence; amountCents: number }>(
+      db,
+      `SELECT category_id AS categoryId, cadence, expected_amount_cents AS amountCents FROM recurring_bills
+        WHERE status = 'confirmed' AND category_id IS NOT NULL AND (private_member_id IS NULL OR private_member_id = ?)`,
+      viewer.memberId,
+    ),
   ]);
 
   const payday = nextPayday(
@@ -59,9 +67,9 @@ forecast.get('/forecast', async (c) => {
   );
   const lastDate = payday ? addDays(payday.date, -1) : fallbackLastDate(today);
 
-  // This month's due-day lines, then recurring bills (every time they come up) to the last day. A payday
-  // next month gets no due-day lines for next month: its budget may not exist yet (P6-R3).
-  const bills = await upcomingBills(db, planner, today, viewer.memberId, { until: lastDate, repeat: true });
+  // This month's due-day lines, recurring bills (every time they come up) and, past the month end, next
+  // month's due-day lines (P6-R3b), to the last day.
+  const bills = await upcomingBills(db, planner, today, viewer.memberId, { until: lastDate, repeat: true, laterMonths: true });
   // Planned-cost set-asides stay in the account, so they aren't taken off (P6-R5): a due-day savings line
   // counts only its hand part. Home says "before set-asides".
   const setAside = new Map(planner.data.rows.filter((r) => r.plannedCostsCents > 0).map((r) => [r.categoryId, r.plannedCostsCents]));
@@ -75,8 +83,14 @@ forecast.get('/forecast', async (c) => {
     }))
     .filter((e) => e.amountCents > 0);
 
-  // Bills and Saving are left out: their money is in the events (P6-R4).
-  const usual = buildTrends(trendsInput).usual;
+  // Bills and Saving are left out: their money is in the events (P6-R4). So are confirmed bills filed under
+  // Everyday, Habits or Fun: they come out as events too.
+  const groupOf = new Map(GROUP_ORDER.map((g) => [g.section, g.key]));
+  const sectionOf = new Map(trendsInput.categories.map((c) => [c.id, c.section]));
+  const usual = usualLessBills(
+    buildTrends(trendsInput).usual,
+    confirmed.map((b) => ({ ...b, group: groupOf.get(sectionOf.get(b.categoryId) ?? '') ?? null })),
+  );
   const perDay = (monthly: number) => Math.max(0, Math.round(monthly / DAYS_PER_MONTH));
   const input: ProjectionInput = {
     today,

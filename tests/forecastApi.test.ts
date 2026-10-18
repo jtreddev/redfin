@@ -124,6 +124,54 @@ describe('GET /api/forecast', () => {
     expect(JSON.stringify(mine)).not.toContain('CHARGE');
   });
 
+  describe('a payday next month', () => {
+    let rent: number;
+    beforeEach(() => {
+      // Paid on the 3rd; rent is due on the 1st and October's is already paid.
+      db.exec("INSERT INTO income_sources (name, net_pay_cents, frequency, anchor_date) VALUES ('Paycheck', 250000, 'monthly', '2026-09-03')");
+      rent = category('Bills');
+      charge('2026-10-01', -150000, { category_id: rent });
+    });
+    const rentEvents = (body: ForecastBody) => body.projection.events.filter((e) => e.amountCents >= 150000);
+
+    it('carries this month’s due-day lines into next month when it has no budget yet', async () => {
+      await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: rent, budgetCents: 150000, timing: 'due_day', dueDay: 1 });
+      const body = await forecast();
+      expect(body.input.payday?.date).toBe('2026-11-03');
+      expect(rentEvents(body).map((e) => [e.date, e.amountCents, e.kind])).toEqual([['2026-11-01', 150000, 'budget']]);
+    });
+
+    it('counts rent once when a confirmed bill in the same category is due too', async () => {
+      await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: rent, budgetCents: 150000, timing: 'due_day', dueDay: 1 });
+      db.exec(
+        `INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, next_date, status, category_id)
+         VALUES ('landlord', 'Landlord', 'monthly', -150000, '2026-11-01', 'confirmed', ?)`,
+        rent,
+      );
+      const body = await forecast();
+      expect(rentEvents(body).map((e) => [e.name, e.date, e.kind])).toEqual([['Landlord', '2026-11-01', 'bill']]);
+    });
+
+    it('uses next month’s budget once it exists', async () => {
+      await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: rent, budgetCents: 150000, timing: 'due_day', dueDay: 1 });
+      await api(env, 'PUT', '/budget/lines', { month: '2026-11', categoryId: rent, budgetCents: 160000, timing: 'due_day', dueDay: 2 });
+      const body = await forecast();
+      expect(rentEvents(body).map((e) => [e.date, e.amountCents])).toEqual([['2026-11-02', 160000]]);
+    });
+  });
+
+  it('takes confirmed bills out of their group’s usual spending', async () => {
+    seedHousehold();
+    const fun = category('Fun & Wants', 'AND c.fun_member_id IS NULL');
+    db.exec(
+      `INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, next_date, status, category_id)
+       VALUES ('streamco', 'Video', 'monthly', -1520, '2026-10-30', 'confirmed', ?)`,
+      fun,
+    );
+    // Fun was 9,120 a month; less the 1,520 bill, 7,600 / 30.4 = 250 a day.
+    expect((await forecast()).input.dailySpend).toEqual({ everyday: 1000, habits: 500, fun: 250 });
+  });
+
   it('falls back to the end of the month with no payday, and starts from zero with no history', async () => {
     db.exec("INSERT INTO income_sources (name, net_pay_cents, frequency, anchor_date, active) VALUES ('Old job', 1, 'weekly', '2026-10-02', 0)");
     const body = await forecast();
