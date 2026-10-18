@@ -24,6 +24,14 @@ import {
 import { INCOME_SOURCE_SELECT, loadCategories, loadIngestContext, scheduleOf, type IncomeSourceRow } from '../services/context';
 import { reclassify, STORED_SELECT, type StoredTxn } from '../services/ingest';
 import { buildPlanner, forecastJson, funMoneyBalances, loadMonth, upcomingBills } from '../services/planner';
+import { toApi as txnToApi, TXN_SELECT, type TxnRow } from './transactions';
+
+/**
+ * Spending charges from the last 60 days with no category ("Needs a look" on Home).
+ * Bind the earliest date, then the viewer's member id.
+ */
+const NEEDS_LOOK_WHERE = `t.amount_cents < 0 AND t.category_id IS NULL AND t.is_ignored = 0 AND t.transfer_pair_id IS NULL
+  AND t.pending = 0 AND t.deleted_at IS NULL AND t.is_split = 0 AND t.date >= ? AND ${PRIVACY_SQL}`;
 
 export const budget = new Hono<AppEnv>();
 
@@ -153,7 +161,8 @@ budget.get('/home', async (c) => {
   const household = c.get('household');
   const month = monthOf(today);
 
-  const [planner, fun, uncategorized, items, previousCheckin, previousActivity] = await Promise.all([
+  const since = addDays(today, -60);
+  const [planner, fun, uncategorized, items, previousCheckin, previousActivity, needsLookCount, needsLookRows] = await Promise.all([
     buildPlanner(db, month, household, today),
     funMoneyBalances(db, household, today, viewer.memberId),
     first<{ n: number }>(
@@ -170,6 +179,8 @@ budget.get('/home', async (c) => {
     ),
     first<{ status: string }>(db, 'SELECT status FROM checkins WHERE month = ?', addMonths(month, -1)),
     first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM transactions WHERE date LIKE ? AND deleted_at IS NULL', `${addMonths(month, -1)}-%`),
+    first<{ n: number }>(db, `SELECT COUNT(*) AS n FROM transactions t WHERE ${NEEDS_LOOK_WHERE}`, since, viewer.memberId),
+    all<TxnRow>(db, `${TXN_SELECT} WHERE ${NEEDS_LOOK_WHERE} ORDER BY t.date DESC, t.id DESC LIMIT 5`, since, viewer.memberId),
   ]);
   const bills = await upcomingBills(db, planner, today, viewer.memberId);
   const position = planner.forecast.currentWeekPosition;
@@ -191,6 +202,7 @@ budget.get('/home', async (c) => {
         : { memberId: f.memberId, name: f.name, color: f.color, balanceCents: f.balanceCents, isViewer: false },
     ),
     uncategorizedCount: uncategorized?.n ?? 0,
+    needsLook: { count: needsLookCount?.n ?? 0, items: needsLookRows.map((r) => txnToApi(r)) },
     banks: items,
     lastSyncedAt: items.map((i) => i.lastSyncedAt).filter(Boolean).sort().at(-1) ?? null,
     checkin:

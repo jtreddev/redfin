@@ -123,7 +123,7 @@ export function TransactionSheet({
       )}
 
       {!t.isSplit && (
-        <Field label="Category">
+        <Field label="Category" hint={categoryHint(t)}>
           <CategorySelect value={t.categoryId} onChange={(id) => void update({ categoryId: id })} />
         </Field>
       )}
@@ -373,4 +373,11 @@ function SplitEditor({ txn, onCancel, onSaved }: { txn: Transaction; onCancel: (
       </div>
     </div>
   );
+}
+
+/** Why a charge sits in its category: the app's reason, or "Set by you" for a hand pick. */
+function categoryHint(t: Transaction): string | undefined {
+  if (t.categoryId === null) return undefined;
+  if (t.categorySource === 'user') return 'Set by you';
+  return t.categoryReason ?? undefined;
 }

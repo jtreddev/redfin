@@ -93,6 +93,8 @@ export interface Transaction {
   source: 'plaid' | 'import' | 'manual';
   categoryId: number | null;
   categorySource: 'rule' | 'user' | 'auto' | null;
+  /** Why the app filed it here ("Under $25 at a gas station"); null when set by hand or not filed. */
+  categoryReason: string | null;
   kidId: number | null;
   privateMemberId: number | null;
   isPrivate: boolean;
@@ -184,6 +186,8 @@ export interface HomeResponse {
   bills: Bill[];
   fun: FunBalance[];
   uncategorizedCount: number;
+  /** Recent spending with no category. Missing from a Home payload cached before this existed. */
+  needsLook?: { count: number; items: Transaction[] };
   banks: BankItem[];
   lastSyncedAt: string | null;
   checkin: { month: string; status: string } | null;

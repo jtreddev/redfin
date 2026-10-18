@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, del, errorMessage, patch, post } from '../api';
+import { ruleRangeLabel } from '../../shared/rules';
 import { money, plural, shortDate } from '../format';
 import { useApp, useLoad } from '../state';
 import { Button, CategorySelect, Empty, ErrorNote, Field, KidSelect, Loading, Segmented, Sheet, Toggle } from '../ui';
@@ -18,6 +19,10 @@ interface RuleItem {
   kidName: string | null;
   isPrivate: boolean;
   ignore: boolean;
+  /** Made by the app when someone fixed a charge's category. */
+  learned: boolean;
+  amountMinCents: number | null;
+  amountMaxCents: number | null;
 }
 
 export function Rules() {
@@ -71,13 +76,16 @@ export function Rules() {
       {!rules.data ? (
         !rules.error && <Loading />
       ) : rules.data.length === 0 ? (
-        <Empty title="No rules yet">When you re-file a transaction, the app offers to make a rule for you.</Empty>
+        <Empty title="No rules yet">When you fix a charge’s category, the app learns a rule for next time.</Empty>
       ) : (
         <div className="list">
           {rules.data.map((rule, i) => (
             <div key={rule.id} className="row">
               <button type="button" className="row-main row-button" style={{ border: 'none', background: 'none', padding: 0, textAlign: 'left', color: 'inherit', font: 'inherit' }} onClick={() => setEditing(rule)}>
-                <div className="row-title">“{rule.matchText}”</div>
+                <div className="row-title">
+                  “{rule.matchText}”
+                  {[ruleRangeLabel(rule.amountMinCents, rule.amountMaxCents)].filter(Boolean).map((range) => ` · ${range}`)}
+                </div>
                 <div className="row-sub">
                   →{' '}
                   {[
@@ -90,6 +98,7 @@ export function Rules() {
                     .filter(Boolean)
                     .join(' · ')}
                 </div>
+                <div className="row-sub muted small">{rule.learned ? 'Learned from your fix' : 'You made this'}</div>
               </button>
               <div className="cluster" style={{ flexWrap: 'nowrap' }}>
                 <button type="button" className="icon-btn" aria-label="Move up" onClick={() => void move(i, -1)} disabled={i === 0}>

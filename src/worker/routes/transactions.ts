@@ -28,11 +28,11 @@ export const TXN_SELECT = `SELECT t.id, t.account_id AS accountId, a.name AS acc
   a.institution, t.date, t.amount_cents AS amountCents, t.name, t.merchant_name AS merchantName, t.memo, t.pending,
   t.source, t.category_id AS categoryId, t.category_source AS categorySource, t.kid_id AS kidId,
   t.private_member_id AS privateMemberId, t.income_source_id AS incomeSourceId, t.pay_date AS payDate, t.notes,
-  t.transfer_pair_id AS transferPairId, t.is_ignored AS isIgnored, t.is_split AS isSplit,
+  t.category_reason AS categoryReason, t.transfer_pair_id AS transferPairId, t.is_ignored AS isIgnored, t.is_split AS isSplit,
   t.import_batch_id AS importBatchId, t.updated_at AS updatedAt
   FROM transactions t JOIN accounts a ON a.id = t.account_id`;
 
-interface TxnRow {
+export interface TxnRow {
   id: number;
   accountId: number;
   accountName: string;
@@ -47,6 +47,7 @@ interface TxnRow {
   source: 'plaid' | 'import' | 'manual';
   categoryId: number | null;
   categorySource: Classification['categorySource'];
+  categoryReason: string | null;
   kidId: number | null;
   privateMemberId: number | null;
   incomeSourceId: number | null;
@@ -68,7 +69,7 @@ interface SplitRow {
   notes: string | null;
 }
 
-function toApi(row: TxnRow, splits: SplitRow[] = []) {
+export function toApi(row: TxnRow, splits: SplitRow[] = []) {
   return {
     ...row,
     pending: row.pending === 1,

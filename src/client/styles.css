@@ -301,6 +301,8 @@ a {
 
 .list {
   display: grid;
+  /* Long titles ellipsize instead of widening every row past the screen. */
+  grid-template-columns: minmax(0, 1fr);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);

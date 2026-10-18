@@ -4,8 +4,9 @@ import { money, monthLabel, plural, shortDate, timeAgo, weekdayDate } from '../f
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import { syncAllBanks } from '../sync';
-import type { HomeResponse } from '../types';
+import type { HomeResponse, Transaction } from '../types';
 import { Button, Card, ErrorNote, Loading, Money, PageHeader } from '../ui';
+import { TransactionSheet } from './TransactionSheet';
 
 const CACHE_KEY = 'fin.home';
 
@@ -22,6 +23,7 @@ export function Home() {
   const { me, toast, reload } = useApp();
   const [offline, setOffline] = useState(false);
   const [syncing, setSyncing] = useState<string | null>(null);
+  const [open, setOpen] = useState<Transaction | null>(null);
 
   const home = useLoad(async () => {
     try {
@@ -95,19 +97,7 @@ export function Home() {
           <SetupChecklist />
           <SafeToSpendCard h={h} />
 
-          {h.uncategorizedCount > 0 && (
-            <Card onClick={() => go('activity', { filter: 'uncategorized' })}>
-              <div className="spread">
-                <div>
-                  <strong>
-                    {plural(h.uncategorizedCount, 'transaction')} {h.uncategorizedCount === 1 ? 'needs' : 'need'} a category
-                  </strong>
-                  <p className="muted small">Sorting them teaches the app for next time.</p>
-                </div>
-                <span className="chip chip-warn">Sort</span>
-              </div>
-            </Card>
-          )}
+          <NeedsLookCard h={h} onOpen={setOpen} />
 
           <FunMoneyCard h={h} />
           <BillsCard h={h} />
@@ -126,6 +116,14 @@ export function Home() {
 
           {h.banks.length > 0 && <p className="muted small center">Banks last synced {timeAgo(h.lastSyncedAt)}</p>}
         </>
+      )}
+      {open && (
+        <TransactionSheet
+          txn={open}
+          onClose={() => setOpen(null)}
+          // Undo can arrive after the sheet has closed: just refresh Home.
+          onChanged={() => void home.reload()}
+        />
       )}
     </div>
   );
@@ -179,6 +177,43 @@ function SafeToSpendCard({ h }: { h: HomeResponse }) {
         </Card>
       )}
     </>
+  );
+}
+
+/** Recent spending the app couldn't file. Hidden when there's none. */
+function NeedsLookCard({ h, onOpen }: { h: HomeResponse; onOpen: (t: Transaction) => void }) {
+  const needsLook = h.needsLook;
+  if (!needsLook?.count) return null;
+  const more = needsLook.count - needsLook.items.length;
+  return (
+    <Card>
+      <div className="spread">
+        <h2>Needs a look</h2>
+        <span className="chip chip-warn">{needsLook.count}</span>
+      </div>
+      <p className="muted small">Recent charges the app couldn’t file. Picking a category teaches it for next time.</p>
+      <div className="list">
+        {needsLook.items.map((t) => (
+          <button key={t.id} type="button" className="row row-button" onClick={() => onOpen(t)}>
+            <div className="row-main">
+              <div className="row-title">
+                {t.isPrivate && '🔒 '}
+                {t.merchantName ?? t.name}
+              </div>
+              <div className="row-sub">
+                {shortDate(t.date)} · {t.accountName}
+              </div>
+            </div>
+            <Money cents={t.amountCents} />
+          </button>
+        ))}
+      </div>
+      {more > 0 && (
+        <Button small variant="ghost" onClick={() => go('activity', { filter: 'uncategorized' })}>
+          See all {needsLook.count}
+        </Button>
+      )}
+    </Card>
   );
 }
 

@@ -1,3 +1,5 @@
+import { formatCents } from './money';
+
 /**
  * Categorization rules, carried over from the spreadsheet's "Sync Rules" tab:
  * match text against the raw bank description ("name") or the cleaned merchant,
@@ -162,3 +164,17 @@ export const DEFAULT_IGNORE_PATTERNS = [
   'PURCHASE INTO CORE ACCOUNT',
   'REINVESTMENT',
 ];
+
+/**
+ * A rule's amount range as people read it: "under $25", "$25 and up", "$5–$25". Bounds are
+ * inclusive cents, so the upper bound shows as max + 1 ("under $25" is 0–2499). Null when unbounded.
+ */
+export function ruleRangeLabel(minCents: number | null | undefined, maxCents: number | null | undefined): string | null {
+  const dollars = (cents: number) => formatCents(cents, { whole: cents % 100 === 0 });
+  const min = minCents != null && minCents > 0 ? minCents : null;
+  const below = maxCents != null ? maxCents + 1 : null;
+  if (min === null && below === null) return null;
+  if (min === null) return `under ${dollars(below!)}`;
+  if (below === null) return `${dollars(min)} and up`;
+  return `${dollars(min)}–${dollars(below)}`;
+}

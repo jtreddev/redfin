@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Env } from '../src/worker/env';
+import { ruleRangeLabel } from '../src/shared/rules';
 import { cleanupCategoryMoves } from '../src/worker/services/learn';
 import { api } from './helpers/api';
 import { TestD1 } from './helpers/d1';
@@ -405,5 +406,38 @@ describe('fixing a charge', () => {
     await cleanupCategoryMoves(env.DB);
     expect(db.rows<{ id: number }>('SELECT id FROM category_moves').map((m) => m.id)).toEqual([fresh.move!.id]);
     expect(body.move!.id).not.toBe(fresh.move!.id);
+  });
+});
+
+describe('rules screen and charge reasons', () => {
+  type RuleItem = { id: number; matchText: string; learned: boolean; amountMinCents: number | null; amountMaxCents: number | null };
+  const listRules = async (email = YOU) => (await (await api(env, 'GET', '/rules', undefined, email)).json()) as RuleItem[];
+
+  it('lists a learned rule with its amount range, and a hand-made rule without one', async () => {
+    await fix(charge(641, { categoryId: cat('Habits'), source: 'auto' }), cat('Coffee & Fast Food'));
+    const made = await api(env, 'POST', '/rules', { matchText: 'KROGER', categoryId: cat('Groceries') }, YOU);
+    expect(made.status).toBe(201);
+
+    const list = await listRules();
+    expect(list.find((r) => r.matchText === 'SHELL')).toMatchObject({ learned: true, amountMinCents: 0, amountMaxCents: 2499 });
+    expect(list.find((r) => r.matchText === 'KROGER')).toMatchObject({ learned: false, amountMinCents: null, amountMaxCents: null });
+  });
+
+  it('a charge carries why it landed where it did', async () => {
+    const id = charge(1200, { categoryId: cat('Habits'), source: 'auto', reason: 'Under $25 at a gas station' });
+    const res = await api(env, 'GET', `/transactions/${id}`, undefined, YOU);
+    expect(((await res.json()) as { categoryReason: string | null }).categoryReason).toBe('Under $25 at a gas station');
+    const body = await fix(id, cat('Gas'));
+    expect(body.transaction).toMatchObject({ categorySource: 'user', categoryReason: null });
+  });
+
+  it('describes a rule amount range', () => {
+    expect(ruleRangeLabel(0, 2499)).toBe('under $25');
+    expect(ruleRangeLabel(null, 2499)).toBe('under $25');
+    expect(ruleRangeLabel(2500, null)).toBe('$25 and up');
+    expect(ruleRangeLabel(1050, null)).toBe('$10.50 and up');
+    expect(ruleRangeLabel(500, 2499)).toBe('$5–$25');
+    expect(ruleRangeLabel(null, null)).toBeNull();
+    expect(ruleRangeLabel(0, null)).toBeNull();
   });
 });

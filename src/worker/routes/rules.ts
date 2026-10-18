@@ -24,6 +24,9 @@ function toApi(row: RuleRow & { categoryName: string | null; kidName: string | n
     kidName: row.kidName,
     isPrivate: row.privateMemberId !== null,
     ignore: row.ignoreTxn === 1,
+    learned: row.learned === 1,
+    amountMinCents: row.amountMin,
+    amountMaxCents: row.amountMax,
   };
 }
 
