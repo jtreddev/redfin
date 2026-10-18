@@ -152,3 +152,50 @@ transactions.
 **Browser check** at 390px and 1280px, light and dark: Past and Ahead switch, 3/6/12 switch,
 tooltips and tables, months to watch, set-asides, goals, what-if, and hide amounts (every amount
 blurs).
+
+## Rulings made while building
+
+Each one says what was decided, why, and what it costs if it's wrong.
+
+- **P6b-R3 Totals include the rest of this month.** "Next 6 months" counts the rest of October plus 6 whole
+  months, so it ends where the "by end of April" cash line ends. *Cost:* the "6 months" totals run about
+  half a month longer than 6 months.
+- **P6b-R4 One group per planned cost.** A cost's spending counts in the group where most of its last 12
+  months of spending went, or its first linked category's group if it has none. A cost with no linked
+  categories is left out: its spending can't be told apart, so it stays in usual. *Cost:* a cost whose
+  categories straddle two groups puts all its spending in one, and a cost with no categories doesn't show
+  under Set-asides.
+- **P6b-R5 A planned cost's own confirmed bills are counted once.** Each month's expected spending leaves
+  out bill occurrences in its categories, floored at 0. The usual taken out of its group is its usual less
+  those bills' monthly amounts. The cost's balance still pays the bills. *Cost:* last year's bill at a
+  different amount leaves a small remainder in or out.
+- **P6b-R6 Expected spending counts shared charges only.** A partner's private charges never appear as
+  "like last Dec". Today's balance counts every charge, matching the Planned Costs screen. *Cost:* a
+  private purchase in a planned-cost category isn't expected again.
+- **P6b-R7 This month a year from now uses the set-aside, and the rest of this month is pro-rated.**
+  October is still running, so October next year has no full "last October" to go on. The rest of this
+  month takes its expected spending × the share of days left. *Cost:* a cost that peaks in the current
+  month is underestimated a year out.
+- **P6b-R8 Big items.** Big items are quarterly and yearly bills of $100 or more, and "like last <Mon>"
+  planned-cost spends of $100 or more. Weekly and biweekly bills aren't. *Cost:* a large weekly bill is
+  never called out.
+- **P6b-R9 Saving lines are counted once.** Saving is every savings line in any timing, without its
+  set-aside. Due-day savings lines, and recurring bills standing in for a savings line, are left out of
+  Bills. *Cost:* none known. A recurring transfer into a savings category with no savings line stays in
+  Bills.
+- **P6b-R10 Paydays.** "3 paydays" counts distinct pay dates in the month. The month is flagged extra
+  when any one source has more than its usual count. The rest of this month is never "extra". *Cost:* two
+  sources paid on the same day count as one payday.
+- **P6b-R11 The set-aside fix spreads over whole months.** The months run from next month through the
+  lowest month, at least 1. *Cost:* a shortfall this month suggests the whole amount as one month's extra.
+- **P6b-R12 Months to watch.** The tightest month is always named in a sentence. The list only has months
+  that spend more than comes in or end under the cushion, so "No tight months ahead" can show.
+- **P6b-R13 What-ifs.** A monthly cost starts next month. A one-off lands in the chosen month, which
+  defaults to next month. A pay change applies to every payday. Habits over the year is the plain habits
+  usual × 12, with no what-if.
+- **P6b-R14 Goals.** A goal's month is this month + ⌈remaining ÷ recent average⌉. A reached goal says
+  "reached".
+- **P6b-R15 Twelve months of history** means the first transaction is at least 12 months before this
+  month, the same rule as Planned Costs' "coming up".
+- **P6b-R16 The Past/Ahead switch replaces the URL** instead of adding a history entry, as filters do.
+  With no cash balance, Ahead still runs from $0 with a note.
