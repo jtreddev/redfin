@@ -100,6 +100,21 @@ export const DEFAULT_PLANNED_COSTS: { name: string; categories: [string, string]
   { name: 'Holidays & gifts', categories: [['Fun & Wants', 'Gifts']], fallbackMonthlyCents: 7500 },
 ];
 
+/**
+ * A default cost whose history suggests $0 (enough months, nothing spent) gets its starter amount
+ * instead, so Health doesn't start at $0 just because no dentist bill came this year.
+ * `fallbackCents` is null for costs that aren't one of the defaults.
+ */
+export function withStarter(suggested: Cents | null, fallbackCents: Cents | null): Cents | null {
+  return suggested === 0 && fallbackCents != null ? fallbackCents : suggested;
+}
+
+/** The default whose categories are exactly these (renaming a default keeps its starter amount). */
+export function starterFor(categoryIds: readonly number[], defaults: readonly { categoryIds: readonly number[]; fallbackMonthlyCents: Cents }[]): Cents | null {
+  const key = [...categoryIds].sort((a, b) => a - b).join(',');
+  return defaults.find((d) => d.categoryIds.length && [...d.categoryIds].sort((a, b) => a - b).join(',') === key)?.fallbackMonthlyCents ?? null;
+}
+
 export interface YearlyBill {
   name: string;
   nextDate: ISODate;

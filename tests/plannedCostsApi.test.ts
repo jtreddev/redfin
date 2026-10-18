@@ -130,8 +130,18 @@ describe('planned costs API', () => {
       // $660 over 12 months → $55.
       expect(byName(body, 'Car')).toMatchObject({ monthlyCents: 5500, suggestedMonthlyCents: 5500, spent12Cents: 66000 });
       expect(byName(body, 'Car').balanceCents).toBe(5500 - 77700);
-      expect(byName(body, 'Health')).toMatchObject({ monthlyCents: 0, suggestedMonthlyCents: 0 });
+      // Enough history but nothing spent: the starter amount, not $0.
+      expect(byName(body, 'Health')).toMatchObject({ monthlyCents: 4000, suggestedMonthlyCents: 4000, spent12Cents: 0 });
+      expect(byName(body, 'Holidays & gifts')).toMatchObject({ monthlyCents: 7500, suggestedMonthlyCents: 7500 });
       expect(body.suggestionMonths).toBe(12);
+
+      // Renamed, it's still the default; a cost of your own with nothing spent suggests $0.
+      await api(env, 'PATCH', `/planned-costs/${byName(body, 'Health').id}`, { name: 'Doctors' });
+      const res = await api(env, 'POST', '/planned-costs', { name: 'Coffee', monthlyCents: 1000, categoryIds: [category('Habits', 'Coffee & Fast Food')] });
+      expect(res.status).toBe(201);
+      const again = await list();
+      expect(byName(again, 'Doctors').suggestedMonthlyCents).toBe(4000);
+      expect(byName(again, 'Coffee').suggestedMonthlyCents).toBe(0);
     });
 
     it('skips a default whose category is gone', async () => {

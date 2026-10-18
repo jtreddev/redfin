@@ -11,6 +11,7 @@ import {
   spendIn,
   suggestionMonths,
   suggestMonthly,
+  withStarter,
 } from '../src/shared/plannedCosts';
 
 const CAR = 1;
@@ -114,6 +115,14 @@ describe('planned costs: suggestion', () => {
       ['Health', [['Everyday', 'Medical']], 4000],
       ['Holidays & gifts', [['Fun & Wants', 'Gifts']], 7500],
     ]);
+  });
+
+  it('uses the starter amount when a default would suggest $0', () => {
+    expect(withStarter(0, 4000)).toBe(4000);
+    expect(withStarter(5500, 4000)).toBe(5500);
+    expect(withStarter(null, 4000)).toBeNull();
+    // Not a default: $0 stays $0.
+    expect(withStarter(0, null)).toBe(0);
   });
 });
 

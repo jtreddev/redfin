@@ -9,8 +9,10 @@ import {
   monthlyFor,
   spendByCategoryMonth,
   spendIn,
+  starterFor,
   suggestionMonths,
   suggestMonthly,
+  withStarter,
   type SpendMap,
   type YearlyBill,
 } from '../../shared/plannedCosts';
@@ -28,6 +30,16 @@ const ELIGIBLE_GROUPS: readonly string[] = [GROUPS.bills, GROUPS.everyday, GROUP
 
 const isEligible = (c: CategoryRow) => ELIGIBLE_GROUPS.includes(c.sectionName) && !c.archived && c.funMemberId == null;
 
+/** Each default with the ids of its (live, shared) categories here. */
+function defaultsHere(categories: readonly CategoryRow[]) {
+  return DEFAULT_PLANNED_COSTS.map((d) => ({
+    ...d,
+    categoryIds: d.categories.flatMap(
+      ([section, name]) => categories.find((c) => c.sectionName === section && c.name === name && isEligible(c))?.id ?? [],
+    ),
+  }));
+}
+
 const ONLY_ONCE = `EXISTS (SELECT 1 FROM household WHERE id = 1 AND planned_costs_seeded_at IS NULL)`;
 
 /**
@@ -44,12 +56,13 @@ async function seedDefaults(
 ): Promise<void> {
   const statements: D1PreparedStatement[] = [];
   if (!anyCosts) {
-    DEFAULT_PLANNED_COSTS.forEach((d, i) => {
-      const ids = d.categories.flatMap(
-        ([section, name]) => categories.find((c) => c.sectionName === section && c.name === name && isEligible(c))?.id ?? [],
-      );
+    defaultsHere(categories).forEach((d, i) => {
+      const ids = d.categoryIds;
       if (!ids.length) return;
-      const suggested = months.length ? suggestMonthly(spendIn(spend, ids, months[0]!, months[months.length - 1]!), months.length) : null;
+      const suggested = withStarter(
+        months.length ? suggestMonthly(spendIn(spend, ids, months[0]!, months[months.length - 1]!), months.length) : null,
+        d.fallbackMonthlyCents,
+      );
       const newest = '(SELECT MAX(id) FROM planned_costs)';
       statements.push(
         stmt(db, `INSERT INTO planned_costs (name, start_month, sort) SELECT ?, ?, ? WHERE ${ONLY_ONCE}`, d.name, month, (i + 1) * 10),
@@ -111,6 +124,7 @@ plannedCosts.get('/planned-costs', async (c) => {
   const costByCategory = new Map<number, number>();
   for (const cost of costs) for (const id of cost.categoryIds) costByCategory.set(id, cost.id);
 
+  const defaults = defaultsHere(categories);
   const out = costs.map((cost) => {
     const spent12Cents = spendIn(spend, cost.categoryIds, windowStart, lastFullMonth);
     return {
@@ -122,7 +136,7 @@ plannedCosts.get('/planned-costs', async (c) => {
       monthlyCents: cost.startMonth <= month ? monthlyFor(cost.amounts, month) : 0,
       balanceCents: costBalance(cost, spend, month),
       spent12Cents,
-      suggestedMonthlyCents: suggestMonthly(spent12Cents, months.length),
+      suggestedMonthlyCents: withStarter(suggestMonthly(spent12Cents, months.length), starterFor(cost.categoryIds, defaults)),
       comingUp: comingUp({ categoryIds: cost.categoryIds, bills, spend, today, historyStart }),
     };
   });

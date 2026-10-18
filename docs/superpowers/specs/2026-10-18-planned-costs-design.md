@@ -38,7 +38,10 @@ hands-off; they can edit or delete them):
 Suggested monthly = the average monthly spend in its categories over the last 12 full months
 (months before the first transaction in history don't count; at least 3 months needed),
 rounded up to the next $5. With under 3 months of history: Car $50, Health $40, Holidays &
-gifts $75. Start month = the current month; starting balance = $0.
+gifts $75. The same starter amounts apply when a default's suggestion comes out $0 (enough
+history but nothing spent in its categories), both when it is created and as its suggestion
+later (ruling P3-R3; a default is recognized by its categories, so renaming it keeps this).
+Start month = the current month; starting balance = $0.
 
 Holidays & gifts links Gifts only by default (Shopping is too broad to be "gifts"); the edit
 sheet lets them add Shopping.
