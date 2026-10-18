@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { addMonths, monthOf } from '../../shared/dates';
 import { api, del, errorMessage, patch, post, put } from '../api';
 import { money, plural, shortDate } from '../format';
+import { Icon } from '../icons';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import type { BudgetResponse, BudgetRow, PlannerResponse } from '../types';
@@ -93,19 +94,18 @@ function BudgetView({ month }: { month: string }) {
   return (
     <>
       <Card>
-        <div className="grid-2">
-          <div>
-            <div className="label">Income</div>
+        <h2 className="sr-only">This month’s totals</h2>
+        <div className="figures">
+          <div className="figure">
             <Money cents={b.totals.incomeActualCents} whole className="big" />
-            <div className="muted small">of {money(b.totals.incomeBudgetCents, { whole: true })} expected</div>
+            <div className="label">income, of {money(b.totals.incomeBudgetCents, { whole: true })} expected</div>
           </div>
-          <div>
-            <div className="label">Spending & saving</div>
+          <div className="figure">
             <Money cents={b.totals.outActualCents} whole className="big" />
-            <div className="muted small">of {money(b.totals.outBudgetCents, { whole: true })} planned</div>
+            <div className="label">spending and saving, of {money(b.totals.outBudgetCents, { whole: true })} planned</div>
           </div>
         </div>
-        <p className={left < 0 ? 'tone-bad' : 'muted'} style={{ marginTop: 10 }}>
+        <p className={left < 0 ? 'tone-bad' : 'muted'}>
           {left === 0
             ? 'Every dollar has a job.'
             : left > 0
@@ -139,6 +139,7 @@ function BudgetView({ month }: { month: string }) {
         </div>
       )}
 
+      <div className="columns">
       {sections.map((section) => {
         const rows = visibleRows.filter((r) => r.sectionName === section);
         const planned = rows.reduce((s, r) => s + r.budgetCents, 0);
@@ -188,6 +189,7 @@ function BudgetView({ month }: { month: string }) {
           </div>
         );
       })}
+      </div>
 
       <Toggle checked={showAll} onChange={setShowAll} label="Show every category" hint="To add a budget for something new." />
 
@@ -313,14 +315,13 @@ function WeeksView({ month }: { month: string }) {
           setEditingStart(true);
         }}
       >
-        <div className="spread">
-          <div>
-            <div className="label">Cash on the 1st</div>
+        <span className="spread">
+          <span className="figure">
             <Money cents={p.startingBalance.cents} whole className="big" />
-            <div className="muted small">{sourceLabel}</div>
-          </div>
-          <span className="muted">Edit</span>
-        </div>
+            <span className="label">cash on the 1st, {sourceLabel}</span>
+          </span>
+          <span className="link-like">Edit</span>
+        </span>
       </Card>
 
       {p.forecast.extraPaychecks > 0 && (
@@ -349,15 +350,15 @@ function WeeksView({ month }: { month: string }) {
                   {paydays.length > 0 && ` · payday ${paydays.map((d) => shortDate(d.date)).join(', ')}`}
                 </div>
               </div>
-              <div style={{ textAlign: 'right' }}>
-                <div className="cluster" style={{ justifyContent: 'flex-end' }}>
+              <div className="week-end">
+                <div className="week-end-amount">
                   <StatusDot status={week.status} />
                   <Money cents={week.endBalance} whole className="big" tone={week.status === 'negative' ? 'bad' : week.status === 'low' ? 'warn' : undefined} />
                 </div>
                 <div className="muted small">at week’s end</div>
               </div>
             </div>
-            <div className="grid-2 small" style={{ marginTop: 8 }}>
+            <div className="grid-2 small">
               <div>
                 In <Money cents={week.projectedIncome} whole tone="good" />
               </div>
@@ -366,7 +367,7 @@ function WeeksView({ month }: { month: string }) {
               </div>
             </div>
             {expanded === i && (
-              <div className="stack-sm" style={{ marginTop: 10 }}>
+              <div className="stack-sm">
                 {week.isPast && <p className="muted small">This week is over, so these are actual numbers.</p>}
                 {bills.length === 0 ? (
                   <p className="muted small">No bills due this week.</p>
@@ -483,7 +484,7 @@ function BillsView({ month }: { month: string }) {
                 </div>
               </div>
               <div className="cluster">
-                <Button small variant="primary" onClick={() => void setStatus(bill, 'confirmed')}>
+                <Button small onClick={() => void setStatus(bill, 'confirmed')}>
                   Yes
                 </Button>
                 <Button small variant="ghost" onClick={() => void setStatus(bill, 'dismissed')}>
@@ -508,9 +509,9 @@ function BillsView({ month }: { month: string }) {
               </div>
               <div className="cluster">
                 <Money cents={Math.abs(bill.expectedAmountCents)} whole />
-                <Button small variant="ghost" onClick={() => void setStatus(bill, 'dismissed')}>
-                  ✕
-                </Button>
+                <button type="button" className="icon-btn" aria-label={`Stop tracking ${bill.name}`} onClick={() => void setStatus(bill, 'dismissed')}>
+                  <Icon name="close" />
+                </button>
               </div>
             </div>
           ))}

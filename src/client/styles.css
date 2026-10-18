@@ -392,8 +392,12 @@ a {
 
 @media (min-width: 900px) {
   /* The side menu lists every More screen, so the way back is already on screen. */
-  .back {
+  .btn.back {
     display: none;
+  }
+
+  .segmented {
+    max-width: 560px;
   }
 }
 
@@ -1812,17 +1816,42 @@ table.compare thead th {
 
 /* ---------- Plan and two-column screens on a computer ---------- */
 
-.week-card.current-week {
+.card.current-week {
   box-shadow: inset 3px 0 0 var(--accent);
-  padding-left: 12px;
+  padding-left: 14px;
+}
+
+.week-end {
+  flex: none;
+  text-align: right;
+}
+
+.week-end-amount {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.link-like {
+  color: var(--accent);
+  font-size: var(--t-sm);
+  font-weight: 600;
 }
 
 @media (min-width: 1100px) {
   .app.app-wide .columns {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0 48px;
-    align-items: start;
+    columns: 2;
+    column-gap: 48px;
+  }
+
+  .app.app-wide .columns > * {
+    break-inside: avoid;
+  }
+
+  .app.app-wide .columns > * > .section-title {
+    margin-top: 0;
+    padding-top: 16px;
   }
 }
 
@@ -1890,4 +1919,31 @@ table.compare thead th {
 /* Room under the last row for the add button. */
 .stack:has(> .fab) {
   padding-bottom: 72px;
+}
+
+input[type='file']::file-selector-button {
+  min-height: 44px;
+  margin-right: 12px;
+  padding: 8px 16px;
+  border: 1px solid var(--control);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+summary {
+  min-height: 44px;
+  padding: 10px 0;
+  cursor: pointer;
+}
+
+details {
+  max-width: 72ch;
+}
+
+.card-boxed + .card-boxed {
+  margin-top: 4px;
 }

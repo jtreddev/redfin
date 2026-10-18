@@ -48,7 +48,7 @@ export function Kids() {
                 </div>
               )}
               {report.data.kids.map((kid) => (
-                <Card key={kid.id}>
+                <Card key={kid.id} boxed>
                   <div className="spread">
                     <div className="cluster">
                       <span className="avatar" style={{ background: kid.color }}>

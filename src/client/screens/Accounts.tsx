@@ -187,7 +187,7 @@ export function Accounts() {
             </span>
           </div>
           {s.items.map((item) => (
-            <Card key={item.id}>
+            <Card key={item.id} boxed>
               <div className="spread">
                 <div>
                   <strong>{item.institutionName ?? 'Bank'}</strong>

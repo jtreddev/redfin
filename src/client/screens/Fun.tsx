@@ -40,9 +40,9 @@ export function Fun() {
           {fun.data.balances.map((b) => (
             <Card key={b.memberId}>
               <div className="spread">
-                <div>
-                  <div className="label">{b.isViewer ? 'You' : b.name}</div>
+                <div className="figure">
                   <Money cents={b.balanceCents} whole className="big" tone={b.balanceCents < 0 ? 'bad' : undefined} />
+                  <div className="label">{b.isViewer ? 'yours' : `${b.name}’s`}</div>
                   <div className="muted small">{money(b.allowancePerPaydayCents ?? me.members.find((m) => m.id === b.memberId)?.funAllowanceCents ?? 0, { whole: true })} every payday</div>
                 </div>
                 <Button small onClick={() => setEditing(b)}>
