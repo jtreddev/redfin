@@ -361,6 +361,23 @@ describe('automatic categories on synced charges', () => {
     expect(row('t1').categoryId).toBe(catId('Habits', 'Coffee & Fast Food'));
   });
 
+  it('a modified charge without a bank category keeps the one already stored', async () => {
+    const { itemId } = await seedBank(db, env, 'chime');
+    const fastFood = { primary: 'FOOD_AND_DRINK', detailed: 'FOOD_AND_DRINK_FAST_FOOD' };
+    stubPlaid({ chime: [page([plaidTxn('chime', 't1', '2026-10-01', 9, { name: 'CORNER SPOT', personal_finance_category: fastFood })])] });
+    await syncStep(env, { itemId, trigger: 'manual' });
+    const before = row('t1').categoryId;
+    expect(before).toBe(catId('Habits', 'Coffee & Fast Food'));
+
+    stubPlaid({ chime: [page([], { modified: [plaidTxn('chime', 't1', '2026-10-01', 9.5, { name: 'CORNER SPOT' })] })] });
+    await syncStep(env, { itemId, trigger: 'manual' });
+
+    expect(db.rows('SELECT amount_cents, plaid_category, plaid_category_detailed FROM transactions')).toEqual([
+      { amount_cents: -950, plaid_category: 'FOOD_AND_DRINK', plaid_category_detailed: 'FOOD_AND_DRINK_FAST_FOOD' },
+    ]);
+    expect(row('t1').categoryId).toBe(before);
+  });
+
   describe('automatic details refresh, once per bank', () => {
     const item = (itemId: number) =>
       db.rows<{ cursor: string | null; historyComplete: number; refreshedAt: string | null }>(
@@ -607,6 +624,25 @@ describe('automatic categories on synced charges', () => {
 
       await api(env, 'POST', '/categorize/all', {});
       expect(paired()).toEqual(expected);
+    });
+
+    it('when the bank removes one half, the other is unpaired and sorted again', async () => {
+      await syncPair(shopping);
+      expect(paired()[0]).toEqual({ plaidTxnId: 'out', pairedWith: 'in', kind: 'transfer', source: 'auto' });
+
+      stubPlaid({ capone: [page([], { removed: [{ transaction_id: 'in' }] })] });
+      const card = db.rows<{ id: number }>(`SELECT id FROM plaid_items WHERE item_id = 'item-capone'`)[0]!.id;
+      await syncStep(env, { itemId: card, trigger: 'manual' });
+
+      const survivor = db.rows<{ pair: number | null; kind: string | null; reason: string | null }>(
+        `SELECT t.transfer_pair_id AS pair, c.kind, t.category_reason AS reason
+           FROM transactions t LEFT JOIN categories c ON c.id = t.category_id WHERE t.plaid_txn_id = 'out'`,
+      )[0]!;
+      expect(survivor.pair).toBeNull();
+      expect(survivor.kind).not.toBe('transfer');
+      expect(survivor.reason).toMatch(/^Bank says: /);
+      expect(db.rows(`SELECT transfer_pair_id AS pair FROM transactions WHERE plaid_txn_id = 'in'`)).toEqual([{ pair: null }]);
+      expect(db.rows('SELECT a_id FROM transfer_unlinks')).toEqual([]);
     });
 
     it('recategorize-all keeps paired halves in Transfers, leaves hand-set ones, and unlinking re-sorts them', async () => {
