@@ -92,6 +92,48 @@ const US_STATES = new Set(
   ),
 );
 
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const ALNUM = /[A-Z0-9]/i;
+
+/**
+ * Whole words, case-insensitive: a token isn't glued to a letter or digit on either side, so "BP"
+ * doesn't catch "BPX" or "WEBPAY" while "KROGER" still matches "KROGER#0412". Built-in patterns and
+ * learned rules both match this way.
+ */
+export function wholeWordPattern(tokens: readonly string[]): RegExp {
+  const alternatives = tokens.map((token) => {
+    const before = ALNUM.test(token.charAt(0)) ? '(?<![A-Z0-9])' : '';
+    const after = ALNUM.test(token.charAt(token.length - 1)) ? '(?![A-Z0-9])' : '';
+    return `${before}${escapeRegExp(token)}${after}`;
+  });
+  return new RegExp(`(?:${alternatives.join('|')})`, 'i');
+}
+
+/** Words that say how money moved, not who it went to: a fix on these teaches nothing. */
+export const GENERIC_LEARN_WORDS: ReadonlySet<string> = new Set([
+  'CHECK', 'ATM', 'ZELLE', 'VENMO', 'TRANSFER', 'DEPOSIT', 'PAYMENT', 'WITHDRAWAL', 'POS', 'DEBIT', 'CREDIT',
+]);
+
+/** Shortest key a fix may learn: "QT" or "BP" would catch too much. */
+export const MIN_LEARN_KEY_LENGTH = 3;
+
+/** Whether a fix may learn a rule from this key: long enough, and not just generic words ("CHECK", "ATM WITHDRAWAL"). */
+export function isLearnableKey(key: string): boolean {
+  const text = normalizeText(key);
+  if (text.length < MIN_LEARN_KEY_LENGTH) return false;
+  return !text.split(' ').every((word) => GENERIC_LEARN_WORDS.has(word));
+}
+
+const learnedPatterns = new Map<string, RegExp>();
+function learnedPattern(needle: string): RegExp {
+  let pattern = learnedPatterns.get(needle);
+  if (!pattern) {
+    pattern = wholeWordPattern([needle]);
+    learnedPatterns.set(needle, pattern);
+  }
+  return pattern;
+}
+
 export function ruleMatches(rule: Rule, subject: RuleSubject): boolean {
   if (rule.accountId != null && rule.accountId !== subject.accountId) return false;
   if (subject.amountCents != null) {
@@ -103,13 +145,16 @@ export function ruleMatches(rule: Rule, subject: RuleSubject): boolean {
   if (!needle) return false;
   const name = normalizeText(subject.name);
   const merchant = normalizeText(subject.merchantName);
+  // Learned rules match whole words; rules people typed match anywhere, as before.
+  const pattern = rule.learned ? learnedPattern(needle) : null;
+  const found = (text: string) => (pattern ? pattern.test(text) : text.includes(needle));
   switch (rule.matchField) {
     case 'name':
-      return name.includes(needle);
+      return found(name);
     case 'merchant':
-      return merchant.includes(needle);
+      return found(merchant);
     default:
-      return name.includes(needle) || merchant.includes(needle);
+      return found(name) || found(merchant);
   }
 }
 

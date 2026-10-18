@@ -409,6 +409,61 @@ describe('fixing a charge', () => {
   });
 });
 
+describe('what a fix learns', () => {
+  const byName = (name: string, cents: number, categoryId: number | null = null) => {
+    db.exec(
+      `INSERT INTO transactions (account_id, date, amount_cents, name, normalized_merchant, source, category_id, category_source)
+       VALUES (1, '2026-10-01', ?, ?, NULL, 'plaid', ?, ?)`,
+      -cents,
+      name,
+      categoryId,
+      categoryId === null ? null : 'auto',
+    );
+    return db.rows<{ id: number }>('SELECT MAX(id) AS id FROM transactions')[0]!.id;
+  };
+
+  it('a fix on a check saves the fix but learns nothing and re-files nothing', async () => {
+    const shopping = cat('Shopping');
+    const tapped = byName('CHECK 1023', 15000, shopping);
+    const other = byName('CHECK 1024', 8000, shopping);
+    const body = await fix(tapped, cat('Childcare'));
+    expect(body.move).toBeNull();
+    expect(row(tapped)).toMatchObject({ category_id: cat('Childcare'), category_source: 'user' });
+    expect(row(other)).toMatchObject({ category_id: shopping, category_source: 'auto' });
+    expect(learnedRules()).toEqual([]);
+  });
+
+  it('generic keys and keys under 3 letters learn nothing', async () => {
+    for (const name of ['ZELLE', 'ATM WITHDRAWAL', 'DEBIT', 'QT']) {
+      const body = await fix(byName(name, 1500), cat('Gifts'));
+      expect(body.move, name).toBeNull();
+    }
+    const short = await fix(charge(900, { merchant: 'QT' }), cat('Habits'));
+    expect(short.move).toBeNull();
+    expect(learnedRules()).toEqual([]);
+  });
+
+  it('learns a name with punctuation right after the merchant', async () => {
+    const groceries = cat('Groceries');
+    const [a, b] = [byName('KROGER#0412', 5000), byName('KROGER#0413', 6000)];
+    const body = await fix(a, groceries);
+    expect(body.move).toMatchObject({ moved: 1, merchant: 'KROGER' });
+    expect(row(b).category_id).toBe(groceries);
+  });
+
+  it('re-files whole-word matches only', async () => {
+    const gas = cat('Gas');
+    const shellfish = charge(4000, { merchant: 'Shellfish Shack' });
+    const shell = charge(4000);
+    const body = await fix(charge(4000), gas);
+    expect(body.move?.moved).toBe(1);
+    expect(row(shell).category_id).toBe(gas);
+    expect(row(shellfish).category_id).not.toBe(gas);
+    await api(env, 'POST', '/categorize/all', {});
+    expect(row(shellfish).category_id).not.toBe(gas);
+  });
+});
+
 describe('whose card it is', () => {
   const partnerFunId = () => db.rows<{ id: number }>('SELECT id FROM categories WHERE fun_member_id = ?', partner)[0]!.id;
 

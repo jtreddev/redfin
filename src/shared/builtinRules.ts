@@ -1,5 +1,6 @@
 import type { CategoryRef } from './autoCategory';
 import { SPECIAL } from './categorySet';
+import { wholeWordPattern } from './rules';
 
 /**
  * Built-in patterns, matched against the normalized merchant key (see normalizeMerchant) as whole
@@ -53,12 +54,9 @@ const KNOWN_NAMES: readonly { ref: CategoryRef; label: string; tokens: readonly 
   { ref: ['Bills', 'Internet'], label: 'internet', tokens: ['XFINITY', 'COMCAST', 'SPECTRUM'] },
 ];
 
-const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-/** Whole-word, case-insensitive: the token starts the key or follows a space, and ends it or precedes one. */
-const pattern = (tokens: readonly string[]) => new RegExp(`(?:^| )(?:${tokens.map(escape).join('|')})(?: |$)`, 'i');
 
-const GAS_PATTERN = pattern(GAS_STATIONS);
-const KNOWN_PATTERNS = KNOWN_NAMES.map((k) => ({ ...k, pattern: pattern(k.tokens) }));
+const GAS_PATTERN = wholeWordPattern(GAS_STATIONS);
+const KNOWN_PATTERNS = KNOWN_NAMES.map((k) => ({ ...k, pattern: wholeWordPattern(k.tokens) }));
 
 const dollars = (cents: number) => (cents % 100 === 0 ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`);
 

@@ -222,6 +222,15 @@ describe('ruleMatches amount range', () => {
     expect(ruleMatches({ ...base, amountMax: 6000 }, { ...subject, amountCents: 6000 })).toBe(true);
     expect(ruleMatches({ ...base, amountMax: 6000 }, { ...subject, amountCents: -6001 })).toBe(false);
   });
+  it('learned rules match whole words; rules people typed still match anywhere', () => {
+    const learned = (text: string) => rule(text, 1, { learned: true });
+    expect(ruleMatches(learned('BP'), { name: 'WEBPAY BPX', accountId: 1 })).toBe(false);
+    expect(ruleMatches(learned('SHELL'), { name: 'SHELLFISH SHACK', accountId: 1 })).toBe(false);
+    expect(ruleMatches(learned('SHELL'), { name: 'SHELL OIL 57444', accountId: 1 })).toBe(true);
+    expect(ruleMatches(learned('KROGER'), { name: 'KROGER#0412', accountId: 1 })).toBe(true);
+    expect(ruleMatches(learned('MAPLE STREET COFFEE'), { name: 'SQ *MAPLE STREET COFFEE', accountId: 1 })).toBe(true);
+    expect(ruleMatches(rule('SHELL', 1), { name: 'SHELLFISH SHACK', accountId: 1 })).toBe(true);
+  });
   it('matches on text alone when the subject has no amount', () => {
     expect(ruleMatches({ ...base, amountMin: 2500, amountMax: 6000 }, subject)).toBe(true);
   });

@@ -1,7 +1,7 @@
 import { LEARNED_REASON } from '../../shared/autoCategory';
 import { isGasStation } from '../../shared/builtinRules';
 import { PRIVACY_SQL } from '../../shared/privacy';
-import { normalizeMerchant, normalizeText, ruleAppliesToAccount, ruleMatches, type MatchField, type Rule } from '../../shared/rules';
+import { isLearnableKey, normalizeMerchant, normalizeText, ruleAppliesToAccount, ruleMatches, type MatchField, type Rule } from '../../shared/rules';
 import type { Viewer } from '../env';
 import { all, batchAll, chunk, first, nowIso, placeholders, run, stmt } from '../lib/db';
 import { HttpError, notFound } from '../lib/http';
@@ -76,11 +76,13 @@ function ruleFor(ctx: IngestContext, txn: StoredTxn): Rule | null {
   const [amountMin, amountMax] = !gas ? [null, null] : cents < ctx.cutoffCents ? [0, ctx.cutoffCents - 1] : [ctx.cutoffCents, null];
   const subject = subjectOf(txn);
   const rule: Rule = { id: 0, position: 0, matchField, matchText: merchant, amountMin, amountMax, learned: true, action: {} };
+  // A check number or "ATM" says nothing about where money went: those fixes are saved but teach nothing.
+  if (!isLearnableKey(merchant)) return null;
   if (ruleMatches(rule, subject)) return rule;
   // Keys drop punctuation ("CHICK-FIL-A" → "CHICK FIL A"), which the raw text may not contain.
   if (txn.merchantName?.trim()) {
     const whole = { ...rule, matchText: normalizeText(txn.merchantName) };
-    if (ruleMatches(whole, subject)) return whole;
+    if (isLearnableKey(whole.matchText) && ruleMatches(whole, subject)) return whole;
   }
   return null;
 }
@@ -133,6 +135,7 @@ export async function learnFromFix(
         AND t.category_id IS NOT ? AND ${PRIVACY_SQL}
         ${sharedOnly}
         AND (? IS NULL OR ABS(t.amount_cents) >= ?) AND (? IS NULL OR ABS(t.amount_cents) <= ?)
+        -- A cheap prefilter: ruleMatches() below keeps whole-word matches only.
         AND UPPER(${column}) LIKE ? ESCAPE '\\'
       ORDER BY t.date DESC, t.id DESC LIMIT ${REFILE_LIMIT}`,
     txn.id,
