@@ -132,11 +132,18 @@ function CostSheet({
     setError(null);
     try {
       await action();
-      toast(done);
-      await onSaved();
     } catch (e) {
       setError(errorMessage(e));
       setBusy(false);
+      return;
+    }
+    // The write is done: never re-enable Save here (a second tap on Add would add it twice).
+    toast(done);
+    try {
+      await onSaved();
+    } catch (e) {
+      onClose();
+      toast(`Saved, but the list didn’t refresh: ${errorMessage(e)}`, 'error');
     }
   }
 
@@ -172,7 +179,7 @@ function CostSheet({
         {suggestion ? (
           <div className="setaside-suggest">
             <span className="small">{suggestion.text}</span>
-            {suggestion.cents !== monthly ? (
+            {suggestion.cents === null ? null : suggestion.cents !== monthly ? (
               <Button variant="ghost" onClick={() => setMonthly(suggestion.cents)}>
                 Use suggestion
               </Button>

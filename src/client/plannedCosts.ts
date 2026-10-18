@@ -67,18 +67,21 @@ const sameIds = (a: readonly number[], b: readonly number[]) => a.length === b.l
 /**
  * The suggestion to show in the sheet. While the categories are the cost's own, the server's number
  * is used (it applies the defaults' starter amounts); otherwise it's worked out from the picks.
+ * `cents` is null when there's nothing to offer, only the text.
  */
 export function suggestionFor(input: {
   cost: PlannedCost | null;
   categoryIds: readonly number[];
   categories: readonly { id: number; spent12Cents: number }[];
   months: number;
-}): { cents: number; text: string } | null {
+}): { cents: number | null; text: string } | null {
   const { cost, categoryIds, categories, months } = input;
   const unchanged = cost !== null && sameIds(cost.categoryIds, categoryIds);
   if (!unchanged && categoryIds.length === 0) return null;
   const cents = unchanged ? cost.suggestedMonthlyCents : suggestFor(categoryIds, categories, months);
   if (cents === null) return null;
+  // Nothing to suggest from: no "Use suggestion" for $0.
+  if (cents === 0) return { cents: null, text: 'No spending in these categories yet' };
   const starter = unchanged && cost.spent12Cents === 0 && cents > 0;
   return {
     cents,

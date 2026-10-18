@@ -83,6 +83,19 @@ describe('the suggested monthly amount', () => {
     expect(suggestionFor({ cost: null, categoryIds: [3, 7], categories, months: 12 })?.text).toBe('Suggested: $50 from the last 12 months');
   });
 
+  it('offers no $0 suggestion when the picked categories had no spending', () => {
+    expect(suggestionFor({ cost: null, categoryIds: [9], categories, months: 12 })).toEqual({ cents: null, text: 'No spending in these categories yet' });
+    expect(suggestionFor({ cost: cost({ categoryIds: [3] }), categoryIds: [9], categories, months: 12 })).toEqual({
+      cents: null,
+      text: 'No spending in these categories yet',
+    });
+    // A cost the server suggests $0 for (not a default) reads the same.
+    expect(suggestionFor({ cost: cost({ categoryIds: [9], spent12Cents: 0, suggestedMonthlyCents: 0 }), categoryIds: [9], categories, months: 12 })).toEqual({
+      cents: null,
+      text: 'No spending in these categories yet',
+    });
+  });
+
   it('offers nothing without enough history or without categories', () => {
     expect(suggestionFor({ cost: null, categoryIds: [3], categories, months: 2 })).toBeNull();
     expect(suggestionFor({ cost: null, categoryIds: [], categories, months: 12 })).toBeNull();
