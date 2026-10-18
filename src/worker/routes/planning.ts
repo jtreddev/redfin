@@ -359,14 +359,20 @@ planning.patch('/recurring/:id', async (c) => {
   const bill = await first(db, 'SELECT id FROM recurring_bills WHERE id = ? AND (private_member_id IS NULL OR private_member_id = ?)', id, c.get('viewer').memberId);
   if (!bill) throw notFound();
   const body = await readBody(c);
+  const expected = optInt(body.expectedAmountCents, 'expectedAmountCents');
   const updates = new Updates()
     .set('status', oneOf(body.status, 'status', ['suggested', 'confirmed', 'dismissed'] as const))
     .set('name', optStr(body.name, 'name', 80) ?? undefined)
     .set('category_id', optInt(body.categoryId, 'categoryId', { min: 1 }))
-    .set('expected_amount_cents', optInt(body.expectedAmountCents, 'expectedAmountCents'))
+    .set('expected_amount_cents', expected)
     .set('next_date', optDate(body.nextDate, 'nextDate'))
     .set('cadence', oneOf(body.cadence, 'cadence', ['weekly', 'biweekly', 'monthly', 'quarterly', 'yearly'] as const));
   if (updates.empty) throw badRequest('Nothing to update');
+  // A new usual amount starts "bill went up" afresh: a dismissed increase is measured against the old one.
+  if (expected != null) {
+    updates.sets.push('increase_seen_cents = CASE WHEN expected_amount_cents = ? THEN increase_seen_cents END');
+    updates.params.push(expected);
+  }
   await run(db, `UPDATE recurring_bills SET ${updates.sets.join(', ')}, updated_at = ? WHERE id = ?`, ...updates.params, nowIso(), id);
   return c.json({ ok: true });
 });

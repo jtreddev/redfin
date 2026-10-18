@@ -48,10 +48,12 @@ forecast.get('/forecast', async (c) => {
     ),
     buildPlanner(db, monthOf(today), household, today),
     loadTrendsInput(db, monthsBack(today, USUAL_MONTHS), today),
-    all<{ categoryId: number; cadence: Cadence; amountCents: number }>(
+    all<{ categoryId: number; cadence: Cadence; amountCents: number; privateMemberId: number | null }>(
       db,
-      `SELECT category_id AS categoryId, cadence, expected_amount_cents AS amountCents FROM recurring_bills
-        WHERE status = 'confirmed' AND category_id IS NOT NULL AND (private_member_id IS NULL OR private_member_id = ?)`,
+      `SELECT category_id AS categoryId, cadence, expected_amount_cents AS amountCents, private_member_id AS privateMemberId
+         FROM recurring_bills
+        WHERE status = 'confirmed' AND category_id IS NOT NULL AND next_date IS NOT NULL
+          AND (private_member_id IS NULL OR private_member_id = ?)`,
       viewer.memberId,
     ),
   ]);
@@ -71,25 +73,28 @@ forecast.get('/forecast', async (c) => {
   // month's due-day lines (P6-R3b), to the last day.
   const bills = await upcomingBills(db, planner, today, viewer.memberId, { until: lastDate, repeat: true, laterMonths: true });
   // Planned-cost set-asides stay in the account, so they aren't taken off (P6-R5): a due-day savings line
-  // counts only its hand part. Home says "before set-asides".
+  // counts only its hand part. Later months' lines already come without them. Home says "before set-asides".
   const setAside = new Map(planner.data.rows.filter((r) => r.plannedCostsCents > 0).map((r) => [r.categoryId, r.plannedCostsCents]));
+  const ownSetAside = (b: (typeof bills)[number]) =>
+    b.source === 'budget' && b.categoryId !== null && monthOf(b.date) === planner.month ? (setAside.get(b.categoryId) ?? 0) : 0;
   const events: ProjectionEvent[] = bills
     .map((b, i): ProjectionEvent => ({
       id: `${b.source}-${i}`,
       date: b.date,
       name: b.name,
-      amountCents: b.source === 'budget' && b.categoryId !== null ? Math.max(0, b.amountCents - (setAside.get(b.categoryId) ?? 0)) : b.amountCents,
+      amountCents: Math.max(0, b.amountCents - ownSetAside(b)),
       kind: b.source === 'budget' ? 'budget' : 'bill',
     }))
     .filter((e) => e.amountCents > 0);
 
   // Bills and Saving are left out: their money is in the events (P6-R4). So are confirmed bills filed under
-  // Everyday, Habits or Fun: they come out as events too.
+  // Everyday, Habits or Fun: they come out as events too. The viewer's private bills come out of fun, where
+  // Trends counts private charges.
   const groupOf = new Map(GROUP_ORDER.map((g) => [g.section, g.key]));
   const sectionOf = new Map(trendsInput.categories.map((c) => [c.id, c.section]));
   const usual = usualLessBills(
     buildTrends(trendsInput).usual,
-    confirmed.map((b) => ({ ...b, group: groupOf.get(sectionOf.get(b.categoryId) ?? '') ?? null })),
+    confirmed.map((b) => ({ ...b, group: b.privateMemberId !== null ? 'fun' : (groupOf.get(sectionOf.get(b.categoryId) ?? '') ?? null) })),
   );
   const perDay = (monthly: number) => Math.max(0, Math.round(monthly / DAYS_PER_MONTH));
   const input: ProjectionInput = {

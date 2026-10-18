@@ -146,6 +146,19 @@ describe('bill went up', () => {
     expect((await act(id, 'shrug')).status).toBe(400);
   });
 
+  it('a new usual typed in by hand clears a dismissed increase', async () => {
+    const id = bill('Internet Co', 6000);
+    charge(30, 7500, 'Internet Co');
+    expect((await act(id, 'dismiss')).status).toBe(200);
+    // Saving the same amount (with a new name) keeps it dismissed.
+    expect((await api(env, 'PATCH', `/recurring/${id}`, { name: 'Internet', expectedAmountCents: -6000 })).status).toBe(200);
+    expect(await increases()).toEqual([]);
+    // A promotion: the usual goes down by hand. The price coming back is news again.
+    expect((await api(env, 'PATCH', `/recurring/${id}`, { expectedAmountCents: -5000 })).status).toBe(200);
+    charge(2, 7500, 'Internet Co');
+    expect((await increases()).map((i) => [i.usualCents, i.latestCents])).toEqual([[5000, 7500]]);
+  });
+
   it('GET /recurring shows the increase on the bill', async () => {
     const id = bill('Internet Co', 6000);
     bill('Calm Bill', 3000);

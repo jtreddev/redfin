@@ -152,11 +152,105 @@ describe('GET /api/forecast', () => {
       expect(rentEvents(body).map((e) => [e.name, e.date, e.kind])).toEqual([['Landlord', '2026-11-01', 'bill']]);
     });
 
+    it('counts rent once when the line is on the parent and the bill on a sub-category', async () => {
+      const child = ((await (await api(env, 'POST', '/categories', { parentId: rent, name: 'Rent' })).json()) as { id: number }).id;
+      await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: rent, budgetCents: 150000, timing: 'due_day', dueDay: 1 });
+      db.exec(
+        `INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, next_date, status, category_id)
+         VALUES ('landlord', 'Landlord', 'monthly', -150000, '2026-11-01', 'confirmed', ?)`,
+        child,
+      );
+      const body = await forecast();
+      expect(rentEvents(body).map((e) => [e.name, e.date, e.kind])).toEqual([['Landlord', '2026-11-01', 'bill']]);
+    });
+
+    it('leaves out next month’s own set-asides, even when this month has none', async () => {
+      const savings = category('Saving', "AND c.name = 'Savings & Planned Costs'");
+      expect((await api(env, 'POST', '/planned-costs', { name: 'Car repairs', monthlyCents: 10000 })).status).toBe(201);
+      // It starts next month (the API only takes past starts).
+      db.exec("UPDATE planned_costs SET start_month = '2026-11'");
+      db.exec("UPDATE planned_cost_amounts SET month = '2026-11'");
+      await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: savings, budgetCents: 30000, timing: 'due_day', dueDay: 2 });
+      await api(env, 'PUT', '/budget/lines', { month: '2026-11', categoryId: savings, budgetCents: 30000, timing: 'due_day', dueDay: 2 });
+      const body = await forecast();
+      expect(body.projection.events.filter((e) => e.name === 'Savings & Planned Costs').map((e) => [e.date, e.amountCents])).toEqual([
+        ['2026-10-19', 30000], // October's, not paid yet
+        ['2026-11-02', 30000],
+      ]);
+    });
+
+    it('takes a carried savings line’s set-aside off once', async () => {
+      const savings = category('Saving', "AND c.name = 'Savings & Planned Costs'");
+      expect((await api(env, 'POST', '/planned-costs', { name: 'Car repairs', monthlyCents: 10000 })).status).toBe(201);
+      await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: savings, budgetCents: 30000, timing: 'due_day', dueDay: 2 });
+      const body = await forecast();
+      expect(body.projection.events.filter((e) => e.name === 'Savings & Planned Costs').map((e) => [e.date, e.amountCents])).toEqual([
+        ['2026-10-19', 30000],
+        ['2026-11-02', 30000],
+      ]);
+    });
+
+    it('doesn’t carry a fun money line into next month', async () => {
+      const funMoney = db.rows<{ id: number }>('SELECT id FROM categories WHERE fun_member_id = ?', you)[0]!.id;
+      expect((await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: funMoney, budgetCents: 20000, timing: 'due_day', dueDay: 1 })).status).toBe(200);
+      const body = await forecast();
+      expect(body.projection.events.filter((e) => e.date >= '2026-11-01').map((e) => e.amountCents)).not.toContain(20000);
+    });
+
     it('uses next month’s budget once it exists', async () => {
       await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: rent, budgetCents: 150000, timing: 'due_day', dueDay: 1 });
       await api(env, 'PUT', '/budget/lines', { month: '2026-11', categoryId: rent, budgetCents: 160000, timing: 'due_day', dueDay: 2 });
       const body = await forecast();
       expect(rentEvents(body).map((e) => [e.date, e.amountCents])).toEqual([['2026-11-02', 160000]]);
+    });
+  });
+
+  it('counts a bill once this month when its sub-category’s parent has an unpaid due-day line', async () => {
+    seedHousehold();
+    const bills = category('Bills');
+    const child = ((await (await api(env, 'POST', '/categories', { parentId: bills, name: 'Rent' })).json()) as { id: number }).id;
+    await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: bills, budgetCents: 150000, timing: 'due_day', dueDay: 21 });
+    db.exec(
+      `INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, next_date, status, category_id)
+       VALUES ('landlord', 'Landlord', 'monthly', -150000, '2026-10-21', 'confirmed', ?)`,
+      child,
+    );
+    const big = (await forecast()).projection.events.filter((e) => e.amountCents >= 150000);
+    expect(big.map((e) => [e.date, e.kind])).toEqual([['2026-10-21', 'budget']]);
+  });
+
+  describe('a recurring bill charged a few days ago with a stale next date', () => {
+    beforeEach(() => {
+      seedHousehold();
+      // Detection last set it to the 16th; the charge came in then, and nothing has refreshed it since.
+      bill('Phone', '2026-10-16', 5000);
+    });
+    const phone = (body: ForecastBody) => body.projection.events.filter((e) => e.name === 'Phone').map((e) => e.date);
+    const homeBills = async () =>
+      ((await (await api(env, 'GET', '/home', undefined, YOU)).json()) as { bills: { name: string; overdue: boolean }[] }).bills.filter(
+        (b) => b.name === 'Phone',
+      );
+
+    it('isn’t taken off again', async () => {
+      charge('2026-10-15', -5200, { normalized_merchant: 'phone' });
+      expect(phone(await forecast())).toEqual([]);
+      expect(await homeBills()).toEqual([]);
+    });
+
+    it('still lands tomorrow when no charge came in', async () => {
+      expect(phone(await forecast())).toEqual(['2026-10-19']);
+      expect(await homeBills()).toEqual([expect.objectContaining({ overdue: true })]);
+    });
+
+    it('counts a bill due today as paid once its charge is in', async () => {
+      bill('Power', '2026-10-18', 9000);
+      charge('2026-10-18', -9100, { normalized_merchant: 'power' });
+      expect((await forecast()).projection.events.map((e) => e.name)).not.toContain('Power');
+    });
+
+    it('ignores a charge from a partner’s private spending', async () => {
+      charge('2026-10-15', -5200, { normalized_merchant: 'phone', private_member_id: partner });
+      expect(phone(await forecast())).toEqual(['2026-10-19']);
     });
   });
 
@@ -170,6 +264,33 @@ describe('GET /api/forecast', () => {
     );
     // Fun was 9,120 a month; less the 1,520 bill, 7,600 / 30.4 = 250 a day.
     expect((await forecast()).input.dailySpend).toEqual({ everyday: 1000, habits: 500, fun: 250 });
+  });
+
+  it('leaves usual spending alone for a confirmed bill with no next date (it never comes out as an event)', async () => {
+    seedHousehold();
+    const fun = category('Fun & Wants', 'AND c.fun_member_id IS NULL');
+    db.exec(
+      `INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, next_date, status, category_id)
+       VALUES ('streamco', 'Video', 'monthly', -1520, NULL, 'confirmed', ?)`,
+      fun,
+    );
+    expect((await forecast()).input.dailySpend).toEqual({ everyday: 1000, habits: 500, fun: 300 });
+  });
+
+  it('takes the viewer’s private bill out of fun, where its charges count', async () => {
+    db.exec("INSERT INTO income_sources (name, net_pay_cents, frequency, anchor_date) VALUES ('Paycheck', 250000, 'monthly', '2026-09-23')");
+    const everyday = category('Everyday');
+    for (const month of ['2026-07', '2026-08', '2026-09']) {
+      charge(`${month}-10`, -30400, { category_id: everyday });
+      charge(`${month}-14`, -3040, { category_id: everyday, private_member_id: you });
+    }
+    db.exec(
+      `INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, next_date, status, category_id, private_member_id)
+       VALUES ('gymco', 'Gym', 'monthly', -3040, '2026-10-30', 'confirmed', ?, ?)`,
+      everyday,
+      you,
+    );
+    expect((await forecast()).input.dailySpend).toEqual({ everyday: 1000, habits: 0, fun: 0 });
   });
 
   it('falls back to the end of the month with no payday, and starts from zero with no history', async () => {

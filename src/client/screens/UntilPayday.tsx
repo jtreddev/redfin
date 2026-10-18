@@ -117,7 +117,7 @@ export function UntilPayday({ refresh }: { refresh: unknown }) {
         <BalanceLine points={p.points} events={p.events} cushionCents={cushion} today={f.today} label="Cash until payday" />
       )}
       <p className="muted small chart-foot">
-        Today’s cash in your checking and savings, less bills and your usual spending (
+        Today’s cash in your everyday accounts, less bills and your usual spending (
         <Money cents={dailyTotal(input.dailySpend)} whole /> a day).
       </p>
 

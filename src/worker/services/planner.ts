@@ -11,10 +11,11 @@ import {
   type ISODate,
   type MonthKey,
 } from '../../shared/dates';
+import { latestCharges, type IncreaseCharge } from '../../shared/billIncrease';
 import { buildForecast, type Forecast, type ForecastLine } from '../../shared/forecast';
 import type { Cents } from '../../shared/money';
 import { payDatesBetween, payDatesInMonth } from '../../shared/paySchedule';
-import { funMoneyBalance } from '../../shared/privacy';
+import { funMoneyBalance, PRIVACY_SQL } from '../../shared/privacy';
 import { nextOccurrence, type Cadence } from '../../shared/recurring';
 import { safeToSpend, type SafeToSpend } from '../../shared/safeToSpend';
 import { monthWeeks } from '../../shared/weeks';
@@ -384,6 +385,11 @@ export async function funMoneyBalances(
   });
 }
 
+/** A recurring bill's date is left as it is for this many days (it may be late), then rolled forward. */
+const STALE_GRACE_DAYS = 3;
+/** A charge this many days before a bill's date (or any time after) pays it. */
+const PAID_EARLY_DAYS = 5;
+
 export interface UpcomingBill {
   name: string;
   date: ISODate;
@@ -396,14 +402,23 @@ export interface UpcomingBill {
 /**
  * A month's due-day spending lines at their full budget, as bills on their due day: the same lines the
  * forecast counts (no income, paychecks or fun money; a sub-category whose parent has a line is in the parent).
+ * Planned-cost set-asides stay in the account (P6-R5), so a savings line counts only its hand part.
  */
 function dueDayLines(rows: readonly BudgetRow[], month: MonthKey): UpcomingBill[] {
   const byId = new Map(rows.map((r) => [r.categoryId, r]));
   const hasLine = (r: BudgetRow | undefined) => r !== undefined && (r.lineId !== null || r.computed === 'planned_costs');
   return rows
-    .filter((r) => r.timing === 'due_day' && r.dueDay != null && r.kind !== 'income' && r.kind !== 'transfer' && r.budgetCents > 0)
+    .filter((r) => r.timing === 'due_day' && r.dueDay != null && r.kind !== 'income' && r.kind !== 'transfer' && r.funMemberId == null)
+    .filter((r) => r.budgetCents - r.plannedCostsCents > 0)
     .filter((r) => hasLine(r) && !(r.parentId !== null && hasLine(byId.get(r.parentId))))
-    .map((r) => ({ name: r.name, date: clampDay(month, r.dueDay!), amountCents: r.budgetCents, overdue: false, source: 'budget', categoryId: r.categoryId }));
+    .map((r) => ({
+      name: r.name,
+      date: clampDay(month, r.dueDay!),
+      amountCents: r.budgetCents - r.plannedCostsCents,
+      overdue: false,
+      source: 'budget',
+      categoryId: r.categoryId,
+    }));
 }
 
 /**
@@ -411,9 +426,11 @@ function dueDayLines(rows: readonly BudgetRow[], month: MonthKey): UpcomingBill[
  * number of days from today, or `until` a date; with `repeat`, a recurring bill shows every time it comes up
  * before then (weekly ones more than once), not only next time.
  *
+ * A recurring bill already charged (a matching charge since 5 days before its date) shows its next date.
+ *
  * With `until` in a later month, that month's due-day lines come too (P6-R3b): from its budget, or, when it
  * has none yet, this month's lines carried forward at their full amount. A confirmed bill in the same
- * category that month takes the line's place.
+ * category (or a sub-category of it) that month takes the line's place.
  */
 export async function upcomingBills(
   db: D1Database,
@@ -432,23 +449,51 @@ export async function upcomingBills(
     bills.push({ name: row.name, date, amountCents: remaining, overdue: date < today, source: 'budget', categoryId: row.categoryId });
   }
 
-  const recurring = await all<{ name: string; nextDate: ISODate | null; cadence: Cadence; amount: number; categoryId: number | null }>(
-    db,
-    `SELECT name, next_date AS nextDate, cadence, expected_amount_cents AS amount, category_id AS categoryId
-       FROM recurring_bills
-      WHERE status = 'confirmed' AND next_date IS NOT NULL AND (private_member_id IS NULL OR private_member_id = ?)`,
-    viewerId,
-  );
+  // Every visible confirmed bill takes part in matching (as for "bill went up"), so a charge goes to the same
+  // bill; only those with a next date come up. Charges since today − 8 are enough: after the roll below, a
+  // past occurrence is at most 3 days old, and a charge up to 5 days before it counts.
+  const [recurring, charges] = await Promise.all([
+    all<{ id: number; merchant: string; name: string; nextDate: ISODate | null; cadence: Cadence; expectedAmountCents: number; categoryId: number | null; privateMemberId: number | null }>(
+      db,
+      `SELECT id, merchant, name, next_date AS nextDate, cadence, expected_amount_cents AS expectedAmountCents, category_id AS categoryId,
+              private_member_id AS privateMemberId
+         FROM recurring_bills
+        WHERE status = 'confirmed' AND (private_member_id IS NULL OR private_member_id = ?)`,
+      viewerId,
+    ),
+    all<IncreaseCharge>(
+      db,
+      `SELECT t.id, t.date, COALESCE(t.normalized_merchant, t.name) AS merchant, t.amount_cents AS amountCents,
+              t.private_member_id AS privateMemberId
+         FROM transactions t
+        WHERE t.amount_cents < 0 AND t.deleted_at IS NULL AND t.pending = 0 AND t.date >= ? AND ${PRIVACY_SQL}`,
+      addDays(today, -(STALE_GRACE_DAYS + PAID_EARLY_DAYS)),
+      viewerId,
+    ),
+  ]);
+  const lastCharge = latestCharges(recurring, charges);
   const until = typeof horizon === 'number' ? addDays(today, horizon) : horizon.until;
   const repeat = typeof horizon !== 'number' && horizon.repeat === true;
+  // A sub-category's bill is covered by its parent's line too (the line counts the child's money).
+  const parentOf = new Map(planner.data.rows.map((r) => [r.categoryId, r.parentId]));
+  const lineCategories = (categoryId: number | null): number[] => {
+    const parentId = categoryId == null ? null : (parentOf.get(categoryId) ?? null);
+    return categoryId == null ? [] : parentId == null ? [categoryId] : [categoryId, parentId];
+  };
   const budgetCategories = new Set(bills.map((b) => b.categoryId));
   for (const r of recurring) {
-    let date = r.nextDate as ISODate;
+    if (r.nextDate == null) continue;
+    let date = r.nextDate;
     // Roll stale dates forward (the charge probably happened; detection refreshes it later).
-    for (let guard = 0; date < addDays(today, -3) && guard < 60; guard++) date = nextOccurrence(date, r.cadence);
+    for (let guard = 0; date < addDays(today, -STALE_GRACE_DAYS) && guard < 60; guard++) date = nextOccurrence(date, r.cadence);
+    // A date today or earlier with a matching charge since (or up to 5 days before it) is paid: the next one is due.
+    const paidOn = lastCharge.get(r.id)?.date;
+    for (let guard = 0; date <= today && paidOn !== undefined && paidOn >= addDays(date, -PAID_EARLY_DAYS) && guard < 60; guard++) {
+      date = nextOccurrence(date, r.cadence);
+    }
     for (let guard = 0; date <= until && guard < 60; guard++, date = nextOccurrence(date, r.cadence)) {
-      if (!(r.categoryId != null && budgetCategories.has(r.categoryId) && monthOf(date) === planner.month)) {
-        bills.push({ name: r.name, date, amountCents: Math.abs(r.amount), overdue: date < today, source: 'recurring', categoryId: r.categoryId });
+      if (!(lineCategories(r.categoryId).some((id) => budgetCategories.has(id)) && monthOf(date) === planner.month)) {
+        bills.push({ name: r.name, date, amountCents: Math.abs(r.expectedAmountCents), overdue: date < today, source: 'recurring', categoryId: r.categoryId });
       }
       if (!repeat) break;
     }
@@ -458,7 +503,7 @@ export async function upcomingBills(
     for (let month = addMonths(planner.month, 1); month <= monthOf(until); month = addMonths(month, 1)) {
       const budgeted = await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM budget_lines WHERE month = ?', month);
       const rows = budgeted?.n ? (await loadMonth(db, month)).rows : planner.data.rows;
-      const billed = new Set(bills.filter((b) => b.source === 'recurring' && monthOf(b.date) === month).map((b) => b.categoryId));
+      const billed = new Set<number | null>(bills.filter((b) => b.source === 'recurring' && monthOf(b.date) === month).flatMap((b) => lineCategories(b.categoryId)));
       for (const line of dueDayLines(rows, month)) {
         if (line.date <= until && !billed.has(line.categoryId)) bills.push(line);
       }

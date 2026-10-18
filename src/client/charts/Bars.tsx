@@ -1,6 +1,7 @@
 import type { MonthKey } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import { useMoneyText } from '../amounts';
+import { money as plainMoney } from '../format';
 import { Money } from '../ui';
 import { Axes, bands, LAYOUT, monthTitle, svgHeight, useActiveMonth, useHatch, useWidth } from './frame';
 import { barPath, dollarsShort, labelsFit, niceMax, ticks } from './scale';
@@ -97,7 +98,7 @@ export function Bars({
             title={monthTitle(months[active]!, active === partialIndex)}
             interactive={focus.pinned}
             rows={[{ key: 'value', name: label, colorVar, value: values[active] ?? 0 }]}
-            note={reference !== undefined ? `Usually ${money(reference, { whole: true })} a month` : undefined}
+            note={reference !== undefined ? `Usually ${plainMoney(reference, { whole: true })} a month` : undefined}
           />
         )}
       </div>

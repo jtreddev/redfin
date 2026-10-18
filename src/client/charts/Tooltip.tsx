@@ -1,3 +1,4 @@
+import { WithAmounts } from '../amounts';
 import { Money } from '../ui';
 
 export interface TooltipRow {
@@ -68,7 +69,11 @@ export function Tooltip({
           </div>
         );
       })}
-      {note && <div className="tt-note muted">{note}</div>}
+      {note && (
+        <div className="tt-note muted">
+          <WithAmounts text={note} />
+        </div>
+      )}
     </div>
   );
 }

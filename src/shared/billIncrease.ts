@@ -52,21 +52,7 @@ export function wentUp(usualCents: Cents, latestCents: Cents): boolean {
  * stays quiet until a bigger one comes. Pass charges from the last 45 days.
  */
 export function billIncreases(bills: readonly IncreaseBill[], charges: readonly IncreaseCharge[]): BillIncrease[] {
-  const byMerchant = new Map<string, IncreaseBill[]>();
-  for (const b of bills) {
-    const key = `${billMerchant(b.merchant)}|${b.privateMemberId ?? ''}`;
-    byMerchant.set(key, [...(byMerchant.get(key) ?? []), b]);
-  }
-  const latest = new Map<number, IncreaseCharge>();
-  const newestFirst = [...charges].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id));
-  for (const t of newestFirst) {
-    if (t.amountCents >= 0) continue;
-    const candidates = (byMerchant.get(`${t.merchant}|${t.privateMemberId ?? ''}`) ?? []).filter((b) => sameBill(b.expectedAmountCents, t.amountCents));
-    if (!candidates.length) continue;
-    const distance = (b: IncreaseBill) => Math.abs(Math.abs(b.expectedAmountCents) - Math.abs(t.amountCents));
-    const bill = candidates.reduce((best, b) => (distance(b) < distance(best) ? b : best));
-    if (!latest.has(bill.id)) latest.set(bill.id, t);
-  }
+  const latest = latestCharges(bills, charges);
   const found: BillIncrease[] = [];
   for (const b of bills) {
     const t = latest.get(b.id);
@@ -78,4 +64,30 @@ export function billIncreases(bills: readonly IncreaseBill[], charges: readonly 
     found.push({ billId: b.id, usualCents, latestCents, date: t.date });
   }
   return found;
+}
+
+/**
+ * Each bill's latest charge. A charge belongs to the closest bill in amount from its merchant (within
+ * `sameBill`), shared or private the same way as the charge.
+ */
+export function latestCharges(
+  bills: readonly Pick<IncreaseBill, 'id' | 'merchant' | 'expectedAmountCents' | 'privateMemberId'>[],
+  charges: readonly IncreaseCharge[],
+): Map<number, IncreaseCharge> {
+  const byMerchant = new Map<string, (typeof bills)[number][]>();
+  for (const b of bills) {
+    const key = `${billMerchant(b.merchant)}|${b.privateMemberId ?? ''}`;
+    byMerchant.set(key, [...(byMerchant.get(key) ?? []), b]);
+  }
+  const latest = new Map<number, IncreaseCharge>();
+  const newestFirst = [...charges].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.id - a.id));
+  for (const t of newestFirst) {
+    if (t.amountCents >= 0) continue;
+    const candidates = (byMerchant.get(`${t.merchant}|${t.privateMemberId ?? ''}`) ?? []).filter((b) => sameBill(b.expectedAmountCents, t.amountCents));
+    if (!candidates.length) continue;
+    const distance = (b: (typeof bills)[number]) => Math.abs(Math.abs(b.expectedAmountCents) - Math.abs(t.amountCents));
+    const bill = candidates.reduce((best, b) => (distance(b) < distance(best) ? b : best));
+    if (!latest.has(bill.id)) latest.set(bill.id, t);
+  }
+  return latest;
 }

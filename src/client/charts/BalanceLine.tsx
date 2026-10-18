@@ -2,7 +2,7 @@ import type { ISODate } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import type { ProjectionEvent, ProjectionPoint } from '../../shared/projection';
 import { useMoneyText } from '../amounts';
-import { shortDate, weekdayDate } from '../format';
+import { money as plainMoney, shortDate, weekdayDate } from '../format';
 import { useActiveMonth, useWidth } from './frame';
 import { dollarsShort, rangeTicks } from './scale';
 import { Tooltip, type TooltipRow } from './Tooltip';
@@ -135,7 +135,8 @@ export function BalanceLine({
                 <>
                   <circle className="balance-dot" cx={lowX} cy={yOf(lowestPoint.balanceCents)} r={4} />
                   <text className="chart-label chart-amount" x={lowX} y={yOf(lowestPoint.balanceCents) + (yOf(lowestPoint.balanceCents) > baseline - 20 ? -10 : 18)} textAnchor={lowAnchor}>
-                    {count > 1 ? `Lowest ${money(lowestPoint.balanceCents, { whole: true })}` : money(lowestPoint.balanceCents, { whole: true })}
+                    {/* The number itself: .chart-amount blurs it, and a tap reveals it (aria comes from the label). */}
+                    {count > 1 ? `Lowest ${plainMoney(lowestPoint.balanceCents, { whole: true })}` : plainMoney(lowestPoint.balanceCents, { whole: true })}
                   </text>
                 </>
               )}
