@@ -312,15 +312,17 @@ export async function undoMove(db: D1Database, viewer: Viewer, moveId: number): 
     ruleBefore: string | null;
     tappedId: number | null;
     fixCategoryId: number | null;
+    kind: 'learn' | 'bulk';
   }>(
     db,
     `SELECT id, member_id AS memberId, rule_id AS ruleId, rule_before AS ruleBefore,
-            tapped_transaction_id AS tappedId, fix_category_id AS fixCategoryId
+            tapped_transaction_id AS tappedId, fix_category_id AS fixCategoryId, kind
        FROM category_moves WHERE id = ?`,
     moveId,
   );
   if (!move) throw notFound('Nothing to undo');
   if (move.memberId !== viewer.memberId) throw new HttpError(403, 'Only the person who made this change can undo it.');
+  if (move.kind === 'bulk') return undoBulk(db, move.id);
   if (move.ruleId !== null) {
     const later = await first(db, 'SELECT 1 AS x FROM category_moves WHERE rule_id = ? AND id > ?', move.ruleId, move.id);
     if (later) throw new HttpError(409, 'Already changed again');
@@ -384,6 +386,34 @@ export async function undoMove(db: D1Database, viewer: Viewer, moveId: number): 
     if (affected.length) await reclassify(db, await loadIngestContext(db), affected);
   }
   return { restored };
+}
+
+/**
+ * Puts back a bulk change: every charge still exactly as the change left it (picked by hand, same
+ * category, kid, privacy and "left out") gets its old values back; charges changed since are left alone.
+ */
+async function undoBulk(db: D1Database, moveId: number): Promise<{ restored: number }> {
+  const [restore] = await db.batch([
+    stmt(
+      db,
+      `UPDATE transactions SET category_id = (SELECT c.id FROM categories c WHERE c.id = i.old_category_id),
+         category_source = i.old_source, category_reason = i.old_reason,
+         rule_id = (SELECT r.id FROM rules r WHERE r.id = i.old_rule_id),
+         kid_id = (SELECT k.id FROM kids k WHERE k.id = i.old_kid_id),
+         private_member_id = (SELECT m.id FROM members m WHERE m.id = i.old_private_member_id),
+         is_ignored = i.old_is_ignored, updated_at = ?
+         FROM category_move_items i
+        WHERE i.move_id = ? AND i.transaction_id = transactions.id
+          AND transactions.category_source IS 'user' AND transactions.category_id IS i.new_category_id
+          AND transactions.kid_id IS i.new_kid_id AND transactions.private_member_id IS i.new_private_member_id
+          AND transactions.is_ignored IS i.new_is_ignored`,
+      nowIso(),
+      moveId,
+    ),
+    stmt(db, 'DELETE FROM category_move_items WHERE move_id = ?', moveId),
+    stmt(db, 'DELETE FROM category_moves WHERE id = ?', moveId),
+  ]);
+  return { restored: restore?.meta.changes ?? 0 };
 }
 
 /** Undo lasts a day. */

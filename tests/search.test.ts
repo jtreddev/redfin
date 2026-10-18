@@ -188,6 +188,153 @@ describe('searching activity', () => {
   });
 });
 
+describe('changing many charges at once', () => {
+  type Bulk = { updated: number; skipped: number; moveId: number | null };
+  const state = (id: number) =>
+    db.rows<{
+      category_id: number | null;
+      category_source: string | null;
+      category_reason: string | null;
+      rule_id: number | null;
+      kid_id: number | null;
+      private_member_id: number | null;
+      is_ignored: number;
+    }>('SELECT category_id, category_source, category_reason, rule_id, kid_id, private_member_id, is_ignored FROM transactions WHERE id = ?', id)[0]!;
+  async function bulk(body: unknown, email = YOU): Promise<Bulk> {
+    const res = await api(env, 'POST', '/transactions/bulk', body, email);
+    expect(res.status).toBe(200);
+    return (await res.json()) as Bulk;
+  }
+  const undo = (moveId: number, email = YOU) => api(env, 'POST', `/category-moves/${moveId}/undo`, {}, email);
+  const kid = () => {
+    db.exec(`INSERT INTO kids (name) VALUES ('Kid A')`);
+    return db.rows<{ id: number }>('SELECT MAX(id) AS id FROM kids')[0]!.id;
+  };
+  function ruled(s: Seed) {
+    db.exec(`INSERT INTO rules (position, match_text, category_id) VALUES (1, 'X', ?)`, s.categoryId ?? null);
+    const ruleId = db.rows<{ id: number }>('SELECT MAX(id) AS id FROM rules')[0]!.id;
+    const id = add({ ...s, source: 'rule' });
+    db.exec(`UPDATE transactions SET rule_id = ?, category_reason = 'Matched a rule' WHERE id = ?`, ruleId, id);
+    return id;
+  }
+
+  it('sets a category on every picked charge, pins it, and one Undo puts everything back', async () => {
+    const shopping = cat('Shopping');
+    const gifts = cat('Gifts');
+    const a = ruled({ name: 'TARGET', cents: -2000, categoryId: shopping });
+    const b = add({ name: 'AMAZON', cents: -3000 });
+    const c = add({ name: 'ETSY', cents: -4000, categoryId: cat('Groceries'), source: 'user' });
+    const untouched = add({ name: 'KROGER', cents: -5000, categoryId: shopping });
+    const before = [a, b, c, untouched].map(state);
+
+    const res = await bulk({ ids: [a, b, c], set: { categoryId: gifts } });
+    expect(res).toMatchObject({ updated: 3, skipped: 0 });
+    for (const id of [a, b, c]) expect(state(id)).toMatchObject({ category_id: gifts, category_source: 'user', category_reason: null, rule_id: null });
+    expect(state(untouched)).toEqual(before[3]);
+    // A one-off: nothing is learned.
+    expect(db.rows('SELECT id FROM rules WHERE learned = 1')).toEqual([]);
+
+    expect((await undo(res.moveId!)).status).toBe(200);
+    expect([a, b, c, untouched].map(state)).toEqual(before);
+  });
+
+  it('kid and "leave out" too, and Undo restores them', async () => {
+    const k = kid();
+    const ids = [add({ name: 'DAYCARE', cents: -50000, categoryId: cat('Childcare') }), add({ name: 'SHOES', cents: -6000 })];
+    const before = ids.map(state);
+    const res = await bulk({ ids, set: { kidId: k, isIgnored: true } });
+    expect(res.updated).toBe(2);
+    for (const id of ids) expect(state(id)).toMatchObject({ kid_id: k, is_ignored: 1, category_source: 'user' });
+    expect(state(ids[0]!).category_id).toBe(cat('Childcare'));
+    await undo(res.moveId!);
+    expect(ids.map(state)).toEqual(before);
+  });
+
+  it('mark private files to my own fun money; Undo makes them shared again', async () => {
+    const shopping = cat('Shopping');
+    const picked = [add({ name: 'BOOKS', cents: -2000, categoryId: shopping }), add({ name: 'GAME', cents: -3000 })];
+    const before = picked.map(state);
+    const res = await bulk({ ids: picked, set: { isPrivate: true } });
+    for (const id of picked) expect(state(id)).toMatchObject({ private_member_id: you, category_id: funOf(you) });
+    // The partner no longer sees them.
+    expect(ids(await search('', PARTNER)).filter((id) => picked.includes(id))).toEqual([]);
+    await undo(res.moveId!);
+    expect(picked.map(state)).toEqual(before);
+  });
+
+  it('a category on my private charges makes them shared (like a single change)', async () => {
+    const mine = add({ name: 'BOOKS', cents: -2000, privateTo: you, categoryId: funOf(you) });
+    await bulk({ ids: [mine], set: { categoryId: cat('Shopping') } });
+    expect(state(mine)).toMatchObject({ private_member_id: null, category_id: cat('Shopping') });
+  });
+
+  it('never touches a partner’s private charge, or charges that aren’t there', async () => {
+    const theirs = add({ name: 'SPA', cents: -9000, privateTo: partner, categoryId: funOf(partner) });
+    const shared = add({ name: 'SPA', cents: -9000 });
+    const before = state(theirs);
+    const res = await bulk({ ids: [theirs, shared, 999999], set: { categoryId: cat('Gifts'), kidId: null, isIgnored: true } });
+    expect(res).toMatchObject({ updated: 1, skipped: 2 });
+    expect(state(theirs)).toEqual(before);
+    expect(db.rows('SELECT transaction_id FROM category_move_items WHERE move_id = ?', res.moveId)).toEqual([{ transaction_id: shared }]);
+    // Only the person who made the change can undo it.
+    expect((await undo(res.moveId!, PARTNER)).status).toBe(403);
+  });
+
+  it('nothing to change: no move', async () => {
+    const theirs = add({ name: 'SPA', cents: -9000, privateTo: partner, categoryId: funOf(partner) });
+    expect(await bulk({ ids: [theirs], set: { isIgnored: true } })).toEqual({ updated: 0, skipped: 1, moveId: null });
+    expect(db.rows('SELECT id FROM category_moves')).toEqual([]);
+  });
+
+  it('split charges keep their parts when a category is set, but take a kid', async () => {
+    const k = kid();
+    const split = add({ name: 'COSTCO', cents: -9000 });
+    db.exec('UPDATE transactions SET is_split = 1 WHERE id = ?', split);
+    const plain = add({ name: 'COSTCO', cents: -9000 });
+    expect(await bulk({ ids: [split, plain], set: { categoryId: cat('Groceries') } })).toMatchObject({ updated: 1, skipped: 1 });
+    expect(state(split).category_id).toBeNull();
+    expect(await bulk({ ids: [split], set: { kidId: k } })).toMatchObject({ updated: 1, skipped: 0 });
+    expect(state(split).kid_id).toBe(k);
+  });
+
+  it('Undo leaves a charge changed by hand since, and puts back the rest', async () => {
+    const gifts = cat('Gifts');
+    const shopping = cat('Shopping');
+    const a = add({ name: 'TARGET', cents: -2000, categoryId: shopping });
+    const b = add({ name: 'AMAZON', cents: -3000, categoryId: shopping });
+    const res = await bulk({ ids: [a, b], set: { categoryId: gifts } });
+    expect((await api(env, 'PATCH', `/transactions/${b}`, { categoryId: cat('Groceries') })).status).toBe(200);
+    const undone = (await (await undo(res.moveId!)).json()) as { restored: number };
+    expect(undone.restored).toBe(1);
+    expect(state(a)).toMatchObject({ category_id: shopping, category_source: 'auto' });
+    expect(state(b)).toMatchObject({ category_id: cat('Groceries'), category_source: 'user' });
+    expect((await undo(res.moveId!)).status).toBe(404);
+  });
+
+  it('refuses bad requests', async () => {
+    const id = add({ name: 'X', cents: -100 });
+    const post = (body: unknown) => api(env, 'POST', '/transactions/bulk', body);
+    expect((await post({ ids: [], set: { isIgnored: true } })).status).toBe(400);
+    expect((await post({ ids: 'all', set: { isIgnored: true } })).status).toBe(400);
+    expect((await post({ ids: [id, 'x'], set: { isIgnored: true } })).status).toBe(400);
+    expect((await post({ ids: Array.from({ length: 501 }, (_, i) => i + 1), set: { isIgnored: true } })).status).toBe(400);
+    expect((await post({ ids: [id] })).status).toBe(400);
+    expect((await post({ ids: [id], set: {} })).status).toBe(400);
+    expect((await post({ ids: [id], set: { isIgnored: 'yes' } })).status).toBe(400);
+    expect((await post({ ids: [id], set: { categoryId: funOf(partner) } })).status).toBe(403);
+    expect(state(id)).toMatchObject({ category_id: null, is_ignored: 0 });
+  });
+
+  it('handles a big selection in one request', async () => {
+    const many = Array.from({ length: 300 }, (_, i) => add({ name: `SHOP ${i}`, cents: -100 - i }));
+    const res = await bulk({ ids: many, set: { categoryId: cat('Shopping') } });
+    expect(res.updated).toBe(300);
+    expect(db.rows<{ n: number }>('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?', cat('Shopping'))[0]!.n).toBe(300);
+    await undo(res.moveId!);
+    expect(db.rows<{ n: number }>('SELECT COUNT(*) AS n FROM transactions WHERE category_id IS NULL')[0]!.n).toBe(300);
+  });
+});
+
 describe('searching bills', () => {
   type Bill = { id: number; name: string; status: string };
   function bill(name: string, merchant: string, cents: number, status = 'confirmed', privateTo: number | null = null) {
