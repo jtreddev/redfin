@@ -282,7 +282,7 @@ describe('automatic categories on synced charges', () => {
 
   it('a synced Shell charge under $25 lands in Habits with a reason', async () => {
     const { itemId } = await seedBank(db, env, 'chime');
-    stubPlaid({ chime: [page([shell('t1', 6.41)])] });
+    stubPlaid({ chime: [page([shell('t1', 6.75)])] });
 
     await syncStep(env, { itemId, trigger: 'manual' });
 
@@ -296,12 +296,12 @@ describe('automatic categories on synced charges', () => {
 
   it('hand-set charges keep their category through a modify', async () => {
     const { itemId } = await seedBank(db, env, 'chime');
-    stubPlaid({ chime: [page([shell('t1', 6.41)])] });
+    stubPlaid({ chime: [page([shell('t1', 6.75)])] });
     await syncStep(env, { itemId, trigger: 'manual' });
     const groceries = catId('Everyday', 'Groceries');
     db.exec(`UPDATE transactions SET category_id = ?, category_source = 'user', category_reason = NULL WHERE plaid_txn_id = 't1'`, groceries);
 
-    stubPlaid({ chime: [page([], { modified: [shell('t1', 6.41, { name: 'SHELL OIL 57444 RENAMED' })] })] });
+    stubPlaid({ chime: [page([], { modified: [shell('t1', 6.75, { name: 'SHELL OIL 57444 RENAMED' })] })] });
     await syncStep(env, { itemId, trigger: 'manual' });
 
     expect(row('t1')).toMatchObject({ categoryId: groceries, source: 'user', reason: null });
@@ -459,10 +459,10 @@ describe('automatic categories on synced charges', () => {
     const { itemId, accountId } = await seedBank(db, env, 'chime');
     db.exec(
       `INSERT INTO transactions (account_id, date, amount_cents, name, source, plaid_txn_id, is_split, plaid_category_detailed)
-       VALUES (?, '2026-10-01', -641, 'SHELL OIL 57444', 'plaid', 't1', 1, 'TRANSPORTATION_GAS')`,
+       VALUES (?, '2026-10-01', -675, 'SHELL OIL 57444', 'plaid', 't1', 1, 'TRANSPORTATION_GAS')`,
       accountId,
     );
-    stubPlaid({ chime: [page([], { modified: [shell('t1', 6.41)] })] });
+    stubPlaid({ chime: [page([], { modified: [shell('t1', 6.75)] })] });
 
     await syncStep(env, { itemId, trigger: 'manual' });
 
@@ -473,12 +473,12 @@ describe('automatic categories on synced charges', () => {
     const { itemId, accountId } = await seedBank(db, env, 'chime');
     db.exec(
       `INSERT INTO transactions (account_id, date, amount_cents, name, source, plaid_txn_id, pending, is_split)
-       VALUES (?, '2026-10-01', -641, 'SHELL OIL 57444', 'plaid', 'p1', 1, 1)`,
+       VALUES (?, '2026-10-01', -675, 'SHELL OIL 57444', 'plaid', 'p1', 1, 1)`,
       accountId,
     );
     const pendingId = db.rows<{ id: number }>("SELECT id FROM transactions WHERE plaid_txn_id = 'p1'")[0]!.id;
     db.exec('INSERT INTO splits (transaction_id, amount_cents) VALUES (?, -300), (?, -341)', pendingId, pendingId);
-    stubPlaid({ chime: [page([shell('posted-1', 6.41, { pending_transaction_id: 'p1' })])] });
+    stubPlaid({ chime: [page([shell('posted-1', 6.75, { pending_transaction_id: 'p1' })])] });
 
     await syncStep(env, { itemId, trigger: 'manual' });
 
@@ -494,16 +494,16 @@ describe('automatic categories on synced charges', () => {
     const groceries = catId('Everyday', 'Groceries');
     db.exec(
       `INSERT INTO transactions (account_id, date, amount_cents, name, source, plaid_txn_id, pending, category_id, category_source)
-       VALUES (?, '2026-10-01', -641, 'SHELL OIL 57444', 'plaid', 'p1', 1, ?, 'user')`,
+       VALUES (?, '2026-10-01', -675, 'SHELL OIL 57444', 'plaid', 'p1', 1, ?, 'user')`,
       accountId,
       groceries,
     );
-    insertImported(accountId, '2026-10-01', -641, 'SHELL OIL 57444');
+    insertImported(accountId, '2026-10-01', -675, 'SHELL OIL 57444');
     db.exec(
       `UPDATE transactions SET category_id = ?, category_source = 'auto', category_reason = 'Under $25 at a gas station' WHERE source = 'import'`,
       catId('Habits', 'Habits'),
     );
-    stubPlaid({ chime: [page([shell('posted-1', 6.41, { pending_transaction_id: 'p1' })])] });
+    stubPlaid({ chime: [page([shell('posted-1', 6.75, { pending_transaction_id: 'p1' })])] });
 
     await syncStep(env, { itemId, trigger: 'manual' });
 
@@ -516,7 +516,7 @@ describe('automatic categories on synced charges', () => {
     db.exec(
       `INSERT INTO categories (section_id, name, kind, fun_member_id) VALUES ((SELECT id FROM sections WHERE name = 'Fun & Wants'), 'Jo fun', 'expense', 7)`,
     );
-    stubPlaid({ chime: [page([shell('t1', 6.41)])] });
+    stubPlaid({ chime: [page([shell('t1', 6.75)])] });
 
     await syncStep(env, { itemId, trigger: 'manual' });
 
@@ -527,7 +527,7 @@ describe('automatic categories on synced charges', () => {
     const { itemId } = await seedBank(db, env, 'chime');
     db.exec("INSERT INTO kids (id, name) VALUES (1, 'Ada')");
     db.exec(`INSERT INTO rules (position, match_field, match_text, kid_id) VALUES (1, 'any', 'SHELL', 1)`);
-    stubPlaid({ chime: [page([shell('t1', 6.41)])] });
+    stubPlaid({ chime: [page([shell('t1', 6.75)])] });
 
     await syncStep(env, { itemId, trigger: 'manual' });
 
@@ -650,7 +650,7 @@ describe('automatic categories on synced charges', () => {
     const { itemId } = await seedBank(db, env, 'chime');
     const gasCat = catId('Everyday', 'Gas');
     db.exec(`INSERT INTO rules (position, match_field, match_text, category_id) VALUES (1, 'any', 'SHELL', ?)`, gasCat);
-    stubPlaid({ chime: [page([shell('t1', 6.41)])] });
+    stubPlaid({ chime: [page([shell('t1', 6.75)])] });
 
     await syncStep(env, { itemId, trigger: 'manual' });
 

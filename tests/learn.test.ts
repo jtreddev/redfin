@@ -122,7 +122,7 @@ describe('fixing a charge', () => {
     const gas = cat('Gas');
     const habits = cat('Habits');
     const coffee = cat('Coffee & Fast Food');
-    const small = charge(641, { categoryId: habits, source: 'auto' });
+    const small = charge(675, { categoryId: habits, source: 'auto' });
     const otherSmall = charge(899, { categoryId: habits, source: 'auto' });
     const fillUps = [charge(4500, { categoryId: gas, source: 'auto' }), charge(4500, { categoryId: gas, source: 'auto' })];
 
@@ -553,7 +553,7 @@ describe('rules screen and charge reasons', () => {
   const listRules = async (email = YOU) => (await (await api(env, 'GET', '/rules', undefined, email)).json()) as RuleItem[];
 
   it('lists a learned rule with its amount range, and a hand-made rule without one', async () => {
-    await fix(charge(641, { categoryId: cat('Habits'), source: 'auto' }), cat('Coffee & Fast Food'));
+    await fix(charge(675, { categoryId: cat('Habits'), source: 'auto' }), cat('Coffee & Fast Food'));
     const made = await api(env, 'POST', '/rules', { matchText: 'KROGER', categoryId: cat('Groceries') }, YOU);
     expect(made.status).toBe(201);
 

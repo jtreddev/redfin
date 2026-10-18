@@ -132,7 +132,7 @@ describe('imported rows are categorized', () => {
     const { id } = await post('/import/batches', { accountId: 1, format: 'csv' });
     await post(`/import/batches/${id}/rows`, {
       rows: [
-        { date: '2026-10-01', amountCents: -641, name: 'SHELL OIL 57444' },
+        { date: '2026-10-01', amountCents: -675, name: 'SHELL OIL 57444' },
         { date: '2026-10-02', amountCents: -4800, name: 'SHELL OIL 57444' },
         { date: '2026-10-03', amountCents: -1200, name: 'SOMETHING ELSE' },
       ],
@@ -144,7 +144,7 @@ describe('imported rows are categorized', () => {
            FROM transactions t LEFT JOIN categories c ON c.id = t.category_id LEFT JOIN sections s ON s.id = c.section_id ORDER BY t.date`,
       ),
     ).toEqual([
-      { cents: -641, section: 'Habits', category: 'Habits', source: 'auto', reason: 'Under $25 at a gas station' },
+      { cents: -675, section: 'Habits', category: 'Habits', source: 'auto', reason: 'Under $25 at a gas station' },
       { cents: -4800, section: 'Everyday', category: 'Gas', source: 'auto', reason: 'Gas station' },
       { cents: -1200, section: null, category: null, source: null, reason: null },
     ]);

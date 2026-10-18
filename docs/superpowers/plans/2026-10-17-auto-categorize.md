@@ -143,7 +143,7 @@
 - Produces: `classify(ctx, txn, current?)` unchanged signature; `Classification.categoryReason`. `IncomingTxn.plaidCategoryDetailed?: string | null`.
 
 - [ ] **Step 1: Write failing tests** in `tests/sync.test.ts`:
-  - `a synced Shell charge under $25 lands in Habits with a reason`: sync a sandbox-shaped transaction (existing helpers in `tests/helpers/plaid.ts`) with `personal_finance_category: { primary: 'TRANSPORTATION', detailed: 'TRANSPORTATION_GAS' }`, amount 6.41 → row has Habits, `category_source = 'auto'`, `category_reason = 'Under $25 at a gas station'`, `plaid_category_detailed = 'TRANSPORTATION_GAS'`.
+  - `a synced Shell charge under $25 lands in Habits with a reason`: sync a sandbox-shaped transaction (existing helpers in `tests/helpers/plaid.ts`) with `personal_finance_category: { primary: 'TRANSPORTATION', detailed: 'TRANSPORTATION_GAS' }`, amount 6.75 → row has Habits, `category_source = 'auto'`, `category_reason = 'Under $25 at a gas station'`, `plaid_category_detailed = 'TRANSPORTATION_GAS'`.
   - `hand-set charges keep their category through a modify`: set by hand, then a `modified` sync with a new name → category unchanged.
   - `splits are skipped`: a split transaction's category stays `NULL` with `is_split = 1` after reclassify.
   - Paycheck matching and card-payment detection still win over the categorizer (existing tests cover; keep them green).
@@ -196,7 +196,7 @@
 - [ ] **Step 1: Write failing tests** in `tests/learn.test.ts`:
   - `fixing one Shell charge re-files the others and learns`: 3 auto-Habits Shell charges at $40 → fix one to Gas → other two Gas, `move.moved = 2`, one learned rule `2500..NULL`.
   - `fix leaves hand-set charges alone`.
-  - `fill-ups stay put when you fix a small one`: $6.41 Shell fixed to Coffee & Fast Food → $45 Shell charges stay Gas.
+  - `fill-ups stay put when you fix a small one`: $6.75 Shell fixed to Coffee & Fast Food → $45 Shell charges stay Gas.
   - `undo restores everything`: after undo every charge has its old category, source and reason; the created rule is gone.
   - `undo restores a changed rule`: an existing learned rule updated by the fix gets its old category back.
   - `undo of an older move is refused`: two fixes on the same rule; undoing the first → 409.
