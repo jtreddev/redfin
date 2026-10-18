@@ -40,7 +40,7 @@ export function TransactionSheet({
       const res = await patch<{ transaction: Transaction | null; move: CategoryMove | null }>(`/transactions/${t.id}`, body);
       if (res.transaction) setT(res.transaction);
       onChanged(res.transaction, !!res.move?.moved);
-      if (res.move) showMove(res.move);
+      if (res.move) showMove({ ...res.move, tappedId: t.id });
     } catch (error) {
       toast(errorMessage(error), 'error');
     } finally {
@@ -49,7 +49,7 @@ export function TransactionSheet({
   }
 
   /** "Moved 41 Shell charges to Habits · Undo". Undo may run after the sheet has closed. */
-  function showMove(move: CategoryMove) {
+  function showMove(move: CategoryMove & { tappedId: number }) {
     const merchant = t.merchantName ?? move.merchant;
     const text = move.moved
       ? `Moved ${plural(move.moved, `${merchant} charge`)} to ${move.categoryName}`
@@ -63,6 +63,10 @@ export function TransactionSheet({
               onChanged(null, true);
               void reload();
               toast('Undone');
+              // Undo put the tapped charge back too; show that if the sheet is still open.
+              api<Transaction>(`/transactions/${move.tappedId}`)
+                .then((restored) => setT((current) => (current.id === restored.id ? restored : current)))
+                .catch(() => undefined);
             })
             .catch((error: unknown) => toast(errorMessage(error), 'error'));
         },

@@ -293,6 +293,9 @@ transactions.patch('/transactions/:id', async (c) => {
     k = enforceFunMoney(ctx, { ...k, categorySource: 'user' });
   }
 
+  // The charge's category before this fix, so Undo can put it back.
+  const beforeFix = body.categoryId !== undefined ? await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id) : null;
+
   const statements: D1PreparedStatement[] = [];
   const now = nowIso();
   if (classificationTouched) {
@@ -329,7 +332,7 @@ transactions.patch('/transactions/:id', async (c) => {
   const learnFrom = k.categoryId;
   if (body.categoryId !== undefined && learnFrom !== null && (row.categoryId !== learnFrom || row.categorySource !== 'user')) {
     const stored = await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id);
-    const learned = stored ? await learnFromFix(db, ctx, viewer, stored, learnFrom) : null;
+    const learned = stored ? await learnFromFix(db, ctx, viewer, stored, learnFrom, beforeFix ?? stored) : null;
     if (learned?.moveId) {
       const category = await first<{ name: string }>(db, 'SELECT name FROM categories WHERE id = ?', learnFrom);
       move = { id: learned.moveId, moved: learned.moved, merchant: learned.merchant, categoryName: category?.name ?? '' };

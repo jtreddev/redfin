@@ -99,7 +99,8 @@ describe('fixing a charge', () => {
     for (const id of ids.slice(1)) {
       expect(row(id)).toMatchObject({ category_id: gas, category_source: 'rule', category_reason: 'Learned from your fix', rule_id: rules[0]!.id });
     }
-    expect(db.rows('SELECT transaction_id FROM category_move_items ORDER BY transaction_id')).toEqual(ids.slice(1).map((id) => ({ transaction_id: id })));
+    // The tapped charge is recorded too, so Undo can put it back.
+    expect(db.rows('SELECT transaction_id FROM category_move_items ORDER BY transaction_id')).toEqual(ids.map((id) => ({ transaction_id: id })));
   });
 
   it('fix leaves hand-set charges alone', async () => {
@@ -171,18 +172,19 @@ describe('fixing a charge', () => {
     const fixed = charge(4000, { categoryId: habits, source: 'auto', reason: 'Under $25 at a gas station' });
     const a = charge(4000, { categoryId: habits, source: 'auto', reason: 'Under $25 at a gas station' });
     const b = charge(4000);
-    const before = { a: row(a), b: row(b) };
+    db.exec('UPDATE transactions SET rule_id = NULL WHERE id = ?', fixed);
+    const before = { fixed: row(fixed), a: row(a), b: row(b) };
 
     const body = await fix(fixed, gas);
     expect(body.move?.moved).toBe(2);
     const res = await undo(body.move!.id);
     expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ restored: 2 });
+    expect(await res.json()).toMatchObject({ restored: 3 });
 
     expect(row(a)).toEqual(before.a);
     expect(row(b)).toEqual(before.b);
-    // The fix itself stays: Undo takes back what the app did, not what you did.
-    expect(row(fixed)).toMatchObject({ category_id: gas, category_source: 'user' });
+    // The charge you tapped goes back too.
+    expect(row(fixed)).toEqual(before.fixed);
     expect(learnedRules()).toEqual([]);
     expect(db.rows('SELECT id FROM category_moves')).toEqual([]);
     expect(db.rows('SELECT move_id FROM category_move_items')).toEqual([]);
@@ -199,6 +201,64 @@ describe('fixing a charge', () => {
     db.exec(`UPDATE transactions SET category_id = ?, category_source = 'user', category_reason = NULL WHERE id = ?`, shopping, a);
     expect((await undo(body.move!.id)).status).toBe(200);
     expect(row(a)).toMatchObject({ category_id: shopping, category_source: 'user' });
+  });
+
+  it('undo leaves the tapped charge alone if you changed it again', async () => {
+    const habits = cat('Habits');
+    const shopping = cat('Shopping');
+    const fixed = charge(4000, { categoryId: habits, source: 'auto' });
+    const a = charge(4000, { categoryId: habits, source: 'auto' });
+    const body = await fix(fixed, cat('Gas'));
+    db.exec(`UPDATE transactions SET category_id = ?, category_source = 'user' WHERE id = ?`, shopping, fixed);
+    expect((await undo(body.move!.id)).status).toBe(200);
+    expect(row(fixed)).toMatchObject({ category_id: shopping, category_source: 'user' });
+    expect(row(a)).toMatchObject({ category_id: habits, category_source: 'auto' });
+  });
+
+  it('undo leaves a re-filed charge you later picked by hand, even in the same category', async () => {
+    const habits = cat('Habits');
+    const gas = cat('Gas');
+    const fixed = charge(4000, { categoryId: habits, source: 'auto' });
+    const a = charge(4000, { categoryId: habits, source: 'auto' });
+    const body = await fix(fixed, gas);
+    db.exec(`UPDATE transactions SET category_source = 'user', category_reason = NULL, rule_id = NULL WHERE id = ?`, a);
+    expect((await undo(body.move!.id)).status).toBe(200);
+    expect(row(a)).toMatchObject({ category_id: gas, category_source: 'user' });
+  });
+
+  it('undo after the learned rule was deleted leaves a since-split charge alone', async () => {
+    const habits = cat('Habits');
+    const fixed = charge(4000, { categoryId: habits, source: 'auto' });
+    const a = charge(4000, { categoryId: habits, source: 'auto' });
+    const body = await fix(fixed, cat('Gas'));
+    expect((await api(env, 'DELETE', `/rules/${learnedRules()[0]!.id}`)).status).toBe(200);
+    db.exec(`UPDATE transactions SET is_split = 1, category_id = NULL, category_source = NULL, category_reason = NULL WHERE id = ?`, a);
+    expect((await undo(body.move!.id)).status).toBe(200);
+    expect(db.rows('SELECT is_split, category_id FROM transactions WHERE id = ?', a)).toEqual([{ is_split: 1, category_id: null }]);
+  });
+
+  it('a private fix doesn’t take over a partner’s shared learned rule', async () => {
+    const coffee = cat('Coffee & Fast Food');
+    await fix(charge(700), coffee, PARTNER);
+    const shared = learnedRules()[0]!;
+    expect(shared).toMatchObject({ private_member_id: null, owner_member_id: null });
+
+    await fix(charge(700), yourFun);
+    const rules = learnedRules();
+    expect(rules).toHaveLength(2);
+    expect(rules[0]).toEqual(shared);
+    expect(rules[1]).toMatchObject({ category_id: yourFun, private_member_id: you, owner_member_id: you });
+    const list = ((await (await api(env, 'GET', '/rules', undefined, PARTNER)).json()) as { id: number }[]).map((r) => r.id);
+    expect(list).toContain(shared.id);
+  });
+
+  it('matches merchants with LIKE wildcards in their name', async () => {
+    const coffee = cat('Coffee & Fast Food');
+    const ids = [charge(700, { merchant: 'Joe_s Cafe' }), charge(700, { merchant: 'Joe_s Cafe' })];
+    const body = await fix(ids[0]!, coffee);
+    expect(learnedRules()[0]).toMatchObject({ match_text: 'JOE_S CAFE' });
+    expect(body.move?.moved).toBe(1);
+    expect(row(ids[1]!).category_id).toBe(coffee);
   });
 
   it('undo restores a changed rule', async () => {

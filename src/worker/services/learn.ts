@@ -85,9 +85,12 @@ function ruleFor(ctx: IngestContext, txn: StoredTxn): Rule | null {
   return null;
 }
 
+/** The tapped charge's category as it was before the fix, so Undo can put it back. */
+export type BeforeFix = Pick<StoredTxn, 'categoryId' | 'categorySource' | 'categoryReason' | 'ruleId'>;
+
 /**
- * Learns from a hand fix of `txn` to `categoryId` (the charge itself is not re-filed or recorded), re-files similar
- * charges the viewer can see, and records the move for Undo.
+ * Learns from a hand fix of `txn` (already saved) to `categoryId`, re-files similar charges the viewer
+ * can see, and records the move for Undo, including the tapped charge's values from `before`.
  */
 export async function learnFromFix(
   db: D1Database,
@@ -95,6 +98,7 @@ export async function learnFromFix(
   viewer: Viewer,
   txn: StoredTxn,
   categoryId: number,
+  before: BeforeFix = txn,
 ): Promise<LearnResult> {
   const learned = ruleFor(ctx, txn);
   if (!learned) return { moved: 0, moveId: null, ruleId: null, merchant: '' };
@@ -106,13 +110,15 @@ export async function learnFromFix(
     db,
     `SELECT id, ${RULE_BEFORE_COLUMNS} FROM rules
       WHERE learned = 1 AND match_field = ? AND match_text = ? AND amount_min_cents IS ? AND amount_max_cents IS ?
-        AND (owner_member_id IS NULL OR owner_member_id = ?)
+        AND private_member_id IS ? AND owner_member_id IS ?
       ORDER BY position, id LIMIT 1`,
     learned.matchField,
     merchant,
     learned.amountMin,
     learned.amountMax,
-    viewer.memberId,
+    // A shared rule and your private one for the same merchant are different rules: neither takes over the other.
+    privateTo,
+    privateTo,
   );
 
   const column = learned.matchField === 'merchant' ? "COALESCE(t.merchant_name, '')" : "(t.name || ' ' || COALESCE(t.memo, ''))";
@@ -124,7 +130,7 @@ export async function learnFromFix(
         AND (t.category_source IS NULL OR t.category_source != 'user')
         AND t.category_id IS NOT ? AND ${PRIVACY_SQL}
         AND (? IS NULL OR ABS(t.amount_cents) >= ?) AND (? IS NULL OR ABS(t.amount_cents) <= ?)
-        AND UPPER(${column}) LIKE ?
+        AND UPPER(${column}) LIKE ? ESCAPE '\\'
       ORDER BY t.date DESC, t.id DESC LIMIT ${REFILE_LIMIT}`,
     txn.id,
     categoryId,
@@ -133,16 +139,13 @@ export async function learnFromFix(
     learned.amountMin,
     learned.amountMax,
     learned.amountMax,
-    `%${merchant.toUpperCase().replace(/[%_]/g, '')}%`,
+    `%${merchant.toUpperCase().replace(/[\\%_]/g, '\\$&')}%`,
   );
   // The same account check classify() uses, so re-filing never does what a later sync would undo.
   const asSaved: Rule = { ...learned, action: privateTo === null ? {} : { privateMemberId: privateTo } };
   const refile = candidates
     .filter((t) => ruleAppliesToAccount(asSaved, ctx.privateAccountOwner.get(t.accountId) ?? null) && ruleMatches(learned, subjectOf(t)))
     .map((t) => t.id);
-
-  const ruleChanged = !existing || existing.category_id !== categoryId || existing.private_member_id !== privateTo || existing.owner_member_id !== privateTo;
-  if (!ruleChanged && !refile.length) return { moved: 0, moveId: null, ruleId: existing.id, merchant };
 
   const now = nowIso();
   let ruleId: number;
@@ -161,10 +164,13 @@ export async function learnFromFix(
       ),
       stmt(
         db,
-        'INSERT INTO category_moves (member_id, rule_id, rule_before, created_at) VALUES (?, ?, ?, ?) RETURNING id',
+        `INSERT INTO category_moves (member_id, rule_id, rule_before, tapped_transaction_id, fix_category_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
         viewer.memberId,
         ruleId,
         JSON.stringify(Object.fromEntries(Object.entries(existing).filter(([key]) => key !== 'id'))),
+        txn.id,
+        categoryId,
         now,
       ),
     ]);
@@ -187,8 +193,11 @@ export async function learnFromFix(
       ),
       stmt(
         db,
-        'INSERT INTO category_moves (member_id, rule_id, rule_before, created_at) VALUES (?, last_insert_rowid(), NULL, ?) RETURNING id, rule_id AS ruleId',
+        `INSERT INTO category_moves (member_id, rule_id, rule_before, tapped_transaction_id, fix_category_id, created_at)
+         VALUES (?, last_insert_rowid(), NULL, ?, ?, ?) RETURNING id, rule_id AS ruleId`,
         viewer.memberId,
+        txn.id,
+        categoryId,
         now,
       ),
     ]);
@@ -200,7 +209,19 @@ export async function learnFromFix(
 
   // Each group snapshots the old values and re-files in the same atomic batch.
   const filedPrivate = ctx.funCategoryOwner.get(categoryId) ?? null;
-  const statements = chunk(refile, IDS_PER_STATEMENT).flatMap((ids) => [
+  const statements = [
+    stmt(
+      db,
+      `INSERT INTO category_move_items (move_id, transaction_id, old_category_id, old_source, old_reason, old_rule_id)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      moveId,
+      txn.id,
+      before.categoryId,
+      before.categorySource,
+      before.categoryReason,
+      before.ruleId,
+    ),
+    ...chunk(refile, IDS_PER_STATEMENT).flatMap((ids) => [
     stmt(
       db,
       `INSERT INTO category_move_items (move_id, transaction_id, old_category_id, old_source, old_reason, old_rule_id)
@@ -219,21 +240,34 @@ export async function learnFromFix(
       now,
       ...ids,
     ),
-  ]);
-  await batchAll(db, statements);
+  ]),
+  ];
+  // Keep each snapshot+update pair in one atomic batch: the tapped charge's item shifts pairs by one.
+  await batchAll(db, statements.slice(0, 1));
+  await batchAll(db, statements.slice(1));
 
   return { moved: refile.length, moveId, ruleId, merchant };
 }
 
 /**
- * Puts back what a move did: each recorded charge's old category, source and reason (unless
- * someone has since filed it by hand), and the learned rule as it was (or gone, if the move made it).
+ * Puts back what a move did: each recorded charge's old category, source and reason, and the learned
+ * rule as it was (or gone, if the move made it). Re-filed charges someone has since picked by hand or
+ * split are left alone; the tapped charge goes back only if it is still exactly what the fix set.
  * Only the latest move for a rule can be undone, and only by the person who made it.
  */
 export async function undoMove(db: D1Database, viewer: Viewer, moveId: number): Promise<{ restored: number }> {
-  const move = await first<{ id: number; memberId: number | null; ruleId: number | null; ruleBefore: string | null }>(
+  const move = await first<{
+    id: number;
+    memberId: number | null;
+    ruleId: number | null;
+    ruleBefore: string | null;
+    tappedId: number | null;
+    fixCategoryId: number | null;
+  }>(
     db,
-    'SELECT id, member_id AS memberId, rule_id AS ruleId, rule_before AS ruleBefore FROM category_moves WHERE id = ?',
+    `SELECT id, member_id AS memberId, rule_id AS ruleId, rule_before AS ruleBefore,
+            tapped_transaction_id AS tappedId, fix_category_id AS fixCategoryId
+       FROM category_moves WHERE id = ?`,
     moveId,
   );
   if (!move) throw notFound('Nothing to undo');
@@ -242,9 +276,6 @@ export async function undoMove(db: D1Database, viewer: Viewer, moveId: number): 
     const later = await first(db, 'SELECT 1 AS x FROM category_moves WHERE rule_id = ? AND id > ?', move.ruleId, move.id);
     if (later) throw new HttpError(409, 'Already changed again');
   }
-  // What the move filed charges under: the rule's category, read before the rule is put back.
-  const target = move.ruleId === null ? null : await first<{ categoryId: number | null }>(db, 'SELECT category_id AS categoryId FROM rules WHERE id = ?', move.ruleId);
-
   const now = nowIso();
   const before = move.ruleBefore ? (JSON.parse(move.ruleBefore) as RuleBefore) : null;
   const statements: D1PreparedStatement[] = [
@@ -256,11 +287,14 @@ export async function undoMove(db: D1Database, viewer: Viewer, moveId: number): 
          private_member_id = (SELECT c.fun_member_id FROM categories c WHERE c.id = i.old_category_id),
          updated_at = ?
          FROM category_move_items i
-        WHERE i.move_id = ? AND i.transaction_id = transactions.id
-          AND NOT (transactions.category_source IS 'user' AND transactions.category_id IS NOT ?)`,
+        WHERE i.move_id = ? AND i.transaction_id = transactions.id AND transactions.is_split = 0
+          AND CASE WHEN i.transaction_id IS ?
+                   THEN transactions.category_source IS 'user' AND transactions.category_id IS ?
+                   ELSE transactions.category_source IS NOT 'user' END`,
       now,
       move.id,
-      target?.categoryId ?? null,
+      move.tappedId,
+      move.fixCategoryId,
     ),
   ];
   if (before && move.ruleId !== null) {
