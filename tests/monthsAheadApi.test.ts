@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildTrends } from '../src/shared/trends';
+import { loadTrendsInput, monthsBack } from '../src/worker/services/trends';
 import { projectMonths, type MonthsAhead, type MonthsAheadInput } from '../src/shared/monthsAhead';
 import type { Env } from '../src/worker/env';
 import { api } from './helpers/api';
@@ -168,6 +170,31 @@ describe('GET /api/forecast/months', () => {
     expect(body.projection.plannedCosts.find((c) => c.name === 'Holidays & gifts')).toMatchObject({ lowestMonth: '2026-12' });
   });
 
+  describe('a due-day line and a confirmed bill in the same category', () => {
+    let bills: number;
+    beforeEach(() => {
+      bills = category('Bills');
+    });
+    const rentEachMonth = (body: MonthsBody) => body.projection.months.map((m) => m.byGroup.bills);
+
+    it('counts rent once a month, the line this month and the bill after', async () => {
+      await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: bills, budgetCents: 150000, timing: 'due_day', dueDay: 25 });
+      bill('Landlord', '2026-10-25', 150000, { categoryId: bills });
+      const body = await months();
+      expect(rentEachMonth(body)).toEqual(Array(13).fill(150000));
+      const october = body.input.bills.filter((b) => b.date.startsWith('2026-10'));
+      expect(october.map((b) => [b.cadence, b.amountCents])).toEqual([[null, 150000]]);
+      expect(body.input.bills.filter((b) => b.date.startsWith('2027-03')).map((b) => b.name)).toEqual(['Landlord']);
+    });
+
+    it('counts rent once when the line is on the parent and the bill on a sub-category', async () => {
+      const child = ((await (await api(env, 'POST', '/categories', { parentId: bills, name: 'Rent' })).json()) as { id: number }).id;
+      await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: bills, budgetCents: 150000, timing: 'due_day', dueDay: 25 });
+      bill('Landlord', '2026-10-25', 150000, { categoryId: child });
+      expect(rentEachMonth(await months())).toEqual(Array(13).fill(150000));
+    });
+  });
+
   it('projects a goal from its recent contributions', async () => {
     const res = await api(env, 'POST', '/goals', { name: 'Emergency fund', targetCents: 200000 });
     const id = ((await res.json()) as { id: number }).id;
@@ -189,6 +216,18 @@ describe('GET /api/forecast/months', () => {
     }
     for (let i = 0; i < 26; i++) bill(`Bill ${i}`, `2026-10-${String(19 + (i % 10)).padStart(2, '0')}`, 1000 + i * 100, { cadence: i % 3 ? 'monthly' : 'weekly' });
     await months(); // warm up
+
+    // The pure work (what Workers bills as CPU; D1 time isn't) stays well under 10 ms.
+    const input = await loadTrendsInput(env.DB, monthsBack('2026-10-18', 13), '2026-10-18');
+    const body = await months();
+    const runs: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const start = performance.now();
+      buildTrends(input);
+      projectMonths(body.input, 12);
+      runs.push(performance.now() - start);
+    }
+    expect(Math.min(...runs)).toBeLessThan(5);
 
     // The whole route less its sqlite time (in-process here; I/O on D1, not CPU).
     const proto = Object.getPrototypeOf(db.prepare('SELECT 1')) as { execute: (...a: unknown[]) => unknown };
