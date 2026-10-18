@@ -55,6 +55,18 @@ core.get('/me', async (c) => {
   });
 });
 
+core.patch('/me/prefs', async (c) => {
+  const body = await readBody(c);
+  const hideSetup = optBool(body.hideSetup, 'hideSetup');
+  const powerTools = optBool(body.powerTools, 'powerTools');
+  const updates = new Updates()
+    .set('hide_setup', hideSetup === undefined ? undefined : hideSetup ? 1 : 0)
+    .set('power_tools', powerTools === undefined ? undefined : powerTools ? 1 : 0);
+  if (updates.empty) throw badRequest('Nothing to update');
+  await run(c.env.DB, `UPDATE members SET ${updates.sets.join(', ')}, updated_at = ? WHERE id = ?`, ...updates.params, nowIso(), c.get('viewer').memberId);
+  return c.json({ ok: true });
+});
+
 core.patch('/household', async (c) => {
   const body = await readBody(c);
   const updates = new Updates()
@@ -138,6 +150,19 @@ core.post('/kids', async (c) => {
     optDate(body.birthDate, 'birthDate') ?? null,
   );
   return c.json(row, 201);
+});
+
+core.post('/kids/reorder', async (c) => {
+  const body = await readBody(c);
+  if (!Array.isArray(body.ids) || body.ids.length > 200 || !body.ids.every((id) => Number.isInteger(id))) {
+    throw badRequest('ids must be a list of kid ids');
+  }
+  const db = c.env.DB;
+  await batchAll(
+    db,
+    (body.ids as number[]).map((id, i) => stmt(db, 'UPDATE kids SET sort = ?, updated_at = ? WHERE id = ?', (i + 1) * 10, nowIso(), id)),
+  );
+  return c.json({ ok: true });
 });
 
 core.patch('/kids/:id', async (c) => {

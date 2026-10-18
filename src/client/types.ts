@@ -23,7 +23,7 @@ export interface Kid {
 }
 
 export interface Me {
-  viewer: { memberId: number; email: string; name: string };
+  viewer: { memberId: number; email: string; name: string; hideSetup: boolean; powerTools: boolean };
   today: string;
   household: {
     name: string;
