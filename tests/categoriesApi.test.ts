@@ -103,6 +103,23 @@ describe('categories API', () => {
       expect((await add({ parentId: groceries, name: 'Produce' })).status).toBe(400);
     });
 
+    it('special categories (and Fun Money) never become sub-categories', async () => {
+      const savingParent = (await add({ sectionId: section('Saving'), name: 'Emergency' })).body.id;
+      const otherIncome = category('Income', 'Other Income');
+      const transfersParent = (await add({ sectionId: section('Transfers'), name: 'Between accounts' })).body.id;
+      const carUpkeep = category('Everyday', 'Car Upkeep');
+      expect((await patch(category('Income', 'Paychecks'), { parentId: otherIncome })).status).toBe(400);
+      expect((await patch(category('Saving', 'Savings & Planned Costs'), { parentId: savingParent })).status).toBe(400);
+      expect((await patch(category('Transfers', 'Transfers'), { parentId: transfersParent })).status).toBe(400);
+      expect((await patch(category('Everyday', 'Gas'), { parentId: carUpkeep })).status).toBe(400);
+      expect((await patch(category('Habits', 'Habits'), { parentId: category('Habits', 'Coffee & Fast Food') })).status).toBe(400);
+      expect((await patch(funOf(youId), { parentId: category('Fun & Wants', 'Gifts') })).status).toBe(400);
+      // A new category can't take a special one's place under a parent either.
+      db.exec("UPDATE categories SET name = 'Fuel' WHERE id = ?", category('Everyday', 'Gas'));
+      expect((await add({ parentId: carUpkeep, name: 'Gas' })).status).toBe(400);
+      expect(db.rows('SELECT COUNT(*) AS n FROM categories WHERE parent_id IS NOT NULL')).toEqual([{ n: 0 }]);
+    });
+
     it('GET /categories returns parentId, ordered group → parent → its children by sort', async () => {
       const habits = category('Habits', 'Habits');
       const coffee = category('Habits', 'Coffee & Fast Food');
@@ -391,6 +408,52 @@ describe('categories API', () => {
       expect(res.status).toBe(409);
       expect(await res.json()).toMatchObject({ needsConfirm: true, transactionCount: 1 });
       expect((await api(env, 'POST', `/categories/${refunds}/merge`, { intoId: shopping, confirm: true })).status).toBe(200);
+    });
+
+    it('a preview that needs confirming says so with 200 and the counts', async () => {
+      const refunds = category('Income', 'Refunds');
+      const shopping = category('Fun & Wants', 'Shopping');
+      charge(refunds, 500);
+      const res = await api(env, 'POST', `/categories/${refunds}/merge?preview=1`, { intoId: shopping });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ preview: true, needsConfirm: true, counts: { transactions: 1 } });
+      expect(row(refunds).archived).toBe(0);
+    });
+
+    it('only a partner’s private charges: no confirm needed (their charges stay unmentioned)', async () => {
+      const refunds = category('Income', 'Refunds');
+      const shopping = category('Fun & Wants', 'Shopping');
+      charge(refunds, 500, { private_member_id: partnerId });
+      const preview = await api(env, 'POST', `/categories/${refunds}/merge?preview=1`, { intoId: shopping });
+      expect(await preview.json()).toMatchObject({ needsConfirm: false, counts: { transactions: 0 } });
+      expect((await api(env, 'POST', `/categories/${refunds}/merge`, { intoId: shopping })).status).toBe(200);
+      const gifts = category('Fun & Wants', 'Gifts');
+      charge(gifts, -500, { private_member_id: partnerId });
+      expect((await patch(gifts, { sectionId: section('Income') })).status).toBe(200);
+    });
+
+    it('merged budget lines record who and when', async () => {
+      const from = category('Fun & Wants', 'Shopping');
+      const into = category('Fun & Wants', 'Gifts');
+      db.exec("INSERT INTO budget_lines (month, category_id, budget_cents, updated_at) VALUES ('2026-10', ?, 100, '2020-01-01'), ('2026-10', ?, 200, '2020-01-01'), ('2026-11', ?, 300, '2020-01-01')", from, into, from);
+      await api(env, 'POST', `/categories/${from}/merge`, { intoId: into });
+      const lines = db.rows<{ updated_at: string; updated_by_member_id: number }>('SELECT updated_at, updated_by_member_id FROM budget_lines WHERE category_id = ?', into);
+      expect(lines).toHaveLength(2);
+      for (const l of lines) expect(l).toMatchObject({ updated_by_member_id: youId, updated_at: expect.stringMatching(/^20[2-9]\d-/) });
+      expect(lines.every((l) => l.updated_at > '2020-01-02')).toBe(true);
+    });
+
+    it('undoing a learned move made before the merge restores the rule to the surviving category', async () => {
+      const from = category('Fun & Wants', 'Shopping');
+      const into = category('Fun & Wants', 'Gifts');
+      const other = category('Everyday', 'Groceries');
+      db.exec("INSERT INTO rules (id, position, match_text, category_id, learned) VALUES (7, 1, 'target', ?, 1)", other);
+      const before = { position: 1, match_field: 'any', match_text: 'target', account_id: null, category_id: from, kid_id: null, private_member_id: null, ignore_txn: 0, owner_member_id: null, amount_min_cents: null, amount_max_cents: null, learned: 1 };
+      db.exec('INSERT INTO category_moves (id, member_id, rule_id, rule_before, fix_category_id, created_at) VALUES (1, ?, 7, ?, ?, ?)', youId, JSON.stringify(before), other, new Date().toISOString());
+      expect((await api(env, 'POST', `/categories/${from}/merge`, { intoId: into })).status).toBe(200);
+      expect(JSON.parse(db.rows<{ r: string }>('SELECT rule_before AS r FROM category_moves')[0]!.r).category_id).toBe(into);
+      expect((await api(env, 'POST', '/category-moves/1/undo', {})).status).toBe(200);
+      expect(db.rows('SELECT category_id FROM rules WHERE id = 7')).toEqual([{ category_id: into }]);
     });
 
     it('counts only charges you can see', async () => {

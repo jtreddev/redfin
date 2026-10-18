@@ -151,6 +151,29 @@ describe('sub-category roll-ups (API)', () => {
     expect((await planner()).forecast.totals.endBalance).toBe(plannedBefore.forecast.totals.endBalance);
   });
 
+  it('Savings & Planned Costs as a parent: set-asides plus children’s lines stay in totals, check-in and forecast', async () => {
+    const savings = category('Saving', 'Savings & Planned Costs');
+    db.exec("INSERT INTO planned_costs (id, name, start_month) VALUES (1, 'Car', '2026-09')");
+    db.exec("INSERT INTO planned_cost_amounts (planned_cost_id, month, monthly_cents) VALUES (1, '2026-09', 6000)");
+    const savingSection = db.rows<{ id: number }>("SELECT id FROM sections WHERE name = 'Saving'")[0]!.id;
+    db.exec("INSERT INTO categories (section_id, name, kind, sort) VALUES (?, 'Emergency', 'savings', 100)", savingSection);
+    const emergency = category('Saving', 'Emergency');
+    line(emergency, 40000, 'due_day', 5);
+    const before = await budget();
+    const plannedBefore = await planner();
+    db.exec('UPDATE categories SET parent_id = ? WHERE id = ?', savings, emergency);
+    const after = await budget();
+    expect(rowOf(after, savings)).toMatchObject({ computed: 'planned_costs', budgetCents: 46000, plannedCostsCents: 6000 });
+    expect(after.totals).toEqual(before.totals);
+    expect((await planner()).forecast.totals.endBalance).toBe(plannedBefore.forecast.totals.endBalance);
+    const checkin = (await (await api(env, 'GET', '/checkins/2026-10')).json()) as { lines: { categoryId: number; budgetCents: number }[] };
+    expect(checkin.lines.find((l) => l.categoryId === savings)?.budgetCents).toBe(46000);
+
+    // With a hand line too, the hand line and set-asides are the budget (children's lines are inside it).
+    line(savings, 10000);
+    expect(rowOf(await budget(), savings)).toMatchObject({ budgetCents: 16000 });
+  });
+
   it('check-in lines count a parent with its children, and the children not again', async () => {
     line(habits, 3000);
     nest();
@@ -266,8 +289,8 @@ describe('sub-category roll-ups in planned costs', () => {
 
   it('a child with its own cost stays out of its parent’s cost (nested after linking)', async () => {
     const car = category('Everyday', 'Car Upkeep');
-    const gas = category('Everyday', 'Gas');
-    const a = await create('Gas', [gas]);
+    const gas = category('Everyday', 'Household & Personal');
+    const a = await create('Home', [gas]);
     const b = await create('Car', [car]);
     expect((await api(env, 'PATCH', `/categories/${gas}`, { parentId: car })).status).toBe(200);
     db.exec("INSERT INTO transactions (account_id, date, amount_cents, name, source, category_id) VALUES (1, '2026-10-02', -4000, 'SHELL', 'manual', ?)", gas);
@@ -276,7 +299,7 @@ describe('sub-category roll-ups in planned costs', () => {
       categories: { id: number; plannedCostId: number | null }[];
     };
     const balance = (id: number) => body.costs.find((c) => c.id === id)!.balanceCents;
-    // Two months of $50 each (Sep and Oct); the Shell charge comes out of Gas only.
+    // Two months of $50 each (Sep and Oct); the Shell charge comes out of Home only.
     expect(balance(a.body.id)).toBe(10000 - 4000);
     expect(balance(b.body.id)).toBe(10000);
     expect(body.categories.find((c) => c.id === gas)?.plannedCostId).toBe(a.body.id);

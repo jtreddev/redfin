@@ -235,6 +235,7 @@ core.post('/categories', async (c) => {
   if (parentId !== null) {
     const parent = await validParent(db, parentId, null);
     if (requestedSection !== null && requestedSection !== parent.sectionId) throw badRequest('A sub-category is in its parent’s group.');
+    if (isSpecial({ sectionName: parent.sectionName, name })) throw badRequest(`${name} is one the app relies on, so it stays a top-level category.`);
     sectionId = parent.sectionId;
     kind = parent.kind;
   } else {
@@ -281,6 +282,9 @@ core.patch('/categories/:id', async (c) => {
   if (parentId !== null) {
     parent = parentId === category.parentId ? await loadCategoryInfo(db, parentId) : await validParent(db, parentId, id);
     if (!parent) throw badRequest('That parent category doesn’t exist.');
+    if (parentId !== category.parentId && isSpecial(category)) {
+      throw badRequest(`The app relies on ${category.name}, so it stays a top-level category.`);
+    }
     if (parentId !== category.parentId && category.children > 0) {
       throw badRequest(`${category.name} has sub-categories, so it can’t become one.`);
     }
@@ -301,8 +305,9 @@ core.patch('/categories/:id', async (c) => {
   else if (sectionId !== category.sectionId) kind = kindInGroup(await sectionName(db, sectionId), category.kind);
 
   if (crossesIncome(category.kind, kind)) {
+    // Decided on what the viewer can see, so a partner's private charges are never hinted at.
     const charges = await chargesIn(db, id, c.get('viewer').memberId);
-    if (charges.total > 0 && !confirm) {
+    if (charges.visible > 0 && !confirm) {
       return c.json(
         {
           error: `This moves ${category.name} between income and spending, which changes past months’ totals.`,
@@ -358,7 +363,15 @@ core.post('/categories/reorder', async (c) => {
   if (!ids.every((i) => known.has(i))) throw badRequest('Those categories aren’t all in that group.');
   const listed = new Set(ids);
   const order = [...ids, ...siblings.map((s) => s.id).filter((i) => !listed.has(i))];
-  await db.batch(order.map((categoryId, i) => stmt(db, 'UPDATE categories SET sort = ? WHERE id = ?', (i + 1) * 10, categoryId)));
+  // One statement (the D1 free plan caps queries per request): sort = (position + 1) × 10.
+  const json = JSON.stringify(order);
+  await run(
+    db,
+    `UPDATE categories SET sort = (SELECT (CAST(j.key AS INTEGER) + 1) * 10 FROM json_each(?) j WHERE j.value = categories.id)
+      WHERE id IN (SELECT value FROM json_each(?))`,
+    json,
+    json,
+  );
   return c.json({ ok: true });
 });
 
@@ -395,29 +408,28 @@ core.post('/categories/:id/merge', async (c) => {
     if (taken) throw new HttpError(409, `${into.sectionName} already has a category named ${taken.name}. Rename one first.`);
   }
 
-  if (crossesIncome(from.kind, into.kind)) {
-    const charges = await chargesIn(db, id, viewerId);
-    if (charges.total > 0 && !confirm) {
-      return c.json(
-        {
-          error: 'This moves charges between income and spending, which changes past months’ totals.',
-          needsConfirm: true,
-          transactionCount: charges.visible,
-        },
-        409,
-      );
-    }
-  }
-
+  // Decided on what the viewer can see, so a partner's private charges are never hinted at.
+  const charges = crossesIncome(from.kind, into.kind) ? await chargesIn(db, id, viewerId) : null;
+  const needsConfirm = charges !== null && charges.visible > 0;
   const counts = await mergeCounts(db, id, viewerId);
-  if (!preview) {
-    try {
-      await db.batch(mergeStatements(db, id, into));
-    } catch (error) {
-      throw uniqueName(error);
-    }
+  // A preview always answers with the counts; it says whether the merge will need confirming.
+  if (preview) return c.json({ preview, intoId, counts, needsConfirm });
+  if (needsConfirm && !confirm) {
+    return c.json(
+      {
+        error: 'This moves charges between income and spending, which changes past months’ totals.',
+        needsConfirm: true,
+        transactionCount: charges.visible,
+      },
+      409,
+    );
   }
-  return c.json({ preview, intoId, counts });
+  try {
+    await db.batch(mergeStatements(db, id, into, viewerId, nowIso()));
+  } catch (error) {
+    throw uniqueName(error);
+  }
+  return c.json({ preview, intoId, counts, needsConfirm });
 });
 
 const ACCOUNT_SELECT = `SELECT a.id, a.name, a.institution, a.mask, a.type, a.is_cash AS isCash, a.hidden,

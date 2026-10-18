@@ -18,6 +18,9 @@ function numbered(db: D1Database, sql: string, ...values: Param[]): D1PreparedSt
 /**
  * Every column that names a category. A merge re-points each of them; tests/categoriesApi.test.ts
  * fails when the schema has one that isn't listed here (a new table must be added, and handled).
+ * Category ids inside JSON aren't columns and can't be found that way: category_moves.rule_before
+ * (`$.category_id`, the rule a learned move replaced, restored by Undo) is re-pointed separately in
+ * mergeStatements. Any new JSON field holding a category id needs the same.
  */
 export const CATEGORY_REFERENCES: readonly { table: string; column: string }[] = [
   { table: 'budget_lines', column: 'category_id' },
@@ -133,7 +136,7 @@ export async function mergeCounts(db: D1Database, fromId: number, viewerId: numb
  * (taking its group and kind); every other reference is re-pointed; `from` is archived.
  * Run them in one db.batch so they apply together.
  */
-export function mergeStatements(db: D1Database, from: number, into: CategoryInfo): D1PreparedStatement[] {
+export function mergeStatements(db: D1Database, from: number, into: CategoryInfo, viewerId: number, now: string): D1PreparedStatement[] {
   const special: Record<string, D1PreparedStatement[]> = {
     budget_lines: [
       numbered(
@@ -148,13 +151,23 @@ export function mergeStatements(db: D1Database, from: number, into: CategoryInfo
                           THEN due_day END,
            notes = (SELECT CASE WHEN budget_lines.notes IS NULL THEN f.notes WHEN f.notes IS NULL THEN budget_lines.notes
                                 ELSE budget_lines.notes || '; ' || f.notes END
-                      FROM budget_lines f WHERE f.category_id = ?1 AND f.month = budget_lines.month)
+                      FROM budget_lines f WHERE f.category_id = ?1 AND f.month = budget_lines.month),
+           updated_by_member_id = ?3, updated_at = ?4
          WHERE category_id = ?2 AND month IN (SELECT month FROM budget_lines WHERE category_id = ?1)`,
         from,
         into.id,
+        viewerId,
+        now,
       ),
       numbered(db, 'DELETE FROM budget_lines WHERE category_id = ?1 AND month IN (SELECT month FROM budget_lines WHERE category_id = ?2)', from, into.id),
-      numbered(db, 'UPDATE budget_lines SET category_id = ?2 WHERE category_id = ?1', from, into.id),
+      numbered(
+        db,
+        'UPDATE budget_lines SET category_id = ?2, updated_by_member_id = ?3, updated_at = ?4 WHERE category_id = ?1',
+        from,
+        into.id,
+        viewerId,
+        now,
+      ),
     ],
     kid_budgets: [
       numbered(
@@ -192,6 +205,14 @@ export function mergeStatements(db: D1Database, from: number, into: CategoryInfo
   return [
     ...CATEGORY_REFERENCES.flatMap(
       (ref) => special[ref.table] ?? [numbered(db, `UPDATE ${ref.table} SET ${ref.column} = ?2 WHERE ${ref.column} = ?1`, from, into.id)],
+    ),
+    // Not a column: the rule a learned move replaced, kept as JSON for Undo.
+    numbered(
+      db,
+      `UPDATE category_moves SET rule_before = json_set(rule_before, '$.category_id', ?2)
+        WHERE rule_before IS NOT NULL AND json_extract(rule_before, '$.category_id') = ?1`,
+      from,
+      into.id,
     ),
     numbered(db, 'UPDATE categories SET archived = 1 WHERE id = ?1', from),
   ];

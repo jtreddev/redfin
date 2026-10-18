@@ -137,6 +137,8 @@ export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthD
       // Added to the hand budget (other savings), never replacing it.
       computed = 'planned_costs';
       planned = plannedCostsCents;
+      // This row is a planned line, so its children aren't: with no hand line, their lines count here.
+      if (!line) budgetCents += childLines.reduce((total, l) => total + l.budgetCents, 0);
       budgetCents += planned;
     } else if (!line && childLines.length) {
       // Lines only on sub-categories: the parent shows their sum.
