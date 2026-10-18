@@ -31,7 +31,7 @@ trends.get('/trends', async (c) => {
     loadCategories(db),
   ]);
   const entries = ledgerEntries(ledger);
-  const categories = categoryRows.map((r) => ({ id: r.id, name: r.name, section: r.sectionName, funMemberId: r.funMemberId }));
+  const categories = categoryRows.map((r) => ({ id: r.id, name: r.name, section: r.sectionName, funMemberId: r.funMemberId, parentId: r.parentId }));
 
   const all = buildTrends({ entries, categories, months: wide, today });
   const result = shown === wide.length ? all : buildTrends({ entries, categories, months: monthsBack(shown), today });

@@ -43,7 +43,8 @@ budget.get('/budget', async (c) => {
     first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM budget_lines WHERE month = ?', addMonths(month, -1)),
   ]);
   const sum = (kinds: string[], key: 'budgetCents' | 'actualCents') =>
-    data.rows.filter((r) => kinds.includes(r.kind)).reduce((total, r) => total + r[key], 0);
+    // Top-level rows only: a parent's row already holds its sub-categories' money.
+    data.rows.filter((r) => r.parentId === null && kinds.includes(r.kind)).reduce((total, r) => total + r[key], 0);
   return c.json({
     month,
     rows: data.rows,

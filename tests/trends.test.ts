@@ -112,7 +112,7 @@ describe('trends: monthly totals by group', () => {
   it('Loans (debt kind) count as money out in Bills', () => {
     const t = trendsOf([txn('2026-08-15', -32000, 2)]);
     expect(group(t, 'bills')).toEqual([0, 0, 32000, 0, 0]);
-    expect(category(t, 2)).toEqual({ id: 2, name: 'Loans', group: 'bills', byMonth: [0, 0, 32000, 0, 0] });
+    expect(category(t, 2)).toEqual({ id: 2, name: 'Loans', group: 'bills', parentId: null, byMonth: [0, 0, 32000, 0, 0] });
   });
 
   it('counts uncategorized money out separately, never in a group', () => {

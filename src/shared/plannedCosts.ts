@@ -46,6 +46,14 @@ export function spendByCategoryMonth(entries: readonly LedgerEntry[], into: Spen
   return into;
 }
 
+/** These categories plus their sub-categories, each once: linking a parent covers its children. */
+export function withSubcategories(categoryIds: readonly number[], categories: readonly { id: number; parentId: number | null }[]): number[] {
+  const linked = new Set(categoryIds);
+  const out = new Set(categoryIds);
+  for (const c of categories) if (c.parentId !== null && linked.has(c.parentId)) out.add(c.id);
+  return [...out];
+}
+
 /** Spending in these categories from `from` through `to` (months, inclusive). */
 export function spendIn(spend: SpendMap, categoryIds: readonly number[], from: MonthKey, to: MonthKey): Cents {
   let total = 0;

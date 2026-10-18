@@ -37,13 +37,20 @@ export interface BudgetRow {
   timing: Timing;
   dueDay: number | null;
   notes: string | null;
+  /** The parent category when this is a sub-category. Its money is also in the parent's actualCents. */
+  parentId: number | null;
+  /** This category's own money plus its sub-categories'. */
   actualCents: Cents;
   byWeek: Cents[];
+  /** This category's own money, without its sub-categories. */
+  ownActualCents: Cents;
+  ownByWeek: Cents[];
   /**
    * Budget comes from Income & paydays or a fun money allowance rather than a typed line.
    * planned_costs: the hand budget plus this month's planned-cost set-asides (see plannedCostsCents).
+   * children: no line of its own; the budget is the sum of its sub-categories' lines.
    */
-  computed: 'paychecks' | 'fun_money' | 'planned_costs' | null;
+  computed: 'paychecks' | 'fun_money' | 'planned_costs' | 'children' | null;
   /** The part of budgetCents that is planned-cost set-asides (0 except on Saving › Savings & Planned Costs). */
   plannedCostsCents: Cents;
 }
@@ -96,9 +103,22 @@ export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthD
   );
 
   const rows: BudgetRow[] = [];
+  // Sub-categories roll up: a parent's actual is its own plus its children's.
+  const childrenOf = new Map<number, number[]>();
+  for (const c of categories) if (c.parentId != null) childrenOf.set(c.parentId, [...(childrenOf.get(c.parentId) ?? []), c.id]);
+
   for (const c of categories) {
     const line = lineByCategory.get(c.id);
-    const actual = actuals.byCategory.get(c.id);
+    const own = actuals.byCategory.get(c.id);
+    const children = childrenOf.get(c.id) ?? [];
+    const childLines = children.flatMap((id) => lineByCategory.get(id) ?? []);
+    let actual = own;
+    for (const id of children) {
+      const child = actuals.byCategory.get(id);
+      if (!child) continue;
+      const base = actual ?? { totalCents: 0, byWeek: zeros() };
+      actual = { totalCents: base.totalCents + child.totalCents, byWeek: base.byWeek.map((v, i) => v + (child.byWeek[i] ?? 0)) };
+    }
     let computed: BudgetRow['computed'] = null;
     let budgetCents = line?.budgetCents ?? 0;
     let timing: Timing = line?.timing ?? 'even';
@@ -117,9 +137,13 @@ export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthD
       computed = 'planned_costs';
       planned = plannedCostsCents;
       budgetCents += planned;
+    } else if (!line && childLines.length) {
+      // Lines only on sub-categories: the parent shows their sum.
+      computed = 'children';
+      budgetCents = childLines.reduce((total, l) => total + l.budgetCents, 0);
     }
 
-    if (c.archived && !line && !actual) continue;
+    if (c.archived && !line && !actual && !childLines.length) continue;
     rows.push({
       categoryId: c.id,
       name: c.name,
@@ -133,8 +157,11 @@ export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthD
       timing,
       dueDay: line?.dueDay ?? null,
       notes: line?.notes ?? null,
+      parentId: c.parentId,
       actualCents: actual?.totalCents ?? 0,
       byWeek: actual?.byWeek ?? zeros(),
+      ownActualCents: own?.totalCents ?? 0,
+      ownByWeek: own?.byWeek ?? zeros(),
       computed,
       plannedCostsCents: planned,
     });
@@ -233,9 +260,17 @@ export async function buildPlanner(
   const outflowByWeek = weeks.map((_, i) => data.uncategorized.outByWeek[i] ?? 0);
   const lines: ForecastLine[] = [];
 
+  // A planned line is a typed budget (or fun money / planned costs); a parent's sum of its children's
+  // lines isn't one: those children are lines themselves.
+  const isPlanned = (row: BudgetRow) =>
+    row.computed !== 'paychecks' && row.computed !== 'children' && (row.lineId !== null || row.budgetCents > 0);
+  const rowById = new Map(data.rows.map((r) => [r.categoryId, r]));
   for (const row of data.rows) {
     if (row.kind === 'transfer') continue;
-    const planned = row.computed !== 'paychecks' && (row.lineId !== null || row.budgetCents > 0);
+    const parent = row.parentId === null ? undefined : rowById.get(row.parentId);
+    // Already counted in the parent's line.
+    if (parent && isPlanned(parent)) continue;
+    const planned = isPlanned(row);
     if (planned) {
       lines.push({
         id: row.categoryId,
@@ -247,7 +282,8 @@ export async function buildPlanner(
       });
     } else {
       const target = row.kind === 'income' ? incomeByWeek : outflowByWeek;
-      row.byWeek.forEach((v, i) => {
+      // Its own money only: each sub-category adds its own.
+      row.ownByWeek.forEach((v, i) => {
         target[i] = (target[i] ?? 0) + v;
       });
     }
