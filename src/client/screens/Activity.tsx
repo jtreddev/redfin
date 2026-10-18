@@ -1,62 +1,86 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { addMonths, monthOf } from '../../shared/dates';
+import {
+  activityQueryString,
+  effectiveMonth,
+  hasFilters,
+  parseActivityParams,
+  transactionsQuery,
+  type ActivityFilters,
+} from '../../shared/activityQuery';
 import { GROUP_ORDER } from '../../shared/trends';
-import { api, errorMessage, post } from '../api';
-import { monthLabel, weekdayDate } from '../format';
+import { api, del, errorMessage, patch, post } from '../api';
+import { categoryTree } from '../categoryTree';
+import { transactionsCsv } from '../csvExport';
+import { monthLabel, plural, weekdayDate } from '../format';
 import { Icon } from '../icons';
-import { go } from '../router';
+import { replaceRoute } from '../router';
+import { describeSearch, resultSummary } from '../searchHelp';
+import { SHORTCUTS, shortcutFor, step } from '../shortcuts';
 import { categoryName, useApp } from '../state';
 import type { Transaction } from '../types';
 import { AmountInput, Button, CategorySelect, Empty, ErrorNote, Field, KidSelect, Loading, Money, PageHeader, Segmented, Sheet, Toggle } from '../ui';
 import { TransactionSheet } from './TransactionSheet';
 
-const FILTERS = [
-  { value: 'uncategorized', label: 'Needs category' },
-  { value: 'all', label: 'All' },
-  { value: 'private', label: 'My fun money' },
-  { value: 'ignored', label: 'Include left out' },
-];
+type Totals = { count: number; outCents: number; inCents: number };
+type Page = { transactions: Transaction[]; hasMore: boolean; totals?: Totals };
+interface SavedSearch {
+  id: number;
+  name: string;
+  query: string;
+}
+
+const PAGE = 100;
 
 export function Activity({ params }: { params: URLSearchParams }) {
-  const { categories, me, accounts } = useApp();
-  const filter = params.get('filter') ?? 'all';
-  const categoryId = params.get('category');
-  const month = params.get('month');
-  const kidId = params.get('kid');
-  const batch = params.get('batch');
-  const accountId = params.get('account');
-  const group = params.get('group');
+  const { categories, me, accounts, toast, undoLast } = useApp();
+  const filters = useMemo(() => parseActivityParams(params), [params]);
+  const thisMonth = monthOf(me.today);
+  const queryKey = activityQueryString(filters);
+  const power = me.viewer.powerTools;
 
-  const [search, setSearch] = useState('');
-  const [query, setQuery] = useState('');
+  const [search, setSearch] = useState(filters.q);
   const [items, setItems] = useState<Transaction[]>([]);
+  const [totals, setTotals] = useState<Totals | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
-  const [open, setOpen] = useState<Transaction | null>(null);
+  const [open, setOpen] = useState<{ txn: Transaction; focusCategory?: boolean } | null>(null);
   const [adding, setAdding] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [picker, setPicker] = useState<'category' | 'account' | 'kid' | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [focusIndex, setFocusIndex] = useState(-1);
+  const [help, setHelp] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [managing, setManaging] = useState(false);
+  const [saved, setSaved] = useState<SavedSearch[]>([]);
+  const [downloading, setDownloading] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
 
+  function update(next: Partial<ActivityFilters>) {
+    replaceRoute('activity', activityQueryString({ ...filters, ...next }));
+  }
+
+  // The box follows the URL (a saved search, Back); typing updates the URL after a pause.
+  useEffect(() => setSearch((s) => (s.trim() === filters.q.trim() ? s : filters.q)), [filters.q]);
   useEffect(() => {
-    const timer = window.setTimeout(() => setQuery(search.trim()), 300);
+    if (search.trim() === filters.q.trim()) return;
+    const timer = window.setTimeout(() => update({ q: search }), 300);
     return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
   const fetchPage = useCallback(
-    async (offset: number) => {
-      const qs = new URLSearchParams({ limit: '100', offset: String(offset) });
-      if (filter === 'uncategorized') qs.set('uncategorized', '1');
-      if (filter === 'private') qs.set('private', '1');
-      if (filter === 'ignored') qs.set('ignored', '1');
-      if (categoryId) qs.set('categoryId', categoryId);
-      if (month) qs.set('month', month);
-      if (kidId) qs.set('kidId', kidId);
-      if (batch) qs.set('importBatchId', batch);
-      if (accountId) qs.set('accountId', accountId);
-      if (group) qs.set('group', group);
-      if (query) qs.set('q', query);
-      return api<{ transactions: Transaction[]; hasMore: boolean }>(`/transactions?${qs}`);
+    async (offset: number, limit = PAGE) => {
+      const qs = transactionsQuery(filters, thisMonth);
+      qs.set('limit', String(limit));
+      qs.set('offset', String(offset));
+      return api<Page>(`/transactions?${qs}`);
     },
-    [filter, categoryId, month, kidId, batch, accountId, group, query],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [queryKey, thisMonth],
   );
 
   useEffect(() => {
@@ -67,6 +91,7 @@ export function Activity({ params }: { params: URLSearchParams }) {
         if (cancelled) return;
         setItems(res.transactions);
         setHasMore(res.hasMore);
+        setTotals(res.totals ?? null);
         setError(undefined);
       })
       .catch((e) => !cancelled && setError(errorMessage(e)))
@@ -76,10 +101,28 @@ export function Activity({ params }: { params: URLSearchParams }) {
     };
   }, [fetchPage, refreshKey]);
 
+  // A new search starts a new selection and a new place in the list.
+  useEffect(() => {
+    setSelected(new Set());
+    setFocusIndex(-1);
+  }, [queryKey]);
+
+  const loadSaved = useCallback(() => {
+    if (!power) return;
+    api<SavedSearch[]>('/saved-searches')
+      .then(setSaved)
+      .catch(() => undefined);
+  }, [power]);
+  useEffect(loadSaved, [loadSaved]);
+
   async function loadMore() {
-    const res = await fetchPage(items.length);
-    setItems((list) => [...list, ...res.transactions]);
-    setHasMore(res.hasMore);
+    try {
+      const res = await fetchPage(items.length);
+      setItems((list) => [...list, ...res.transactions]);
+      setHasMore(res.hasMore);
+    } catch (e) {
+      toast(errorMessage(e), 'error');
+    }
   }
 
   const groups = useMemo(() => {
@@ -87,20 +130,6 @@ export function Activity({ params }: { params: URLSearchParams }) {
     for (const t of items) map.set(t.date, [...(map.get(t.date) ?? []), t]);
     return [...map.entries()];
   }, [items]);
-
-  function setParam(next: Record<string, string | null>) {
-    const merged: Record<string, string | null> = {
-      filter,
-      category: categoryId,
-      month,
-      kid: kidId,
-      batch,
-      account: accountId,
-      group,
-      ...next,
-    };
-    go('activity', merged);
-  }
 
   function handleChanged(updated: Transaction | null, refreshAll?: boolean) {
     if (refreshAll) {
@@ -113,55 +142,254 @@ export function Activity({ params }: { params: URLSearchParams }) {
 
   function nextUncategorized() {
     if (!open) return;
-    const index = items.findIndex((t) => t.id === open.id);
-    const remaining = items.filter((t) => t.id !== open.id && t.categoryId === null && !t.isSplit && !t.isIgnored && !t.transferPairId);
-    setItems((list) => list.filter((t) => t.id !== open.id || (t.categoryId === null && !t.isIgnored && !t.transferPairId)));
+    const current = open.txn;
+    const index = items.findIndex((t) => t.id === current.id);
+    const remaining = items.filter((t) => t.id !== current.id && t.categoryId === null && !t.isSplit && !t.isIgnored && !t.transferPairId);
+    setItems((list) => list.filter((t) => t.id !== current.id || (t.categoryId === null && !t.isIgnored && !t.transferPairId)));
     const next = remaining.find((t) => items.indexOf(t) > index) ?? remaining[0] ?? null;
-    setOpen(next);
+    setOpen(next ? { txn: next } : null);
   }
 
-  const activeContext = [
-    categoryId && categoryName(categories, Number(categoryId)),
-    month && monthLabel(month),
-    kidId && me.kids.find((k) => String(k.id) === kidId)?.name,
-    batch && 'One import',
-    accountId && accounts.find((a) => String(a.id) === accountId)?.name,
-    group && (GROUP_ORDER.find((g) => g.key === group)?.name ?? group),
-  ].filter(Boolean);
+  function toggle(id: number) {
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  // Power tools: keyboard shortcuts on a computer. Never while typing, and not behind an open sheet.
+  const keyState = useRef({ items, focusIndex, selecting });
+  keyState.current = { items, focusIndex, selecting };
+  useEffect(() => {
+    if (!power) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!window.matchMedia('(min-width: 900px)').matches) return;
+      const action = shortcutFor({ key: e.key, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, target: e.target as HTMLElement | null });
+      if (!action) return;
+      if (document.querySelector('.sheet')) return;
+      const { items: list, focusIndex: at, selecting: inSelect } = keyState.current;
+      e.preventDefault();
+      if (action === 'search') {
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      } else if (action === 'help') {
+        setHelp(true);
+      } else if (action === 'undo') {
+        if (!undoLast()) toast('Nothing to undo right now');
+      } else if (action === 'next' || action === 'previous') {
+        const next = step(at, list.length, action);
+        setFocusIndex(next);
+        const t = list[next];
+        if (t) document.getElementById(`txn-${t.id}`)?.focus();
+      } else {
+        const t = list[at];
+        if (!t) {
+          toast('Press j to pick a charge first');
+          return;
+        }
+        if (action === 'category') {
+          setOpen({ txn: t, focusCategory: true });
+        } else if (action === 'select') {
+          if (!inSelect) setSelecting(true);
+          toggle(t.id);
+          window.setTimeout(() => document.getElementById(`txn-${t.id}`)?.focus(), 0);
+        }
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [power, toast, undoLast]);
+
+  async function downloadCsv() {
+    setDownloading(true);
+    try {
+      const all: Transaction[] = [];
+      for (let page = 0; page < 50; page++) {
+        const res = await fetchPage(all.length, 200);
+        all.push(...res.transactions);
+        if (!res.hasMore) break;
+      }
+      const blob = new Blob([transactionsCsv(all, categories, me.kids)], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `charges-${me.today}.csv`;
+      document.body.append(a);
+      a.click();
+      a.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast(totals && totals.count > all.length ? `Downloaded the first ${all.length} of ${totals.count}` : `Downloaded ${plural(all.length, 'charge')}`);
+    } catch (e) {
+      toast(errorMessage(e), 'error');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  const month = effectiveMonth(filters, thisMonth);
+  const searchHelp = describeSearch(search);
+  const chips = activeChips(filters, {
+    category: (id) => categoryName(categories, id),
+    account: (id) => accounts.find((a) => a.id === id)?.name ?? 'An account',
+    kid: (id) => me.kids.find((k) => k.id === id)?.name ?? 'A kid',
+  });
+  const savedActive = saved.find((s) => s.query === queryKey);
+  const selectedItems = items.filter((t) => selected.has(t.id));
 
   return (
-    <div className="stack">
-      <PageHeader title="Activity" />
-      <input
-        type="search"
-        aria-label="Search transactions"
-        placeholder="Search descriptions and notes"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-      />
-      <div className="chips" role="group" aria-label="Show">
-        {FILTERS.map((f) => (
-          <button
-            key={f.value}
-            type="button"
-            aria-pressed={filter === f.value}
-            className={`filter-chip ${filter === f.value ? 'active' : ''}`}
-            onClick={() => setParam({ filter: f.value })}
+    <div className={`stack ${selecting ? 'is-selecting' : ''}`}>
+      <PageHeader
+        title="Activity"
+        action={
+          <Button
+            small
+            pressed={selecting}
+            onClick={() => {
+              setSelecting((v) => !v);
+              setSelected(new Set());
+            }}
           >
-            {f.label}
-          </button>
-        ))}
-      </div>
-      {activeContext.length > 0 && (
-        <div className="banner">
-          <span>
-            Showing {activeContext.join(', ')}
-            {/* Fun & Wants includes each person's fun money; only the viewer's own shows up here. */}
-            {group === 'fun' && <span className="block muted">Your partner’s fun money isn’t listed.</span>}
-          </span>
-          <Button small variant="ghost" onClick={() => go('activity', { filter })}>
-            Clear
+            {selecting ? 'Done' : 'Select'}
           </Button>
+        }
+      />
+
+      {power && saved.length > 0 && (
+        <div className="chips saved-searches" role="group" aria-label="Saved searches">
+          {saved.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className={`filter-chip ${savedActive?.id === s.id ? 'active' : ''}`}
+              aria-pressed={savedActive?.id === s.id}
+              onClick={() => replaceRoute('activity', savedActive?.id === s.id ? '' : s.query)}
+            >
+              <Icon name="bookmark" />
+              {s.name}
+            </button>
+          ))}
+          <button type="button" className="filter-chip filter-chip-quiet" onClick={() => setManaging(true)}>
+            Edit saved
+          </button>
+        </div>
+      )}
+
+      <div className="search-box">
+        <Icon name="search" />
+        <input
+          ref={searchRef}
+          type="search"
+          aria-label="Search charges"
+          aria-describedby="search-help"
+          placeholder="Search, or an amount like 45 or >100"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && search) {
+              e.preventDefault();
+              setSearch('');
+            }
+          }}
+        />
+      </div>
+      <p id="search-help" className="muted small search-help">
+        {searchHelp ?? 'Searches descriptions, merchants, notes, categories and amounts.'}
+      </p>
+
+      <div className="month-row">
+        <div className="month-picker">
+          {/* From All time, ‹ starts at this month. */}
+          <button type="button" className="icon-btn" onClick={() => update({ month: month ? addMonths(month, -1) : thisMonth })} aria-label={month ? 'Previous month' : 'This month'}>
+            <Icon name="back" />
+          </button>
+          <strong aria-live="polite">{month ? monthLabel(month) : 'All time'}</strong>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => month && update({ month: addMonths(month, 1) })}
+            aria-label="Next month"
+            disabled={month === null || month >= thisMonth}
+          >
+            <Icon name="forward" />
+          </button>
+        </div>
+        {month !== null && (
+          <button type="button" className="filter-chip" onClick={() => update({ month: 'all' })}>
+            All time
+          </button>
+        )}
+      </div>
+
+      <div className="chips" role="group" aria-label="Filters">
+        <FilterChip label="Category" active={filters.categoryIds.length > 0} onClick={() => setPicker('category')} menu />
+        <FilterChip label="Account" active={filters.accountId !== null} onClick={() => setPicker('account')} menu />
+        {me.kids.length > 0 && <FilterChip label="Kid" active={filters.kidId !== null} onClick={() => setPicker('kid')} menu />}
+        <FilterChip label="Needs a look" active={filters.needsLook} onClick={() => update({ needsLook: !filters.needsLook })} />
+        <FilterChip label="Private" active={filters.private} onClick={() => update({ private: !filters.private })} />
+        <FilterChip label="Left out" active={filters.leftOut} onClick={() => update({ leftOut: !filters.leftOut })} />
+      </div>
+
+      {chips.length > 0 && (
+        <div className="active-filters" role="group" aria-label="Filters in use">
+          {chips.map((chip) => (
+            <span key={chip.key} className="removable-chip">
+              <span>{chip.label}</span>
+              <button type="button" aria-label={`Remove filter: ${chip.label}`} onClick={() => update(chip.remove)}>
+                <Icon name="close" />
+              </button>
+            </span>
+          ))}
+          {hasFilters(filters) && (
+            <Button
+              small
+              variant="ghost"
+              onClick={() => {
+                setSearch('');
+                replaceRoute('activity', filters.month ? `month=${filters.month}` : '');
+              }}
+            >
+              Clear all
+            </Button>
+          )}
+        </div>
+      )}
+      {filters.group === 'fun' && <p className="muted small">Your partner’s fun money isn’t listed.</p>}
+
+      <div className="result-bar">
+        <p className="result-summary" aria-live="polite">
+          {totals ? resultSummary(totals) : loading ? 'Looking…' : ''}
+        </p>
+        {power && (
+          <div className="cluster">
+            {hasFilters(filters) && !savedActive && (
+              <Button small variant="ghost" onClick={() => setSaving(true)}>
+                <Icon name="bookmark" />
+                Save search
+              </Button>
+            )}
+            <Button small variant="ghost" onClick={() => void downloadCsv()} disabled={downloading || !totals?.count}>
+              <Icon name="export" />
+              {downloading ? 'Preparing…' : 'Download CSV'}
+            </Button>
+          </div>
+        )}
+      </div>
+      {items.some((t) => t.isSplit) && (filters.categoryIds.length > 0 || filters.q) && (
+        <p className="muted small">Totals count a split charge’s whole amount when one of its parts matches.</p>
+      )}
+
+      {selecting && (
+        <div className="cluster select-tools">
+          <Button small variant="ghost" onClick={() => setSelected(new Set(items.map((t) => t.id)))} disabled={!items.length}>
+            Select all {items.length} shown
+          </Button>
+          {selected.size > 0 && (
+            <Button small variant="ghost" onClick={() => setSelected(new Set())}>
+              Unselect all
+            </Button>
+          )}
         </div>
       )}
 
@@ -169,8 +397,14 @@ export function Activity({ params }: { params: URLSearchParams }) {
       {loading && !items.length ? (
         <Loading />
       ) : !items.length ? (
-        <Empty title={filter === 'uncategorized' ? 'All sorted!' : 'Nothing here yet'}>
-          {filter === 'uncategorized' ? 'Every transaction has a home.' : 'Connect a bank or import a file from More › Accounts.'}
+        <Empty title={filters.needsLook && !hasOtherFilters(filters) ? 'All sorted!' : 'Nothing found'}>
+          {filters.needsLook && !hasOtherFilters(filters)
+            ? 'Every charge has a home.'
+            : month
+              ? 'Try All time, or fewer filters.'
+              : hasFilters(filters)
+                ? 'Try fewer filters or other words.'
+                : 'Connect a bank or import a file from More › Accounts.'}
         </Empty>
       ) : (
         <div className="list">
@@ -178,7 +412,15 @@ export function Activity({ params }: { params: URLSearchParams }) {
             <Fragment key={date}>
               <div className="date-heading">{weekdayDate(date)}</div>
               {txns.map((t) => (
-                <TransactionRow key={t.id} t={t} onClick={() => setOpen(t)} />
+                <TransactionRow
+                  key={t.id}
+                  t={t}
+                  selecting={selecting}
+                  checked={selected.has(t.id)}
+                  onToggle={() => toggle(t.id)}
+                  onFocus={() => setFocusIndex(items.indexOf(t))}
+                  onClick={() => setOpen({ txn: t })}
+                />
               ))}
             </Fragment>
           ))}
@@ -190,16 +432,34 @@ export function Activity({ params }: { params: URLSearchParams }) {
         </Button>
       )}
 
-      <button type="button" className="fab" aria-label="Add a transaction" onClick={() => setAdding(true)}>
-        <Icon name="plus" />
-      </button>
+      {!selecting && (
+        <button type="button" className="fab" aria-label="Add a transaction" onClick={() => setAdding(true)}>
+          <Icon name="plus" />
+        </button>
+      )}
+
+      {selecting && selectedItems.length > 0 && (
+        <BulkBar
+          items={selectedItems}
+          onDone={() => {
+            setSelected(new Set());
+            setRefreshKey((k) => k + 1);
+          }}
+          onUndone={() => setRefreshKey((k) => k + 1)}
+        />
+      )}
 
       {open && (
         <TransactionSheet
-          txn={open}
-          onClose={() => setOpen(null)}
+          txn={open.txn}
+          focusCategory={open.focusCategory}
+          onClose={() => {
+            const id = open.txn.id;
+            setOpen(null);
+            if (power) window.setTimeout(() => document.getElementById(`txn-${id}`)?.focus(), 0);
+          }}
           onChanged={handleChanged}
-          onNext={filter === 'uncategorized' ? nextUncategorized : undefined}
+          onNext={filters.needsLook ? nextUncategorized : undefined}
         />
       )}
       {adding && (
@@ -211,16 +471,98 @@ export function Activity({ params }: { params: URLSearchParams }) {
           }}
         />
       )}
+      {picker === 'category' && (
+        <CategoryFilterSheet value={filters.categoryIds} onClose={() => setPicker(null)} onChange={(ids) => update({ categoryIds: ids })} />
+      )}
+      {picker === 'account' && (
+        <ChoiceSheet
+          title="Account"
+          value={filters.accountId}
+          options={accounts.filter((a) => !a.hidden || a.id === filters.accountId).map((a) => ({ id: a.id, label: a.name }))}
+          onClose={() => setPicker(null)}
+          onChange={(id) => update({ accountId: id })}
+        />
+      )}
+      {picker === 'kid' && (
+        <ChoiceSheet
+          title="Kid"
+          value={filters.kidId}
+          options={me.kids.map((k) => ({ id: k.id, label: k.name }))}
+          onClose={() => setPicker(null)}
+          onChange={(id) => update({ kidId: id })}
+        />
+      )}
+      {help && <ShortcutsSheet onClose={() => setHelp(false)} />}
+      {saving && (
+        <SaveSearchSheet
+          query={queryKey}
+          onClose={() => setSaving(false)}
+          onSaved={() => {
+            setSaving(false);
+            loadSaved();
+          }}
+        />
+      )}
+      {managing && <ManageSavedSheet saved={saved} onClose={() => setManaging(false)} onChanged={loadSaved} />}
     </div>
   );
 }
 
-function TransactionRow({ t, onClick }: { t: Transaction; onClick: () => void }) {
+const hasOtherFilters = (f: ActivityFilters) => hasFilters({ ...f, needsLook: false });
+
+function FilterChip({ label, active, onClick, menu }: { label: string; active: boolean; onClick: () => void; menu?: boolean }) {
+  return (
+    <button
+      type="button"
+      className={`filter-chip ${active ? 'active' : ''}`}
+      aria-pressed={menu ? undefined : active}
+      aria-haspopup={menu ? 'dialog' : undefined}
+      onClick={onClick}
+    >
+      {active && <Icon name="check" />}
+      {label}
+      {active && <span className="sr-only"> (on)</span>}
+    </button>
+  );
+}
+
+/** One removable chip per filter in use. */
+function activeChips(
+  f: ActivityFilters,
+  names: { category: (id: number) => string; account: (id: number) => string; kid: (id: number) => string },
+): { key: string; label: string; remove: Partial<ActivityFilters> }[] {
+  const chips: { key: string; label: string; remove: Partial<ActivityFilters> }[] = [];
+  for (const id of f.categoryIds) chips.push({ key: `c${id}`, label: names.category(id), remove: { categoryIds: f.categoryIds.filter((c) => c !== id) } });
+  if (f.accountId) chips.push({ key: 'a', label: names.account(f.accountId), remove: { accountId: null } });
+  if (f.kidId) chips.push({ key: 'k', label: names.kid(f.kidId), remove: { kidId: null } });
+  if (f.needsLook) chips.push({ key: 'n', label: 'Needs a look', remove: { needsLook: false } });
+  if (f.private) chips.push({ key: 'p', label: 'Private', remove: { private: false } });
+  if (f.leftOut) chips.push({ key: 'l', label: 'Left out', remove: { leftOut: false } });
+  if (f.group) chips.push({ key: 'g', label: GROUP_ORDER.find((g) => g.key === f.group)?.name ?? f.group, remove: { group: null } });
+  if (f.batch) chips.push({ key: 'b', label: 'One import', remove: { batch: null } });
+  return chips;
+}
+
+function TransactionRow({
+  t,
+  onClick,
+  selecting,
+  checked,
+  onToggle,
+  onFocus,
+}: {
+  t: Transaction;
+  onClick: () => void;
+  selecting: boolean;
+  checked: boolean;
+  onToggle: () => void;
+  onFocus: () => void;
+}) {
   const { categories, me } = useApp();
   const kid = me.kids.find((k) => k.id === t.kidId);
   const needsCategory = t.categoryId === null && !t.isSplit && !t.isIgnored && !t.transferPairId;
-  return (
-    <button type="button" className="row row-button" onClick={onClick}>
+  const content = (
+    <>
       <div className="row-main">
         <div className="row-title">
           {t.isPrivate && (
@@ -248,7 +590,303 @@ function TransactionRow({ t, onClick }: { t: Transaction; onClick: () => void })
         </div>
       </div>
       <Money cents={t.amountCents} signed={t.amountCents > 0} tone={t.amountCents > 0 ? 'good' : t.isIgnored ? 'muted' : undefined} />
+    </>
+  );
+  if (selecting) {
+    return (
+      <label className={`row row-button select-row ${checked ? 'is-selected' : ''}`}>
+        <input id={`txn-${t.id}`} type="checkbox" checked={checked} onChange={onToggle} onFocus={onFocus} />
+        {content}
+      </label>
+    );
+  }
+  return (
+    <button id={`txn-${t.id}`} type="button" className="row row-button" onClick={onClick} onFocus={onFocus}>
+      {content}
     </button>
+  );
+}
+
+/** Bulk changes to the selected charges: one request, one Undo. */
+function BulkBar({ items, onDone, onUndone }: { items: Transaction[]; onDone: () => void; onUndone: () => void }) {
+  const { me, accounts, categories, toast } = useApp();
+  const [busy, setBusy] = useState(false);
+  // "Mark private" is for your own spending: money out on your card or a shared account, never a partner's card.
+  const ownable = items.filter((t) => {
+    const owner = accounts.find((a) => a.id === t.accountId)?.ownerMemberId ?? null;
+    return t.amountCents < 0 && !t.isSplit && (owner === null || owner === me.viewer.memberId);
+  });
+
+  async function apply(set: Record<string, unknown>, ids: number[], done: (n: number) => string) {
+    if (!ids.length) return;
+    setBusy(true);
+    try {
+      const res = await post<{ updated: number; skipped: number; moveId: number | null }>('/transactions/bulk', { ids, set });
+      const skipped = items.length - res.updated;
+      const text = `${done(res.updated)}${skipped > 0 ? ` (${skipped} left as they were)` : ''}`;
+      toast(text, 'ok', {
+        action: res.moveId
+          ? {
+              label: 'Undo',
+              run: () => {
+                post<{ restored: number }>(`/category-moves/${res.moveId}/undo`)
+                  .then((r) => {
+                    toast(`Undone: ${plural(r.restored, 'charge')} put back`);
+                    onUndone();
+                  })
+                  .catch((error: unknown) => toast(errorMessage(error), 'error'));
+              },
+            }
+          : undefined,
+        durationMs: 8000,
+      });
+      onDone();
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const ids = items.map((t) => t.id);
+  return (
+    <div className="bulk-bar" role="region" aria-label="Change the selected charges">
+      <strong>{plural(items.length, 'selected', 'selected')}</strong>
+      <div className="bulk-actions">
+        <label className="sr-only" htmlFor="bulk-category">
+          Set category
+        </label>
+        <CategorySelect
+          id="bulk-category"
+          value={null}
+          noneLabel="Set category…"
+          allowNew={false}
+          disabled={busy}
+          onChange={(id) => id && void apply({ categoryId: id }, ids, (n) => `${plural(n, 'charge')} moved to ${categoryName(categories, id)}`)}
+        />
+        {me.kids.length > 0 && (
+          <>
+            <label className="sr-only" htmlFor="bulk-kid">
+              Set kid
+            </label>
+            <select
+              id="bulk-kid"
+              value=""
+              disabled={busy}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) return;
+                const kidId = v === 'none' ? null : Number(v);
+                void apply({ kidId }, ids, (n) => (kidId ? `${plural(n, 'charge')} tagged ${me.kids.find((k) => k.id === kidId)?.name}` : `Kid cleared on ${plural(n, 'charge')}`));
+              }}
+            >
+              <option value="">Set kid…</option>
+              {me.kids.map((k) => (
+                <option key={k.id} value={k.id}>
+                  {k.name}
+                </option>
+              ))}
+              <option value="none">No kid</option>
+            </select>
+          </>
+        )}
+        <Button
+          small
+          disabled={busy || !ownable.length}
+          onClick={() => void apply({ isPrivate: true }, ownable.map((t) => t.id), (n) => `${plural(n, 'charge')} now private to you`)}
+        >
+          <Icon name="lock" />
+          Mark private
+        </Button>
+        <Button small disabled={busy} onClick={() => void apply({ isIgnored: true }, ids, (n) => `${plural(n, 'charge')} left out of the budget`)}>
+          Leave out
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function CategoryFilterSheet({ value, onClose, onChange }: { value: number[]; onClose: () => void; onChange: (ids: number[]) => void }) {
+  const { categories, sections, me } = useApp();
+  const [picked, setPicked] = useState<number[]>(value);
+  const tree = categoryTree(sections, categories, (c) => (!c.archived || value.includes(c.id)) && (c.funMemberId === null || c.funMemberId === me.viewer.memberId));
+  const flip = (id: number) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+  return (
+    <Sheet open onClose={onClose} title="Categories">
+      <p className="muted small">Pick one or more. A category includes its sub-categories.</p>
+      {tree.map((g) => (
+        <fieldset key={g.section.id} className="plain-fieldset check-group">
+          <legend className="h3">{g.section.name}</legend>
+          {g.nodes.map((n) => (
+            <Fragment key={n.category.id}>
+              <label className="check-row">
+                <input type="checkbox" checked={picked.includes(n.category.id)} onChange={() => flip(n.category.id)} />
+                <span>{n.category.name}</span>
+              </label>
+              {n.children.map((k) => (
+                <label key={k.id} className="check-row check-child">
+                  <input type="checkbox" checked={picked.includes(k.id) || picked.includes(n.category.id)} disabled={picked.includes(n.category.id)} onChange={() => flip(k.id)} />
+                  <span>{k.name}</span>
+                </label>
+              ))}
+            </Fragment>
+          ))}
+        </fieldset>
+      ))}
+      <div className="sheet-actions">
+        <Button
+          variant="primary"
+          onClick={() => {
+            onChange(picked);
+            onClose();
+          }}
+        >
+          Show {picked.length ? plural(picked.length, 'category', 'categories') : 'every category'}
+        </Button>
+        {picked.length > 0 && (
+          <Button variant="ghost" onClick={() => setPicked([])}>
+            Clear
+          </Button>
+        )}
+      </div>
+    </Sheet>
+  );
+}
+
+function ChoiceSheet({
+  title,
+  value,
+  options,
+  onClose,
+  onChange,
+}: {
+  title: string;
+  value: number | null;
+  options: { id: number; label: string }[];
+  onClose: () => void;
+  onChange: (id: number | null) => void;
+}) {
+  const pick = (id: number | null) => {
+    onChange(id);
+    onClose();
+  };
+  return (
+    <Sheet open onClose={onClose} title={title}>
+      <fieldset className="plain-fieldset check-group">
+        <legend className="sr-only">{title}</legend>
+        <label className="check-row">
+          <input type="radio" name={title} checked={value === null} onChange={() => pick(null)} />
+          <span>Any {title.toLowerCase()}</span>
+        </label>
+        {options.map((o) => (
+          <label key={o.id} className="check-row">
+            <input type="radio" name={title} checked={value === o.id} onChange={() => pick(o.id)} />
+            <span>{o.label}</span>
+          </label>
+        ))}
+      </fieldset>
+    </Sheet>
+  );
+}
+
+function ShortcutsSheet({ onClose }: { onClose: () => void }) {
+  return (
+    <Sheet open onClose={onClose} title="Keyboard shortcuts">
+      <dl className="shortcut-list">
+        {SHORTCUTS.map((s) => (
+          <div key={s.keys}>
+            <dt>
+              <kbd>{s.keys}</kbd>
+            </dt>
+            <dd>{s.text}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="muted small">They don’t fire while you’re typing in a box. Turn them off with Settings › Show more tools.</p>
+    </Sheet>
+  );
+}
+
+function SaveSearchSheet({ query, onClose, onSaved }: { query: string; onClose: () => void; onSaved: () => void }) {
+  const { toast } = useApp();
+  const [name, setName] = useState('');
+  async function save() {
+    try {
+      await post('/saved-searches', { name: name.trim(), query });
+      toast(`Saved “${name.trim()}”`);
+      onSaved();
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    }
+  }
+  return (
+    <Sheet open onClose={onClose} title="Save this search">
+      <form
+        className="stack-sm"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (name.trim()) void save();
+        }}
+      >
+        <Field label="Name" hint="It shows as a chip at the top of Activity, just for you.">
+          <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} autoFocus placeholder="e.g. Gas this year" />
+        </Field>
+        <Button type="submit" variant="primary" disabled={!name.trim()}>
+          Save
+        </Button>
+      </form>
+    </Sheet>
+  );
+}
+
+function ManageSavedSheet({ saved, onClose, onChanged }: { saved: SavedSearch[]; onClose: () => void; onChanged: () => void }) {
+  const { toast } = useApp();
+  const [names, setNames] = useState<Record<number, string>>(Object.fromEntries(saved.map((s) => [s.id, s.name])));
+  async function rename(s: SavedSearch) {
+    const name = names[s.id]?.trim();
+    if (!name || name === s.name) return;
+    try {
+      await patch(`/saved-searches/${s.id}`, { name });
+      toast('Renamed');
+      onChanged();
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    }
+  }
+  async function remove(s: SavedSearch) {
+    try {
+      await del(`/saved-searches/${s.id}`);
+      toast(`Deleted “${s.name}”`);
+      onChanged();
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    }
+  }
+  return (
+    <Sheet open onClose={onClose} title="Saved searches">
+      {saved.length === 0 && <p className="muted">None left. Search or filter, then “Save search”.</p>}
+      {saved.map((s) => (
+        <form
+          key={s.id}
+          className="inline-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void rename(s);
+          }}
+        >
+          <label className="sr-only" htmlFor={`saved-${s.id}`}>
+            Name of {s.name}
+          </label>
+          <input id={`saved-${s.id}`} value={names[s.id] ?? ''} onChange={(e) => setNames((n) => ({ ...n, [s.id]: e.target.value }))} maxLength={60} />
+          <Button type="submit" small disabled={!names[s.id]?.trim() || names[s.id]?.trim() === s.name}>
+            Rename
+          </Button>
+          <Button small variant="danger" onClick={() => void remove(s)}>
+            Delete
+          </Button>
+        </form>
+      ))}
+    </Sheet>
   );
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, del, errorMessage, patch, post, put } from '../api';
 import { money, plural, weekdayDate } from '../format';
 import { useApp } from '../state';
@@ -10,8 +10,11 @@ export function TransactionSheet({
   onClose,
   onChanged,
   onNext,
+  focusCategory,
 }: {
   txn: Transaction;
+  /** Put focus on the category picker (the `c` shortcut). */
+  focusCategory?: boolean;
   onClose: () => void;
   /** Called with the updated row, or null when it was removed. */
   onChanged: (updated: Transaction | null, refreshAll?: boolean) => void;
@@ -22,11 +25,36 @@ export function TransactionSheet({
   const [notes, setNotes] = useState(txn.notes ?? '');
   const [busy, setBusy] = useState(false);
   const [splitting, setSplitting] = useState(false);
+  const [similar, setSimilar] = useState<{ count: number; merchant: string } | null>(null);
+  const [alsoFile, setAlsoFile] = useState(false);
+  const [similarTick, setSimilarTick] = useState(0);
+  const categoryRef = useRef<HTMLSelectElement>(null);
+
+  useEffect(() => {
+    if (focusCategory) categoryRef.current?.focus();
+  }, [focusCategory, txn.id]);
+
+  // How many other charges "also file" would move, for the category it has now (or none yet).
+  useEffect(() => {
+    if (t.isSplit) {
+      setSimilar(null);
+      return;
+    }
+    let cancelled = false;
+    const qs = t.categoryId ? `?categoryId=${t.categoryId}` : '';
+    api<{ count: number; merchant: string }>(`/transactions/${t.id}/similar${qs}`)
+      .then((res) => !cancelled && setSimilar(res))
+      .catch(() => !cancelled && setSimilar(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [t.id, t.categoryId, t.isSplit, similarTick]);
 
   useEffect(() => {
     setT(txn);
     setNotes(txn.notes ?? '');
     setSplitting(false);
+    setAlsoFile(false);
     if (txn.transferPairId) {
       api<Transaction>(`/transactions/${txn.id}`)
         .then(setT)
@@ -40,7 +68,11 @@ export function TransactionSheet({
       const res = await patch<{ transaction: Transaction | null; move: CategoryMove | null }>(`/transactions/${t.id}`, body);
       if (res.transaction) setT(res.transaction);
       onChanged(res.transaction, !!res.move?.moved);
-      if (res.move) showMove({ ...res.move, tappedId: t.id });
+      if (res.move) {
+        showMove({ ...res.move, tappedId: t.id });
+        setAlsoFile(false);
+        setSimilarTick((n) => n + 1);
+      }
     } catch (error) {
       toast(errorMessage(error), 'error');
     } finally {
@@ -50,7 +82,7 @@ export function TransactionSheet({
 
   /** "Moved 41 Shell charges to Habits · Undo". Undo may run after the sheet has closed. */
   function showMove(move: CategoryMove & { tappedId: number }) {
-    const merchant = t.merchantName ?? move.merchant;
+    const merchant = merchantLabel(t, move.merchant);
     const text = move.moved
       ? `Moved ${plural(move.moved, `${merchant} charge`)} to ${move.categoryName}`
       : `${merchant} goes to ${move.categoryName} from now on`;
@@ -63,6 +95,7 @@ export function TransactionSheet({
               onChanged(null, true);
               void reload();
               toast('Undone');
+              setSimilarTick((n) => n + 1);
               // Undo put the tapped charge back too; show that if the sheet is still open.
               api<Transaction>(`/transactions/${move.tappedId}`)
                 .then((restored) => setT((current) => (current.id === restored.id ? restored : current)))
@@ -123,9 +156,39 @@ export function TransactionSheet({
       )}
 
       {!t.isSplit && (
-        <Field label="Category" hint={categoryHint(t)}>
-          <CategorySelect value={t.categoryId} onChange={(id) => void update(id === null ? { categoryId: id } : { categoryId: id, alsoSimilar: true })} />
-        </Field>
+        <div className="stack-sm">
+          <Field label="Category" hint={categoryHint(t)}>
+            <CategorySelect
+              selectRef={categoryRef}
+              value={t.categoryId}
+              // One charge only, unless "Also file…" is ticked.
+              onChange={(id) => void update(id === null ? { categoryId: null } : { categoryId: id, alsoSimilar: alsoFile })}
+            />
+          </Field>
+          {similar && similar.count > 0 && (
+            <label className="check-row also-file">
+              <input
+                type="checkbox"
+                checked={alsoFile}
+                disabled={busy}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setAlsoFile(on);
+                  // Ticked after a category is picked: file the others now. Before: it applies with the pick.
+                  if (on && t.categoryId !== null) void update({ categoryId: t.categoryId, alsoSimilar: true });
+                }}
+              />
+              <span>
+                Also file {plural(similar.count, `other ${merchantLabel(t, similar.merchant)} charge`)} this way, and new ones
+              </span>
+            </label>
+          )}
+          {t.categoryId !== null && (
+            <a className="edit-link small" href={`#/more/categories?id=${t.categoryId}`}>
+              Edit category
+            </a>
+          )}
+        </div>
       )}
 
 
@@ -380,4 +443,10 @@ function categoryHint(t: Transaction): string | undefined {
   if (t.categoryId === null) return undefined;
   if (t.categorySource === 'user') return 'Set by you';
   return t.categoryReason ?? undefined;
+}
+
+/** "Shell" for "SHELL": the charge's merchant name when it has one, else the learned key in title case. */
+function merchantLabel(t: Transaction, key: string): string {
+  if (t.merchantName) return t.merchantName;
+  return key.toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase());
 }

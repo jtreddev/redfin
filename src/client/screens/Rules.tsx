@@ -138,29 +138,43 @@ function RuleSheet({ rule, onClose, onSaved }: { rule: RuleItem | null; onClose:
   const [accountId, setAccountId] = useState<number | null>(rule?.accountId ?? null);
   const [ignore, setIgnore] = useState(rule?.ignore ?? false);
   const [isPrivate, setPrivate] = useState(rule?.isPrivate ?? false);
-  const [preview, setPreview] = useState<{ count: number; examples: { id: number; date: string; name: string; amountCents: number }[] } | null>(null);
+  const { me } = useApp();
+  const power = me.viewer.powerTools;
+  const [preview, setPreview] = useState<{ count: number; wouldChange: number; sample: { id: number; date: string; name: string; amountCents: number }[] } | null>(null);
+  const [applyToPast, setApplyToPast] = useState(true);
 
+  // A dry run of the rule as it stands in the form: what it matches, and what saving would change.
   useEffect(() => {
     if (matchText.trim().length < 2) {
       setPreview(null);
       return;
     }
     const timer = window.setTimeout(() => {
-      post<typeof preview>('/rules/preview', { matchText, matchField, accountId })
+      post<NonNullable<typeof preview>>('/rules/preview', {
+        matchText,
+        matchField,
+        ruleId: rule?.id,
+        accountId: accountId ?? undefined,
+        categoryId: ignore || isPrivate ? undefined : (categoryId ?? undefined),
+        kidId: kidId ?? undefined,
+        ignore,
+        isPrivate: rule ? undefined : isPrivate,
+      })
         .then(setPreview)
         .catch(() => setPreview(null));
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [matchText, matchField, accountId]);
+  }, [matchText, matchField, accountId, categoryId, kidId, ignore, isPrivate, rule]);
 
   async function save() {
+    const applyToExisting = power ? applyToPast : true;
     try {
       if (rule) {
-        const res = await patch<{ updated: number }>(`/rules/${rule.id}`, { matchText, matchField, categoryId, kidId, accountId, ignore });
-        toast(`Saved · ${plural(res.updated, 'transaction')} updated`);
+        const res = await patch<{ updated: number }>(`/rules/${rule.id}`, { matchText, matchField, categoryId, kidId, accountId, ignore, applyToExisting });
+        toast(applyToExisting ? `Saved · ${plural(res.updated, 'charge')} changed` : 'Saved · past charges left as they were');
       } else {
-        const res = await post<{ updated: number }>('/rules', { matchText, matchField, categoryId, kidId, accountId, ignore, isPrivate });
-        toast(`Rule added · ${plural(res.updated, 'transaction')} updated`);
+        const res = await post<{ updated: number }>('/rules', { matchText, matchField, categoryId, kidId, accountId, ignore, isPrivate, applyToExisting });
+        toast(applyToExisting ? `Rule added · ${plural(res.updated, 'charge')} changed` : 'Rule added · it applies to new charges');
       }
       await onSaved();
     } catch (error) {
@@ -193,14 +207,18 @@ function RuleSheet({ rule, onClose, onSaved }: { rule: RuleItem | null; onClose:
         ]}
       />
       {preview && (
-        <div className="banner">
+        <div className="banner rule-preview" aria-live="polite">
           <div className="stack-sm small">
-            <strong>Matches {plural(preview.count, 'transaction')}</strong>
-            {preview.examples.map((ex) => (
+            <strong>
+              Matches {plural(preview.count, 'charge')}
+              {power && ` · would change ${preview.wouldChange}`}
+            </strong>
+            {(power ? preview.sample : preview.sample.slice(0, 3)).map((ex) => (
               <span key={ex.id} className="muted">
                 {shortDate(ex.date)} · {ex.name} · {money(ex.amountCents)}
               </span>
             ))}
+            {power && preview.wouldChange === 0 && preview.count > 0 && <span className="muted">They’re already filed this way, or set by hand.</span>}
           </div>
         </div>
       )}
@@ -224,6 +242,14 @@ function RuleSheet({ rule, onClose, onSaved }: { rule: RuleItem | null; onClose:
         </select>
       </Field>
       {!rule && <Toggle checked={isPrivate} onChange={setPrivate} label="My fun money (private rule)" hint="Only you see this rule and what it matches." />}
+      {power && (
+        <Toggle
+          checked={applyToPast}
+          onChange={setApplyToPast}
+          label={`Apply to past charges${preview ? ` (${preview.wouldChange})` : ''}`}
+          hint={applyToPast ? 'Saving re-files the past charges it matches. Ones you set by hand stay.' : 'Only new charges follow this rule.'}
+        />
+      )}
       <div className="cluster">
         <Button variant="primary" onClick={() => void save()} disabled={matchText.trim().length < 2}>
           Save

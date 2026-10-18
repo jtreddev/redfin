@@ -159,7 +159,7 @@ function GroupsCard({ t, months, slice, partialIndex }: ChartCardProps) {
       {uncategorized > 0 && (
         <p className="muted small chart-foot spread">
           <span>Not counted above: {money(uncategorized, { whole: true })} with no category yet.</span>
-          <Button small variant="ghost" onClick={() => go('activity', { filter: 'uncategorized' })}>
+          <Button small variant="ghost" onClick={() => go('activity', { needs: 1, month: 'all' })}>
             Sort them
           </Button>
         </p>
@@ -206,7 +206,8 @@ function CategoryCard({ t, months, slice, partialIndex }: ChartCardProps) {
               <optgroup key={g.key} label={g.name}>
                 {options.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}
+                    {/* Sub-categories follow their parent (their money is in its total too). */}
+                    {c.parentId ? `${t.categories.find((p) => p.id === c.parentId)?.name ?? ''} › ${c.name}` : c.name}
                   </option>
                 ))}
               </optgroup>
@@ -250,9 +251,14 @@ function CategoryCard({ t, months, slice, partialIndex }: ChartCardProps) {
       <div className="spread chart-foot">
         <span className="muted small">In {groupName(row.group)}</span>
         {!isFunMoney && (
-          <Button small variant="ghost" onClick={() => go('activity', { category: row.id })}>
-            See transactions
-          </Button>
+          <span className="cluster">
+            <a className="edit-link small" href={`#/more/categories?id=${row.id}`}>
+              Edit category
+            </a>
+            <Button small variant="ghost" onClick={() => go('activity', { categoryId: row.id })}>
+              See transactions
+            </Button>
+          </span>
         )}
       </div>
     </Card>
@@ -289,7 +295,7 @@ function ChangesCard({ t }: { t: TrendsResponse }) {
         {content}
       </div>
     ) : (
-      <button key={c.categoryId} type="button" className="row row-button" onClick={() => go('activity', { category: c.categoryId, month: compared })}>
+      <button key={c.categoryId} type="button" className="row row-button" onClick={() => go('activity', { categoryId: c.categoryId, month: compared })}>
         {content}
       </button>
     );

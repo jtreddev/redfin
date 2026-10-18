@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { addMonths, monthOf } from '../../shared/dates';
 import { api, del, errorMessage, patch, post, put } from '../api';
 import { money, plural, shortDate } from '../format';
@@ -11,6 +11,7 @@ import {
   AmountInput,
   Button,
   Card,
+  CategorySelect,
   Empty,
   ErrorNote,
   Field,
@@ -134,7 +135,7 @@ function BudgetView({ month }: { month: string }) {
           <span>
             {plural(b.uncategorized.count, 'transaction')} ({money(b.uncategorized.outCents, { whole: true })} out) not in a category yet.
           </span>
-          <Button small onClick={() => go('activity', { filter: 'uncategorized', month })}>
+          <Button small onClick={() => go('activity', { needs: 1, month })}>
             Sort
           </Button>
         </div>
@@ -143,8 +144,10 @@ function BudgetView({ month }: { month: string }) {
       <div className="columns">
       {sections.map((section) => {
         const rows = visibleRows.filter((r) => r.sectionName === section);
-        const planned = rows.reduce((s, r) => s + r.budgetCents, 0);
-        const actual = rows.reduce((s, r) => s + r.actualCents, 0);
+        // A sub-category's money is already in its parent's row: count top-level rows only.
+        const tops = rows.filter((r) => r.parentId === null || !rows.some((p) => p.categoryId === r.parentId));
+        const planned = tops.reduce((s, r) => s + r.budgetCents, 0);
+        const actual = tops.reduce((s, r) => s + r.actualCents, 0);
         return (
           <div key={section}>
             <div className="section-title">
@@ -155,6 +158,8 @@ function BudgetView({ month }: { month: string }) {
             </div>
             <div className="list">
               {rows.map((row) => {
+                const parent = row.parentId !== null ? rows.find((p) => p.categoryId === row.parentId) : undefined;
+                if (parent) return <ChildRow key={row.categoryId} row={row} parent={parent} onClick={() => setEditing(row)} />;
                 const line = (
                   <button
                     key={row.categoryId}
@@ -182,7 +187,9 @@ function BudgetView({ month }: { month: string }) {
                             ? 'From Income & paydays'
                             : row.computed === 'fun_money'
                               ? 'Allowance × paydays'
-                              : row.timing === 'due_day' && row.dueDay
+                              : row.computed === 'children'
+                                ? 'The sum of its sub-categories’ budgets'
+                                : row.timing === 'due_day' && row.dueDay
                                 ? `Due on the ${ordinal(row.dueDay)}`
                                 : 'Spread across the month'}
                         </div>
@@ -225,6 +232,32 @@ function BudgetView({ month }: { month: string }) {
   );
 }
 
+/** A sub-category under its parent: its own money, and its own budget if it has one. */
+function ChildRow({ row, parent, onClick }: { row: BudgetRow; parent: BudgetRow; onClick: () => void }) {
+  const hasLine = row.lineId !== null && row.budgetCents > 0;
+  // With a budget on the parent, a child's own line is for information; the parent's is the one that counts.
+  const counts = parent.computed !== 'children';
+  return (
+    <button type="button" className="row row-button budget-child" onClick={onClick}>
+      <div className="row-main stack-sm">
+        <div className="spread">
+          <span className="row-title">
+            <span className="sr-only">Sub-category of {parent.name}: </span>
+            {row.name}
+          </span>
+          <span className="small">
+            <Money cents={row.actualCents} whole tone={hasLine && row.kind !== 'income' && row.actualCents > row.budgetCents ? 'bad' : undefined} />
+            {hasLine && <span className="muted"> / {money(row.budgetCents, { whole: true })}</span>}
+          </span>
+        </div>
+        {hasLine && <Progress value={row.actualCents} max={row.budgetCents} tone={row.kind === 'income' ? 'good' : undefined} />}
+        {hasLine && !counts && <BudgetState row={row} />}
+        <div className="row-sub">{hasLine && counts ? `Its own budget, for reference; ${parent.name}’s budget counts` : `Counts toward ${parent.name}`}</div>
+      </div>
+    </button>
+  );
+}
+
 function BudgetState({ row }: { row: BudgetRow }) {
   if (row.kind === 'income') return null;
   const state = budgetState(row.actualCents, row.budgetCents);
@@ -244,8 +277,8 @@ function ordinal(n: number) {
 
 function LineSheet({ month, row, onClose, onSaved }: { month: string; row: BudgetRow; onClose: () => void; onSaved: () => Promise<void> }) {
   const { toast } = useApp();
-  // Only the typed part; planned-cost set-asides are added on top by the server.
-  const [cents, setCents] = useState<number | null>(row.budgetCents - row.plannedCostsCents);
+  // Only the typed part; a children-sum budget isn't a typed line.
+  const [cents, setCents] = useState<number | null>(row.computed === 'children' ? null : row.budgetCents - row.plannedCostsCents);
   const [timing, setTiming] = useState(row.timing);
   const [dueDay, setDueDay] = useState(row.dueDay ?? 1);
   const [notes, setNotes] = useState(row.notes ?? '');
@@ -273,8 +306,15 @@ function LineSheet({ month, row, onClose, onSaved }: { month: string; row: Budge
   return (
     <Sheet open onClose={onClose} title={row.name}>
       <p className="muted">
-        So far: {money(row.actualCents)} {row.kind === 'income' ? 'received' : 'spent'} this month.
+        So far: {money(row.actualCents)} {row.kind === 'income' ? 'received' : 'spent'} this month
+        {row.actualCents !== row.ownActualCents && `, including its sub-categories`}.
       </p>
+      {row.computed === 'children' && (
+        <p className="muted small">
+          Right now its budget is the sum of its sub-categories’ budgets. Typing an amount here sets a budget for {row.name} as a whole
+          instead, and theirs show for reference.
+        </p>
+      )}
       <Field label="Budget for the month">
         <AmountInput cents={cents} onChange={setCents} autoFocus />
       </Field>
@@ -306,13 +346,16 @@ function LineSheet({ month, row, onClose, onSaved }: { month: string; row: Budge
         <Button variant="primary" onClick={() => void save()}>
           Save
         </Button>
-        <Button onClick={() => go('activity', { category: row.categoryId, month })}>See transactions</Button>
+        <Button onClick={() => go('activity', { categoryId: row.categoryId, month })}>See transactions</Button>
         {row.lineId && (
           <Button variant="danger" onClick={() => void remove()}>
             Remove
           </Button>
         )}
       </div>
+      <a className="edit-link small" href={`#/more/categories?id=${row.categoryId}`}>
+        Edit category (rename, move, sub-categories)
+      </a>
     </Sheet>
   );
 }
@@ -447,19 +490,46 @@ function WeeksView({ month }: { month: string }) {
 interface RecurringBill {
   id: number;
   name: string;
-  cadence: string;
+  merchant: string;
+  cadence: Cadence;
   expectedAmountCents: number;
   lastDate: string | null;
   nextDate: string | null;
+  categoryId: number | null;
   categoryName: string | null;
   status: 'suggested' | 'confirmed' | 'dismissed';
 }
 
+type Cadence = 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';
+const CADENCES: { value: Cadence; label: string }[] = [
+  { value: 'weekly', label: 'Every week' },
+  { value: 'biweekly', label: 'Every 2 weeks' },
+  { value: 'monthly', label: 'Every month' },
+  { value: 'quarterly', label: 'Every 3 months' },
+  { value: 'yearly', label: 'Every year' },
+];
+const cadenceLabel = (c: string) => CADENCES.find((x) => x.value === c)?.label ?? c;
+
+type BillStatus = 'all' | 'suggested' | 'confirmed' | 'dismissed';
+const STATUS_TITLES: Record<RecurringBill['status'], string> = { suggested: 'Suggested', confirmed: 'Confirmed', dismissed: 'Dismissed' };
+
 function BillsView({ month }: { month: string }) {
   const { toast } = useApp();
   const planner = useLoad(() => api<PlannerResponse>(`/planner?month=${month}`), [month]);
-  const recurring = useLoad(() => api<RecurringBill[]>('/recurring'), []);
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState<BillStatus>('all');
+  const recurring = useLoad(
+    () => api<RecurringBill[]>(`/recurring?${new URLSearchParams({ status, ...(query ? { q: query } : {}) })}`),
+    [status, query],
+  );
   const [detecting, setDetecting] = useState(false);
+  const [editing, setEditing] = useState<number | null>(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   async function detect() {
     setDetecting(true);
@@ -474,17 +544,20 @@ function BillsView({ month }: { month: string }) {
     }
   }
 
-  async function setStatus(bill: RecurringBill, status: RecurringBill['status']) {
+  async function setBillStatus(bill: RecurringBill, next: RecurringBill['status']) {
     try {
-      await patch(`/recurring/${bill.id}`, { status });
+      await patch(`/recurring/${bill.id}`, { status: next });
       await Promise.all([recurring.reload(), planner.reload()]);
+      const undo = { label: 'Undo', run: () => void setBillStatus(bill, bill.status) };
+      if (next === 'dismissed') toast(`${bill.name} won’t be tracked`, 'ok', { action: undo });
+      else if (bill.status === 'dismissed') toast(`${bill.name} is back`);
     } catch (error) {
       toast(errorMessage(error), 'error');
     }
   }
 
-  const suggested = (recurring.data ?? []).filter((r) => r.status === 'suggested');
-  const confirmed = (recurring.data ?? []).filter((r) => r.status === 'confirmed');
+  const list = recurring.data ?? [];
+  const groups = (['suggested', 'confirmed', 'dismissed'] as const).map((s) => ({ status: s, bills: list.filter((b) => b.status === s) })).filter((g) => g.bills.length);
 
   return (
     <>
@@ -517,53 +590,170 @@ function BillsView({ month }: { month: string }) {
           {detecting ? 'Looking…' : 'Find them'}
         </Button>
       </div>
-      {suggested.length > 0 && (
-        <div className="list">
-          {suggested.map((bill) => (
-            <div key={bill.id} className="row">
-              <div className="row-main">
-                <div className="row-title">{bill.name}</div>
-                <div className="row-sub">
-                  {money(Math.abs(bill.expectedAmountCents))} {bill.cadence}
-                  {bill.nextDate && ` · next ${shortDate(bill.nextDate)}`}
-                </div>
-              </div>
-              <div className="cluster">
-                <Button small onClick={() => void setStatus(bill, 'confirmed')}>
-                  Yes
-                </Button>
-                <Button small variant="ghost" onClick={() => void setStatus(bill, 'dismissed')}>
-                  No
-                </Button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {confirmed.length > 0 ? (
-        <div className="list">
-          {confirmed.map((bill) => (
-            <div key={bill.id} className="row">
-              <div className="row-main">
-                <div className="row-title">{bill.name}</div>
-                <div className="row-sub">
-                  {bill.cadence}
-                  {bill.nextDate && ` · next ${shortDate(bill.nextDate)}`}
-                  {bill.categoryName && ` · ${bill.categoryName}`}
-                </div>
-              </div>
-              <div className="cluster">
-                <Money cents={Math.abs(bill.expectedAmountCents)} whole />
-                <button type="button" className="icon-btn" aria-label={`Stop tracking ${bill.name}`} onClick={() => void setStatus(bill, 'dismissed')}>
-                  <Icon name="close" />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+      <div className="search-box">
+        <Icon name="search" />
+        <input
+          type="search"
+          aria-label="Search bills"
+          placeholder="Search bills, or an amount"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+      <Segmented<BillStatus>
+        value={status}
+        onChange={setStatus}
+        options={[
+          { value: 'all', label: 'All' },
+          { value: 'suggested', label: 'Suggested' },
+          { value: 'confirmed', label: 'Confirmed' },
+          { value: 'dismissed', label: 'Dismissed' },
+        ]}
+      />
+      {recurring.error && <ErrorNote message={recurring.error} onRetry={() => void recurring.reload()} />}
+      {!recurring.data ? (
+        !recurring.error && <Loading />
+      ) : groups.length === 0 ? (
+        <p className="muted small">
+          {query || status !== 'all' ? 'No bills match.' : 'Tap “Find them” after a few months of transactions are in.'}
+        </p>
       ) : (
-        !suggested.length && <p className="muted small">Tap “Find them” after a few months of transactions are in.</p>
+        groups.map((g) => (
+          <section key={g.status} className="stack-sm" aria-label={STATUS_TITLES[g.status]}>
+            {(status === 'all' || groups.length > 1) && (
+              <h4 className="bill-group">
+                {STATUS_TITLES[g.status]} <span className="muted">· {g.bills.length}</span>
+              </h4>
+            )}
+            <div className="list">
+              {g.bills.map((bill) =>
+                editing === bill.id ? (
+                  <BillEditor
+                    key={bill.id}
+                    bill={bill}
+                    onCancel={() => setEditing(null)}
+                    onSaved={async () => {
+                      setEditing(null);
+                      await Promise.all([recurring.reload(), planner.reload()]);
+                      document.querySelector<HTMLElement>(`#bill-${bill.id} .bill-actions button`)?.focus();
+                    }}
+                  />
+                ) : (
+                  <div key={bill.id} id={`bill-${bill.id}`} className={`row bill-row ${bill.status === 'suggested' ? 'bill-row-suggested' : ''}`}>
+                    <div className="row-main">
+                      <div className="row-title">{bill.name}</div>
+                      <div className="row-sub">
+                        {cadenceLabel(bill.cadence)}
+                        {bill.nextDate && bill.status !== 'dismissed' && ` · next ${shortDate(bill.nextDate)}`}
+                        {bill.categoryName && ` · ${bill.categoryName}`}
+                      </div>
+                    </div>
+                    <Money cents={Math.abs(bill.expectedAmountCents)} whole />
+                    <div className="cluster bill-actions">
+                      {bill.status === 'suggested' && (
+                        <>
+                          <Button small onClick={() => void setBillStatus(bill, 'confirmed')}>
+                            Yes, a bill
+                          </Button>
+                          <Button small variant="ghost" onClick={() => void setBillStatus(bill, 'dismissed')}>
+                            No
+                          </Button>
+                        </>
+                      )}
+                      {bill.status === 'dismissed' ? (
+                        <Button small onClick={() => void setBillStatus(bill, 'confirmed')}>
+                          Restore
+                        </Button>
+                      ) : (
+                        <Button small variant="ghost" onClick={() => setEditing(bill.id)}>
+                          Edit
+                        </Button>
+                      )}
+                      {bill.status === 'confirmed' && (
+                        <button type="button" className="icon-btn" aria-label={`Stop tracking ${bill.name}`} onClick={() => void setBillStatus(bill, 'dismissed')}>
+                          <Icon name="close" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ),
+              )}
+            </div>
+          </section>
+        ))
       )}
     </>
+  );
+}
+
+/** Inline edit of a bill: name, amount, how often, next date, category. */
+function BillEditor({ bill, onCancel, onSaved }: { bill: RecurringBill; onCancel: () => void; onSaved: () => Promise<void> }) {
+  const { toast } = useApp();
+  const [name, setName] = useState(bill.name);
+  const [cents, setCents] = useState<number | null>(Math.abs(bill.expectedAmountCents));
+  const [cadence, setCadence] = useState<Cadence>(bill.cadence);
+  const [nextDate, setNextDate] = useState(bill.nextDate ?? '');
+  const [categoryId, setCategoryId] = useState<number | null>(bill.categoryId);
+  const sign = bill.expectedAmountCents > 0 ? 1 : -1;
+
+  async function save() {
+    try {
+      await patch(`/recurring/${bill.id}`, {
+        name: name.trim(),
+        expectedAmountCents: sign * (cents ?? 0),
+        cadence,
+        ...(nextDate ? { nextDate } : {}),
+        ...(categoryId ? { categoryId } : {}),
+      });
+      toast(`${name.trim()} saved`);
+      await onSaved();
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    }
+  }
+
+  return (
+    <form
+      className="bill-editor stack-sm"
+      aria-label={`Edit ${bill.name}`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+    >
+      <Field label="Name">
+        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} autoFocus />
+      </Field>
+      <div className="grid-2">
+        <Field label="About">
+          <AmountInput cents={cents} onChange={setCents} />
+        </Field>
+        <Field label="How often">
+          <select value={cadence} onChange={(e) => setCadence(e.target.value as Cadence)}>
+            {CADENCES.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+      <div className="grid-2">
+        <Field label="Next one">
+          <input type="date" value={nextDate} onChange={(e) => setNextDate(e.target.value)} />
+        </Field>
+        <Field label="Category">
+          <CategorySelect value={categoryId} onChange={setCategoryId} noneLabel="No category" />
+        </Field>
+      </div>
+      <div className="cluster">
+        <Button type="submit" small variant="primary" disabled={!name.trim() || !cents}>
+          Save
+        </Button>
+        <Button small variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }

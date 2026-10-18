@@ -376,7 +376,7 @@ export function Import() {
           </p>
           <div className="cluster">
             {result.uncategorized > 0 && (
-              <Button variant="primary" onClick={() => go('activity', { filter: 'uncategorized', batch: result.batchId })}>
+              <Button variant="primary" onClick={() => go('activity', { needs: 1, batch: result.batchId, month: 'all' })}>
                 Sort {plural(result.uncategorized, 'transaction')}
               </Button>
             )}
