@@ -21,7 +21,7 @@ import {
 } from '../lib/http';
 import { loadIngestContext, type IngestContext } from '../services/context';
 import { enforceFunMoney, insertTransactions, rederive, STORED_SELECT, type Classification, type StoredTxn } from '../services/ingest';
-import { learnFromFix, undoMove } from '../services/learn';
+import { findSimilar, learnFromFix, undoMove } from '../services/learn';
 
 export const transactions = new Hono<AppEnv>();
 
@@ -190,6 +190,23 @@ transactions.get('/transactions/:id', async (c) => {
     ? await first<TxnRow>(db, `${TXN_SELECT} WHERE t.id = ? AND ${PRIVACY_SQL}`, row.transferPairId, viewer.memberId)
     : null;
   return c.json({ ...toApi(row, splits), transferPair: pair ? toApi(pair) : null });
+});
+
+/**
+ * How many other charges "also file similar ones" would move if this charge went to `categoryId`
+ * (optional), and the merchant key it would learn. Read-only; the same matching as learning.
+ */
+transactions.get('/transactions/:id/similar', async (c) => {
+  const db = c.env.DB;
+  const viewer = c.get('viewer');
+  const row = await visibleTxn(db, paramId(c), viewer.memberId);
+  const raw = c.req.query('categoryId');
+  const categoryId = raw === undefined || raw === '' ? null : reqInt(raw, 'categoryId', { min: 1 });
+  const ctx = await loadIngestContext(db);
+  assertCategoryAllowed(ctx, categoryId, viewer.memberId);
+  const stored = await first<StoredTxn>(db, `${STORED_SELECT} WHERE t.id = ?`, row.id);
+  const found = stored ? await findSimilar(db, ctx, viewer, stored, categoryId) : null;
+  return c.json({ count: found?.ids.length ?? 0, merchant: found?.learned?.matchText ?? '' });
 });
 
 transactions.post('/transactions', async (c) => {

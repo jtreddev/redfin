@@ -105,6 +105,66 @@ function spelledKey(key: string, text: string | null | undefined): string | null
 /** The tapped charge's category as it was before the fix, so Undo can put it back. */
 export type BeforeFix = Pick<StoredTxn, 'categoryId' | 'categorySource' | 'categoryReason' | 'ruleId'>;
 
+export interface Similar {
+  /** The rule the fix would teach, or null when the charge teaches nothing (a check, "ATM"). */
+  learned: Rule | null;
+  /** Set when the rule would be private to the viewer (a fix into their own fun money). */
+  privateTo: number | null;
+  /** Other charges the fix would re-file now (at most REFILE_LIMIT). */
+  ids: number[];
+}
+
+/**
+ * The charges a fix of `txn` to `categoryId` would re-file: same merchant (whole words), not set by hand,
+ * not split or left out, not already in that category, visible to the viewer, and only where the rule may
+ * reach the account. With no category yet, every such charge counts. Learning and its preview both use
+ * this, so the preview's count is what learning moves.
+ */
+export async function findSimilar(
+  db: D1Database,
+  ctx: IngestContext,
+  viewer: Viewer,
+  txn: StoredTxn,
+  categoryId: number | null,
+): Promise<Similar> {
+  const learned = ruleFor(ctx, txn);
+  if (!learned) return { learned: null, privateTo: null, ids: [] };
+  // A fix into your own fun money makes a private rule that only you see.
+  const privateTo = categoryId !== null && ctx.funCategoryOwner.get(categoryId) === viewer.memberId ? viewer.memberId : null;
+
+  // A shared rule never re-files a private charge (yours, on a shared card) into shared view.
+  const sharedOnly = privateTo === null ? 'AND t.private_member_id IS NULL' : '';
+  const column = learned.matchField === 'merchant' ? "COALESCE(t.merchant_name, '')" : "(t.name || ' ' || COALESCE(t.memo, ''))";
+  const candidates = await all<Candidate>(
+    db,
+    `SELECT t.id, t.name, t.memo, t.merchant_name AS merchantName, t.account_id AS accountId, t.amount_cents AS amountCents
+       FROM transactions t
+      WHERE t.deleted_at IS NULL AND t.id != ? AND t.is_split = 0 AND t.is_ignored = 0
+        AND (t.category_source IS NULL OR t.category_source != 'user')
+        AND (? IS NULL OR t.category_id IS NOT ?) AND ${PRIVACY_SQL}
+        ${sharedOnly}
+        AND (? IS NULL OR ABS(t.amount_cents) >= ?) AND (? IS NULL OR ABS(t.amount_cents) <= ?)
+        -- A cheap prefilter: ruleMatches() below keeps whole-word matches only.
+        AND UPPER(${column}) LIKE ? ESCAPE '\\'
+      ORDER BY t.date DESC, t.id DESC LIMIT ${REFILE_LIMIT}`,
+    txn.id,
+    categoryId,
+    categoryId,
+    viewer.memberId,
+    learned.amountMin,
+    learned.amountMin,
+    learned.amountMax,
+    learned.amountMax,
+    `%${learned.matchText.toUpperCase().replace(/[\\%_]/g, '\\$&')}%`,
+  );
+  // The same account check classify() uses, so re-filing never does what a later sync would undo.
+  const asSaved: Rule = { ...learned, action: privateTo === null ? {} : { privateMemberId: privateTo } };
+  const ids = candidates
+    .filter((t) => ruleAppliesToAccount(asSaved, ctx.privateAccountOwner.get(t.accountId) ?? null) && ruleMatches(learned, subjectOf(t)))
+    .map((t) => t.id);
+  return { learned, privateTo, ids };
+}
+
 /**
  * Learns from a hand fix of `txn` (already saved) to `categoryId`, re-files similar charges the viewer
  * can see, and records the move for Undo, including the tapped charge's values from `before`.
@@ -117,11 +177,9 @@ export async function learnFromFix(
   categoryId: number,
   before: BeforeFix = txn,
 ): Promise<LearnResult> {
-  const learned = ruleFor(ctx, txn);
+  const { learned, privateTo, ids: refile } = await findSimilar(db, ctx, viewer, txn, categoryId);
   if (!learned) return { moved: 0, moveId: null, ruleId: null, merchant: '' };
   const merchant = learned.matchText;
-  // A fix into your own fun money makes a private rule that only you see.
-  const privateTo = ctx.funCategoryOwner.get(categoryId) === viewer.memberId ? viewer.memberId : null;
 
   const existing = await first<RuleBefore & { id: number }>(
     db,
@@ -137,36 +195,6 @@ export async function learnFromFix(
     privateTo,
     privateTo,
   );
-
-  // A shared rule never re-files a private charge (yours, on a shared card) into shared view.
-  const sharedOnly = privateTo === null ? 'AND t.private_member_id IS NULL' : '';
-  const column = learned.matchField === 'merchant' ? "COALESCE(t.merchant_name, '')" : "(t.name || ' ' || COALESCE(t.memo, ''))";
-  const candidates = await all<Candidate>(
-    db,
-    `SELECT t.id, t.name, t.memo, t.merchant_name AS merchantName, t.account_id AS accountId, t.amount_cents AS amountCents
-       FROM transactions t
-      WHERE t.deleted_at IS NULL AND t.id != ? AND t.is_split = 0 AND t.is_ignored = 0
-        AND (t.category_source IS NULL OR t.category_source != 'user')
-        AND t.category_id IS NOT ? AND ${PRIVACY_SQL}
-        ${sharedOnly}
-        AND (? IS NULL OR ABS(t.amount_cents) >= ?) AND (? IS NULL OR ABS(t.amount_cents) <= ?)
-        -- A cheap prefilter: ruleMatches() below keeps whole-word matches only.
-        AND UPPER(${column}) LIKE ? ESCAPE '\\'
-      ORDER BY t.date DESC, t.id DESC LIMIT ${REFILE_LIMIT}`,
-    txn.id,
-    categoryId,
-    viewer.memberId,
-    learned.amountMin,
-    learned.amountMin,
-    learned.amountMax,
-    learned.amountMax,
-    `%${merchant.toUpperCase().replace(/[\\%_]/g, '\\$&')}%`,
-  );
-  // The same account check classify() uses, so re-filing never does what a later sync would undo.
-  const asSaved: Rule = { ...learned, action: privateTo === null ? {} : { privateMemberId: privateTo } };
-  const refile = candidates
-    .filter((t) => ruleAppliesToAccount(asSaved, ctx.privateAccountOwner.get(t.accountId) ?? null) && ruleMatches(learned, subjectOf(t)))
-    .map((t) => t.id);
 
   const now = nowIso();
   let ruleId: number;
