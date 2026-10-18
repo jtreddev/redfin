@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { usePlaidLink, type PlaidLinkError, type PlaidLinkOnSuccessMetadata } from 'react-plaid-link';
+import { balanceCents } from '../../shared/money';
 import { api, del, errorMessage, patch, post } from '../api';
-import { describeBalance, money, plural, timeAgo } from '../format';
+import { plural, timeAgo } from '../format';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import { syncOneBank } from '../sync';
 import type { Account } from '../types';
-import { AmountInput, Button, Card, ErrorNote, Field, Sheet, Toggle } from '../ui';
+import { AmountInput, Button, Card, ErrorNote, Field, Money, Sheet, Toggle } from '../ui';
 import { SubHeader } from './More';
 
 interface PlaidStatus {
@@ -261,9 +262,9 @@ export function Accounts() {
               </div>
             </div>
             {a.currentBalanceCents !== null && (
-              <div className="money" style={{ textAlign: 'right' }}>
-                {describeBalance(a.type, a.currentBalanceCents)}
-                {availableDiffers(a) && <div className="muted small">{money(a.availableBalanceCents!)} available</div>}
+              <div style={{ textAlign: 'right' }}>
+                <Money cents={balanceCents(a.type, a.currentBalanceCents)} />
+                {availableDiffers(a) && <div className="muted small"><Money cents={a.availableBalanceCents!} /> available</div>}
               </div>
             )}
           </button>
@@ -451,8 +452,8 @@ function AccountSheet({ account, onClose, onSaved }: { account: Account | null; 
       )}
       {account?.balanceUpdatedAt && (
         <p className="muted small">
-          Balance {describeBalance(account.type, account.currentBalanceCents ?? 0)}
-          {availableDiffers(account) && `, ${money(account.availableBalanceCents!)} available`} as of {timeAgo(account.balanceUpdatedAt)}
+          Balance <Money cents={balanceCents(account.type, account.currentBalanceCents ?? 0)} />
+          {availableDiffers(account) && <>, <Money cents={account.availableBalanceCents!} /> available</>} as of {timeAgo(account.balanceUpdatedAt)}
         </p>
       )}
     </Sheet>

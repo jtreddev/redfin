@@ -2721,3 +2721,98 @@ body:has(.bulk-bar) .toast {
   flex: 1 1 auto;
   max-width: 280px;
 }
+
+/* ---------- Hide amounts (amounts.tsx) ---------- */
+
+.page-header-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.hide-amounts .money:not([data-revealed]),
+.hide-amounts .chart-amount:not([data-revealed]) {
+  filter: blur(6px);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .money,
+  .chart-amount {
+    transition: filter 0.15s ease;
+  }
+}
+
+.side-action {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .header-eye {
+    display: none;
+  }
+
+  .side-action {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    margin-top: auto;
+    padding: 0 12px;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: var(--t-sm);
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .side-action .icon {
+    width: 20px;
+    height: 20px;
+    color: var(--slate);
+  }
+
+  .side-action:hover {
+    background: var(--tint);
+  }
+}
+
+/* ---------- Bill went up (BillIncreases.tsx) and subscriptions ---------- */
+
+.increase-row {
+  flex-wrap: wrap;
+}
+
+.increase-row .row-title {
+  white-space: normal;
+}
+
+.increase-row > .cluster {
+  flex: 1 0 100%;
+}
+
+@media (min-width: 600px) {
+  .increase-row > .cluster {
+    flex: none;
+  }
+}
+
+.increase-note {
+  padding: 12px;
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+}
+
+.bill-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}

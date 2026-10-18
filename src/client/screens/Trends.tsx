@@ -4,7 +4,7 @@ import { GROUP_ORDER, usualOf, type Change, type GroupKey } from '../../shared/t
 import { api } from '../api';
 import { Bars } from '../charts/Bars';
 import { StackedBars, type Series } from '../charts/StackedBars';
-import { money, monthLabel, monthShortLabel } from '../format';
+import { monthLabel, monthShortLabel } from '../format';
 import { Icon } from '../icons';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
@@ -62,8 +62,8 @@ export function Trends() {
               </div>
               <Money cents={group.byMonth[current] ?? 0} whole className="stat-value" />
               <div className="stat-note muted">so far this month</div>
-              <div className="stat-note muted">{usual > 0 ? `usually ${money(usual, { whole: true })} a month` : 'no usual yet'}</div>
-              {key === 'habits' && usual > 0 && <div className="stat-note muted">about {money(usual * 12, { whole: true })} a year</div>}
+              <div className="stat-note muted">{usual > 0 ? <>usually <Money cents={usual} whole /> a month</> : 'no usual yet'}</div>
+              {key === 'habits' && usual > 0 && <div className="stat-note muted">about <Money cents={usual * 12} whole /> a year</div>}
             </div>
           );
         })}
@@ -135,12 +135,12 @@ function GroupsCard({ t, months, slice, partialIndex }: ChartCardProps) {
                 <tr key={m}>
                   <th scope="row">{monthCell(m, i === partialIndex)}</th>
                   {series.map((s) => (
-                    <td key={s.key} className="money">
-                      {money(s.values[i]!, { whole: true })}
+                    <td key={s.key}>
+                      <Money cents={s.values[i]!} whole />
                     </td>
                   ))}
-                  <td className="money">
-                    <strong>{money(totals[i]!, { whole: true })}</strong>
+                  <td>
+                    <strong><Money cents={totals[i]!} whole /></strong>
                   </td>
                 </tr>
               ))}
@@ -158,7 +158,7 @@ function GroupsCard({ t, months, slice, partialIndex }: ChartCardProps) {
       )}
       {uncategorized > 0 && (
         <p className="muted small chart-foot spread">
-          <span>Not counted above: {money(uncategorized, { whole: true })} with no category yet.</span>
+          <span>Not counted above: <Money cents={uncategorized} whole /> with no category yet.</span>
           <Button small variant="ghost" onClick={() => go('activity', { needs: 1, month: 'all' })}>
             Sort them
           </Button>
@@ -230,13 +230,13 @@ function CategoryCard({ t, months, slice, partialIndex }: ChartCardProps) {
               {months.map((m, i) => (
                 <tr key={m}>
                   <th scope="row">{monthCell(m, i === partialIndex)}</th>
-                  <td className="money">{money(values[i]!, { whole: true })}</td>
-                  <td className="money muted">{i === partialIndex || usual === 0 ? '' : money(values[i]! - usual, { whole: true, signed: true })}</td>
+                  <td><Money cents={values[i]!} whole /></td>
+                  <td className="muted">{i === partialIndex || usual === 0 ? '' : <Money cents={values[i]! - usual} whole signed />}</td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <p className="muted small">Usually {money(usual, { whole: true })} a month (last 3 full months).</p>
+          <p className="muted small">Usually <Money cents={usual} whole /> a month (last 3 full months).</p>
         </div>
       ) : (
         <Bars
@@ -278,14 +278,14 @@ function ChangesCard({ t }: { t: TrendsResponse }) {
         <div className="row-main">
           <div className="row-title">{c.name}</div>
           <div className="row-sub">
-            {basis === 'this-month' ? `${money(c.soFar, { whole: true })} so far` : `${money(c.soFar, { whole: true })} spent`} · usually{' '}
-            {money(c.usual, { whole: true })}
-            {basis === 'this-month' && <> · on pace for {money(c.projected, { whole: true })}</>}
+            <Money cents={c.soFar} whole /> {basis === 'this-month' ? 'so far' : 'spent'} · usually{' '}
+            <Money cents={c.usual} whole />
+            {basis === 'this-month' && <> · on pace for <Money cents={c.projected} whole /></>}
           </div>
         </div>
         <span className={`change ${direction === 'up' ? 'tone-bad' : 'tone-good'}`}>
           <span aria-hidden="true">{direction === 'up' ? '↑' : '↓'}</span>
-          <span className="sr-only">{direction === 'up' ? 'up' : 'down'}</span> {money(Math.abs(c.diff), { whole: true })}
+          <span className="sr-only">{direction === 'up' ? 'up' : 'down'}</span> <Money cents={Math.abs(c.diff)} whole />
         </span>
       </>
     );

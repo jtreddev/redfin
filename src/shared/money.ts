@@ -68,6 +68,9 @@ export function formatCents(
  * An account balance as people read it, to the cent: what you owe is negative. Credit card and loan
  * balances are stored as the amount owed (Plaid's convention), so they're flipped for display.
  */
+/** A balance as people read it: what's owed on a card or loan shows as negative. */
+export const balanceCents = (type: string, cents: Cents): Cents => (type === 'credit' || type === 'loan' ? -cents : cents);
+
 export function describeBalance(type: string, cents: Cents): string {
-  return formatCents(type === 'credit' || type === 'loan' ? -cents : cents);
+  return formatCents(balanceCents(type, cents));
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { formatCents } from '../../shared/money';
+import { useAmounts } from '../amounts';
 import { errorMessage, patch } from '../api';
 import { go } from '../router';
 import { recategorizeAll } from '../sync';
@@ -20,6 +21,7 @@ const US_TIME_ZONES = [
 
 export function Settings() {
   const { me, toast, reload } = useApp();
+  const amounts = useAmounts();
   const [name, setName] = useState(me.household.name);
   const [timezone, setTimezone] = useState(me.household.timezone);
   const [low, setLow] = useState<number | null>(me.household.lowBalanceCents);
@@ -153,6 +155,12 @@ export function Settings() {
             onChange={(v) => void savePrefs({ powerTools: v }, v ? 'More tools are on' : 'More tools are off')}
             label="Show more tools"
             hint="Keyboard shortcuts, saved searches and Download CSV in Activity, and rule previews. Off keeps things simple."
+          />
+          <Toggle
+            checked={amounts.hidden}
+            onChange={(v) => amounts.setHidden(v)}
+            label="Hide amounts"
+            hint="Blurs dollar amounts on every screen, for looking at the app in public. Tap an amount to see it for 5 seconds."
           />
         </div>
       </Card>

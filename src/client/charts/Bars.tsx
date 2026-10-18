@@ -1,6 +1,7 @@
 import type { MonthKey } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
-import { money } from '../format';
+import { useMoneyText } from '../amounts';
+import { Money } from '../ui';
 import { Axes, bands, LAYOUT, monthTitle, svgHeight, useActiveMonth, useHatch, useWidth } from './frame';
 import { barPath, dollarsShort, labelsFit, niceMax, ticks } from './scale';
 import { Tooltip } from './Tooltip';
@@ -30,6 +31,7 @@ export function Bars({
   const focus = useActiveMonth(count, Math.max(0, latest));
   const { active } = focus;
   const hatch = useHatch();
+  const money = useMoneyText();
 
   const tallest = Math.max(0, reference ?? 0, ...values);
   const tickValues = ticks(tallest);
@@ -82,7 +84,7 @@ export function Bars({
               <line className="chart-reference" x1={LAYOUT.left} x2={width - LAYOUT.right} y1={yOf(reference)} y2={yOf(reference)} aria-hidden="true" />
             )}
             {latest >= 0 && latestValue > 0 && labelsFit({ width: band, height: yOf(latestValue) }, latestLabel) && (
-              <text className="chart-label" x={center(latest)} y={yOf(latestValue) - 6} textAnchor="middle" aria-hidden="true">
+              <text className="chart-label chart-amount" x={center(latest)} y={yOf(latestValue) - 6} textAnchor="middle" aria-hidden="true">
                 {latestLabel}
               </text>
             )}
@@ -107,7 +109,7 @@ export function Bars({
           <span className="chart-legend-item">
             <span className="chart-refkey" aria-hidden="true" />
             <span>
-              Usual: <span className="money">{money(reference, { whole: true })}</span> a month (last 3 full months)
+              Usual: <Money cents={reference} whole /> a month (last 3 full months)
             </span>
           </span>
         </div>

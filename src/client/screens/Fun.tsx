@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { api, errorMessage, patch, post } from '../api';
-import { money, shortDate } from '../format';
+import { shortDate } from '../format';
 import { useApp, useLoad } from '../state';
 import type { FunBalance } from '../types';
 import { AmountInput, Button, Card, ErrorNote, Field, Loading, Money, Sheet } from '../ui';
@@ -43,7 +43,7 @@ export function Fun() {
                 <div className="figure">
                   <Money cents={b.balanceCents} whole className="big" tone={b.balanceCents < 0 ? 'bad' : undefined} />
                   <div className="label">{b.isViewer ? 'yours' : `${b.name}’s`}</div>
-                  <div className="muted small">{money(b.allowancePerPaydayCents ?? me.members.find((m) => m.id === b.memberId)?.funAllowanceCents ?? 0, { whole: true })} every payday</div>
+                  <div className="muted small"><Money cents={b.allowancePerPaydayCents ?? me.members.find((m) => m.id === b.memberId)?.funAllowanceCents ?? 0} whole /> every payday</div>
                 </div>
                 <Button small onClick={() => setEditing(b)}>
                   Change
@@ -51,7 +51,7 @@ export function Fun() {
               </div>
               {b.isViewer && b.accruedCents !== undefined && (
                 <p className="muted small">
-                  Since {shortDate(fun.data!.startDate)}: {money(b.accruedCents, { whole: true })} added, {money(b.spentCents ?? 0, { whole: true })} spent.
+                  Since {shortDate(fun.data!.startDate)}: <Money cents={b.accruedCents} whole /> added, <Money cents={b.spentCents ?? 0} whole /> spent.
                   {b.nextPayDate && ` Next top-up ${shortDate(b.nextPayDate)}.`}
                 </p>
               )}

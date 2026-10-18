@@ -23,7 +23,7 @@ export interface Kid {
 }
 
 export interface Me {
-  viewer: { memberId: number; email: string; name: string; hideSetup: boolean; powerTools: boolean };
+  viewer: { memberId: number; email: string; name: string; hideSetup: boolean; powerTools: boolean; hideAmounts: boolean };
   today: string;
   household: {
     name: string;
@@ -186,6 +186,15 @@ export interface BankItem {
   errorMessage: string | null;
 }
 
+/** A confirmed bill whose latest charge was at least $5 and 10% more than usual (positive cents). */
+export interface BillIncrease {
+  billId: number;
+  name: string;
+  usualCents: number;
+  latestCents: number;
+  date: string;
+}
+
 export interface HomeResponse {
   today: string;
   month: string;
@@ -196,6 +205,8 @@ export interface HomeResponse {
   startingBalance: { cents: number; source: string };
   extraPaychecks: number;
   bills: Bill[];
+  /** Bills whose latest charge went up. Missing from a Home payload cached before this existed. */
+  billIncreases?: BillIncrease[];
   fun: FunBalance[];
   uncategorizedCount: number;
   /** Recent spending with no category. Missing from a Home payload cached before this existed. */

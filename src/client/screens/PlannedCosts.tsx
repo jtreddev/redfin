@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { WithAmounts } from '../amounts';
 import { api, del, errorMessage, patch, post } from '../api';
 import {
   balanceText,
@@ -32,7 +33,7 @@ export function PlannedCostsSection() {
           </Empty>
         ) : (
           <>
-            <p className="setaside-total">{totalLine(totalMonthlyCents, costs.length)}</p>
+            <p className="setaside-total"><WithAmounts text={totalLine(totalMonthlyCents, costs.length)} /></p>
             {costs.map((cost) => (
               <CostCard key={cost.id} cost={cost} onOpen={() => setEditing(cost)} />
             ))}
@@ -81,19 +82,19 @@ function CostCard({ cost, onOpen }: { cost: PlannedCost; onOpen: () => void }) {
     <Card className="setaside-card" onClick={onOpen}>
       <span className="setaside-top">
         <strong className="setaside-name">{cost.name}</strong>
-        <span className="muted small">{monthlyText(cost.monthlyCents)}</span>
+        <span className="muted small"><WithAmounts text={monthlyText(cost.monthlyCents)} /></span>
       </span>
       <span className={`setaside-balance money ${balance.short ? 'tone-warn' : ''}`}>
         {balance.short && <ShortIcon />}
-        {balance.text}
+        <WithAmounts text={balance.text} />
       </span>
       <span className="setaside-line muted small">
-        {cost.categoryIds.length ? spentText(cost.spent12Cents) : 'No categories yet: tap to pick what it pays for'}
+        {cost.categoryIds.length ? <WithAmounts text={spentText(cost.spent12Cents)} /> : 'No categories yet: tap to pick what it pays for'}
       </span>
       {cost.comingUp.map((item) => (
         <span key={item.kind === 'bill' ? `${item.name}-${item.date}` : item.month} className="setaside-line small">
           <span className="muted">Coming up: </span>
-          {comingUpText(item)}
+          <WithAmounts text={comingUpText(item)} />
         </span>
       ))}
     </Card>
@@ -178,7 +179,7 @@ function CostSheet({
         </Field>
         {suggestion ? (
           <div className="setaside-suggest">
-            <span className="small">{suggestion.text}</span>
+            <span className="small"><WithAmounts text={suggestion.text} /></span>
             {suggestion.cents === null ? null : suggestion.cents !== monthly ? (
               <Button variant="ghost" onClick={() => setMonthly(suggestion.cents)}>
                 Use suggestion

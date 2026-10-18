@@ -1,5 +1,6 @@
 import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { api, errorMessage } from './api';
+import { AmountsContext, HideAmountsButton, useHideAmountsRoot } from './amounts';
+import { api, errorMessage, patch } from './api';
 import { go, useRoute, type Route } from './router';
 import { Icon, type IconName } from './icons';
 import { Activity } from './screens/Activity';
@@ -112,6 +113,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ text: string; tone: 'ok' | 'error'; action?: ToastOptions['action'] } | null>(null);
   const timer = useRef<number | undefined>(undefined);
+  // Hide amounts changes on screen at once; the saved switch catches up after the save and reload.
+  const [hiddenNow, setHiddenNow] = useState<boolean | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -159,6 +162,22 @@ export function App() {
     timer.current = window.setTimeout(() => setToast(null), options.durationMs ?? (options.action ? 6000 : 3500));
   }, []);
 
+  const hidden = hiddenNow ?? base?.me.viewer.hideAmounts ?? false;
+  useHideAmountsRoot(hidden);
+  const setHidden = useCallback(
+    (next: boolean) => {
+      setHiddenNow(next);
+      patch('/me/prefs', { hideAmounts: next })
+        .then(() => reload())
+        .then(() => setHiddenNow(null))
+        .catch((e) => {
+          setHiddenNow(null);
+          showToast(errorMessage(e), 'error');
+        });
+    },
+    [reload, showToast],
+  );
+
   if (!base) {
     return <div className="app">{error ? <ErrorNote message={error} onRetry={() => void reload()} /> : <Loading />}</div>;
   }
@@ -168,51 +187,54 @@ export function App() {
   const sideActive = top === 'more' ? route.path.split('/').slice(0, 2).join('/') : top;
   return (
     <AppContext.Provider value={{ ...base, reload, toast: showToast, undoLast }}>
-      <a className="skip-link" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>
-        Skip to content
-      </a>
-      <nav className="sidebar" aria-label="Main">
-        <div className="sidebar-name">
-          <Mark />
-          <span>Family Budget</span>
-        </div>
-        {/* More's screens are listed here directly, so the side menu has no More entry. */}
-        {TABS.filter((tab) => tab.path !== 'more').map((tab) => (
-          <NavLink key={tab.path} {...tab} active={sideActive === tab.path} />
-        ))}
-        {MORE_ITEMS.map((item) => (
-          <NavLink key={item.path} path={`more/${item.path}`} label={item.short} icon={item.icon} active={sideActive === `more/${item.path}`} />
-        ))}
-      </nav>
-      <main id="main" tabIndex={-1} className={`app ${isWide(route, top) ? 'app-wide' : ''}`}>
-        <ScreenErrorBoundary key={route.path}>
-          <Screen route={route} />
-        </ScreenErrorBoundary>
-      </main>
-      <nav className="tabbar" aria-label="Main">
-        {TABS.map((tab) => (
-          <NavLink key={tab.path} {...tab} active={top === tab.path} />
-        ))}
-      </nav>
-      {toast && (
-        <div className={`toast ${toast.tone}`} role="status">
-          <span>{toast.text}</span>
-          {toast.action && (
-            <button
-              type="button"
-              className="toast-action"
-              onClick={() => {
-                const { run } = toast.action!;
-                window.clearTimeout(timer.current);
-                setToast(null);
-                run();
-              }}
-            >
-              {toast.action.label}
-            </button>
-          )}
-        </div>
-      )}
+      <AmountsContext.Provider value={{ hidden, setHidden }}>
+        <a className="skip-link" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>
+          Skip to content
+        </a>
+        <nav className="sidebar" aria-label="Main">
+          <div className="sidebar-name">
+            <Mark />
+            <span>Family Budget</span>
+          </div>
+          {/* More's screens are listed here directly, so the side menu has no More entry. */}
+          {TABS.filter((tab) => tab.path !== 'more').map((tab) => (
+            <NavLink key={tab.path} {...tab} active={sideActive === tab.path} />
+          ))}
+          {MORE_ITEMS.map((item) => (
+            <NavLink key={item.path} path={`more/${item.path}`} label={item.short} icon={item.icon} active={sideActive === `more/${item.path}`} />
+          ))}
+          <HideAmountsButton withLabel className="sidebar-eye" />
+        </nav>
+        <main id="main" tabIndex={-1} className={`app ${isWide(route, top) ? 'app-wide' : ''}`}>
+          <ScreenErrorBoundary key={route.path}>
+            <Screen route={route} />
+          </ScreenErrorBoundary>
+        </main>
+        <nav className="tabbar" aria-label="Main">
+          {TABS.map((tab) => (
+            <NavLink key={tab.path} {...tab} active={top === tab.path} />
+          ))}
+        </nav>
+        {toast && (
+          <div className={`toast ${toast.tone}`} role="status">
+            <span>{toast.text}</span>
+            {toast.action && (
+              <button
+                type="button"
+                className="toast-action"
+                onClick={() => {
+                  const { run } = toast.action!;
+                  window.clearTimeout(timer.current);
+                  setToast(null);
+                  run();
+                }}
+              >
+                {toast.action.label}
+              </button>
+            )}
+          </div>
+        )}
+      </AmountsContext.Provider>
     </AppContext.Provider>
   );
 }

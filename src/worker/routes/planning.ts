@@ -9,6 +9,7 @@ import { toCsv } from '../../shared/import/csv';
 import { PRIVACY_SQL } from '../../shared/privacy';
 import { likeAnywhere, parseSearch } from '../../shared/search';
 import { detectRecurring, guessCadence, median, nextOccurrence, sameBill, type Cadence } from '../../shared/recurring';
+import { isSubscription, type SubscriptionCandidate } from '../../shared/subscriptions';
 import type { AppEnv } from '../env';
 import { all, batchAll, first, nowIso, run, stmt, Updates, type Param } from '../lib/db';
 import {
@@ -28,6 +29,7 @@ import {
   reqMonth,
   reqStr,
 } from '../lib/http';
+import { loadBillIncreases } from '../services/billIncreases';
 import { loadCategories } from '../services/context';
 import { loadLedger } from '../services/ledger';
 import { funMoneyBalances, loadMonth } from '../services/planner';
@@ -56,20 +58,25 @@ function mostCommon<T>(values: readonly T[]): T | null {
 
 const RECURRING_SELECT = `SELECT r.id, r.merchant, r.name, r.cadence, r.expected_amount_cents AS expectedAmountCents,
   r.last_date AS lastDate, r.next_date AS nextDate, r.category_id AS categoryId, c.name AS categoryName,
-  r.account_id AS accountId, r.status, r.confidence, r.private_member_id AS privateMemberId
+  r.account_id AS accountId, r.status, r.confidence, r.private_member_id AS privateMemberId, pc.name AS parentCategoryName
   FROM recurring_bills r LEFT JOIN categories c ON c.id = r.category_id
   LEFT JOIN categories pc ON pc.id = c.parent_id`;
 
 /**
  * Bills, optionally searched (`q`: name, merchant, category, an amount or a size like ">50") and filtered
  * by `status` (suggested | confirmed | dismissed | all). Without a status, dismissed ones stay out
- * unless `all=1`.
+ * unless `all=1`. `subscriptions=1` lists only subscriptions (isSubscription), whatever the status.
+ * Each bill carries `increase` when its latest charge went up (see billIncreases), else null.
  */
 planning.get('/recurring', async (c) => {
   const status = oneOf(c.req.query('status'), 'status', ['suggested', 'confirmed', 'dismissed', 'all'] as const);
+  const subscriptions = c.req.query('subscriptions') === '1';
+  const viewerId = c.get('viewer').memberId;
   const where = ['(r.private_member_id IS NULL OR r.private_member_id = ?)'];
-  const params: Param[] = [c.get('viewer').memberId];
-  if (status && status !== 'all') {
+  const params: Param[] = [viewerId];
+  if (subscriptions) {
+    where.push(`r.status = 'confirmed'`);
+  } else if (status && status !== 'all') {
     where.push('r.status = ?');
     params.push(status);
   } else if (!status && c.req.query('all') !== '1') {
@@ -96,15 +103,43 @@ planning.get('/recurring', async (c) => {
     where.push('ABS(r.expected_amount_cents) <= ?');
     params.push(search.maxCents);
   }
-  return c.json(
-    await all(
+  const [bills, increases] = await Promise.all([
+    all<SubscriptionCandidate & { id: number }>(
       c.env.DB,
       `${RECURRING_SELECT}
         WHERE ${where.join(' AND ')}
         ORDER BY CASE r.status WHEN 'suggested' THEN 0 WHEN 'confirmed' THEN 1 ELSE 2 END, r.next_date`,
       ...params,
     ),
+    loadBillIncreases(c.env.DB, c.get('today'), viewerId),
+  ]);
+  const byBill = new Map(increases.map((i) => [i.billId, { latestCents: i.latestCents, date: i.date }]));
+  return c.json(
+    (subscriptions ? bills.filter(isSubscription) : bills).map((b) => ({ ...b, increase: byBill.get(b.id) ?? null })),
   );
+});
+
+/**
+ * Bill went up: `update` takes the latest charge as the usual amount; `dismiss` keeps the usual and stays quiet
+ * until a bigger charge. Both remember the charge in increase_seen_cents, so finding bills again (which resets
+ * the usual to the median) doesn't flag the same charge a second time. The amount comes from the charges,
+ * never from the request.
+ */
+planning.post('/bills/:id/increase', async (c) => {
+  const db = c.env.DB;
+  const id = paramId(c);
+  const viewerId = c.get('viewer').memberId;
+  const bill = await first(db, 'SELECT id FROM recurring_bills WHERE id = ? AND (private_member_id IS NULL OR private_member_id = ?)', id, viewerId);
+  if (!bill) throw notFound();
+  const action = oneOf((await readBody(c)).action, 'action', ['update', 'dismiss'] as const);
+  if (!action) throw badRequest('action is required');
+  const [increase] = await loadBillIncreases(db, c.get('today'), viewerId, id);
+  if (!increase) throw new HttpError(409, 'This bill hasn’t gone up');
+  const updates = new Updates()
+    .set('increase_seen_cents', increase.latestCents)
+    .set('expected_amount_cents', action === 'update' ? -increase.latestCents : undefined);
+  await run(db, `UPDATE recurring_bills SET ${updates.sets.join(', ')}, updated_at = ? WHERE id = ?`, ...updates.params, nowIso(), id);
+  return c.json({ ok: true });
 });
 
 planning.post('/recurring/detect', async (c) => {

@@ -71,9 +71,11 @@ core.patch('/me/prefs', async (c) => {
   const body = await readBody(c);
   const hideSetup = optBool(body.hideSetup, 'hideSetup');
   const powerTools = optBool(body.powerTools, 'powerTools');
+  const hideAmounts = optBool(body.hideAmounts, 'hideAmounts');
   const updates = new Updates()
     .set('hide_setup', hideSetup === undefined ? undefined : hideSetup ? 1 : 0)
-    .set('power_tools', powerTools === undefined ? undefined : powerTools ? 1 : 0);
+    .set('power_tools', powerTools === undefined ? undefined : powerTools ? 1 : 0)
+    .set('hide_amounts', hideAmounts === undefined ? undefined : hideAmounts ? 1 : 0);
   if (updates.empty) throw badRequest('Nothing to update');
   await run(c.env.DB, `UPDATE members SET ${updates.sets.join(', ')}, updated_at = ? WHERE id = ?`, ...updates.params, nowIso(), c.get('viewer').memberId);
   return c.json({ ok: true });

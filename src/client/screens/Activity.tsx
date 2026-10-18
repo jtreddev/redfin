@@ -9,6 +9,7 @@ import {
   type ActivityFilters,
 } from '../../shared/activityQuery';
 import { GROUP_ORDER } from '../../shared/trends';
+import { WithAmounts } from '../amounts';
 import { api, del, errorMessage, patch, post } from '../api';
 import { capSelection, MAX_BULK } from '../bulk';
 import { categoryTree } from '../categoryTree';
@@ -360,7 +361,7 @@ export function Activity({ params }: { params: URLSearchParams }) {
 
       <div className="result-bar">
         <p className="result-summary" aria-live="polite">
-          {totals ? resultSummary(totals) : loading ? 'Looking…' : ''}
+          {totals ? <WithAmounts text={resultSummary(totals)} /> : loading ? 'Looking…' : ''}
         </p>
         {power && (
           <div className="cluster">

@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { addMonths, monthOf } from '../../shared/dates';
 import type { PayoffPlan } from '../../shared/debt';
 import type { GoalProgress } from '../../shared/goals';
+import { useMoneyText } from '../amounts';
 import { api, errorMessage, patch, post } from '../api';
-import { money, monthShortLabel, shortDate } from '../format';
+import { monthShortLabel, shortDate } from '../format';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import { AmountInput, Button, Card, CategorySelect, Empty, ErrorNote, Field, Loading, Money, Progress, Segmented, Sheet } from '../ui';
@@ -80,14 +81,14 @@ function GoalsView() {
             </div>
             <div className="spread" style={{ margin: '6px 0' }}>
               <Money cents={g.savedCents} whole className="big" />
-              <span className="muted">of {money(g.targetCents, { whole: true })}</span>
+              <span className="muted">of <Money cents={g.targetCents} whole /></span>
             </div>
             <Progress value={g.savedCents} max={g.targetCents} tone="good" />
             <p className="muted small">
               {g.progress.monthlyNeededCents !== null && g.progress.status !== 'done'
-                ? `${money(g.progress.monthlyNeededCents, { whole: true })}/month to reach it by ${g.targetDate ? shortDate(g.targetDate) : ''}. `
+                ? <><Money cents={g.progress.monthlyNeededCents} whole />/month to reach it by {g.targetDate ? shortDate(g.targetDate) : ''}. </>
                 : ''}
-              {g.progress.recentAverageCents > 0 && `Lately about ${money(g.progress.recentAverageCents, { whole: true })}/month.`}
+              {g.progress.recentAverageCents > 0 && <>Lately about <Money cents={g.progress.recentAverageCents} whole />/month.</>}
             </p>
           </Card>
         ))
@@ -188,6 +189,7 @@ interface Debt {
 
 function DebtsView() {
   const { me } = useApp();
+  const moneyText = useMoneyText();
   const debts = useLoad(() => api<Debt[]>('/debts'), []);
   const [extra, setExtra] = useState(10000);
   const [plan, setPlan] = useState<{ snowball: PayoffPlan; avalanche: PayoffPlan } | null>(null);
@@ -221,7 +223,7 @@ function DebtsView() {
               <div className="row-main">
                 <div className="row-title">{d.name}</div>
                 <div className="row-sub">
-                  {d.aprPercent}% APR · min {money(d.minPaymentCents)}
+                  {d.aprPercent}% APR · min <Money cents={d.minPaymentCents} />
                   {d.source === 'plaid' && ' · from bank'}
                 </div>
               </div>
@@ -235,7 +237,7 @@ function DebtsView() {
       {plan && debts.data.some((d) => d.balanceCents > 0) && (
         <Card>
           <h2>Payoff plan</h2>
-          <Field label={`Extra each month on top of minimums: ${money(extra, { whole: true })}`}>
+          <Field label={`Extra each month on top of minimums: ${moneyText(extra, { whole: true })}`}>
             <input type="range" min={0} max={200000} step={2500} value={extra} onChange={(e) => setExtra(Number(e.target.value))} />
           </Field>
           <table className="compare">
@@ -252,14 +254,14 @@ function DebtsView() {
                   Snowball <span className="muted small">smallest first</span>
                 </td>
                 <td>{debtFree(plan.snowball.months)}</td>
-                <td>{money(plan.snowball.totalInterestCents, { whole: true })}</td>
+                <td><Money cents={plan.snowball.totalInterestCents} whole /></td>
               </tr>
               <tr>
                 <td>
                   Avalanche <span className="muted small">highest rate first</span>
                 </td>
                 <td>{debtFree(plan.avalanche.months)}</td>
-                <td>{money(plan.avalanche.totalInterestCents, { whole: true })}</td>
+                <td><Money cents={plan.avalanche.totalInterestCents} whole /></td>
               </tr>
             </tbody>
           </table>

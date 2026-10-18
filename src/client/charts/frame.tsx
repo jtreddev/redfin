@@ -143,7 +143,7 @@ export function Axes({
       {tickValues.map((t) => (
         <g key={t}>
           {t > 0 && <line className="chart-grid" x1={LAYOUT.left} x2={width - LAYOUT.right} y1={yOf(t)} y2={yOf(t)} />}
-          <text className="chart-tick" x={LAYOUT.left - 6} y={yOf(t)} dy="0.32em" textAnchor="end">
+          <text className="chart-tick chart-amount" x={LAYOUT.left - 6} y={yOf(t)} dy="0.32em" textAnchor="end">
             {dollarsShort(t)}
           </text>
         </g>

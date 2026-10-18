@@ -26,6 +26,7 @@ export interface Viewer {
   name: string;
   hideSetup: boolean;
   powerTools: boolean;
+  hideAmounts: boolean;
 }
 
 export interface HouseholdSettings {
