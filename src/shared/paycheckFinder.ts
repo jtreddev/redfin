@@ -38,8 +38,9 @@ export interface PaycheckSuggestion {
 
 /** Smaller regular deposits (interest, cash back) aren't paychecks. */
 const MIN_PAYCHECK_CENTS = 5_000;
-/** Enough history to tell "every two weeks" from "twice a month". */
+/** Enough history to tell "every two weeks" from "twice a month". Weekly pay is plain sooner. */
 const MIN_SPAN_DAYS = 56;
+const MIN_WEEKLY_PAYDAYS = 4;
 const MIN_FIT = 0.8;
 const CYCLE_DAYS: Record<PayFrequency, number> = { weekly: 7, biweekly: 14, semimonthly: 16, monthly: 31 };
 
@@ -207,7 +208,8 @@ export function findPaychecks(deposits: readonly DepositInput[], { today }: { to
     if (days.length < 3) continue;
     const firstDate = days[0]!.date;
     const lastDate = days[days.length - 1]!.date;
-    if (diffDays(lastDate, firstDate) < MIN_SPAN_DAYS) continue;
+    const span = diffDays(lastDate, firstDate);
+    if (span < 7 * (MIN_WEEKLY_PAYDAYS - 1)) continue;
 
     // Best fit wins; then the paydays closest to when the money actually lands; then the simpler schedule.
     let best: { schedule: PaySchedule; score: number; drift: number } | null = null;
@@ -224,6 +226,7 @@ export function findPaychecks(deposits: readonly DepositInput[], { today }: { to
     }
     if (!best || best.score < MIN_FIT) continue;
     const { schedule } = best;
+    if (schedule.frequency === 'weekly' ? days.length < MIN_WEEKLY_PAYDAYS : span < MIN_SPAN_DAYS) continue;
     if (diffDays(today, lastDate) > CYCLE_DAYS[schedule.frequency] * 2 + 5) continue;
 
     const recent = days.slice(-6).map((d) => d.amountCents);

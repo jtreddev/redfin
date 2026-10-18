@@ -138,6 +138,8 @@ export function TransactionSheet({
         </div>
       )}
 
+      {t.amountCents < 0 && !t.pending && <BillToggle txnId={t.id} />}
+
       {me.kids.length > 0 && !t.isSplit && (
         <Field label="For which kid?">
           <KidSelect value={t.kidId} onChange={(id) => void update({ kidId: id })} />
@@ -200,6 +202,117 @@ export function TransactionSheet({
         )}
       </div>
     </Sheet>
+  );
+}
+
+type Cadence = 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'yearly';
+interface Bill {
+  id: number;
+  name: string;
+  cadence: Cadence;
+  amountCents: number;
+  status: 'suggested' | 'confirmed' | 'dismissed';
+}
+interface BillGuess {
+  name: string;
+  cadence: Cadence;
+  amountCents: number;
+}
+
+const CADENCES: { value: Cadence; label: string }[] = [
+  { value: 'weekly', label: 'Every week' },
+  { value: 'biweekly', label: 'Every 2 weeks' },
+  { value: 'monthly', label: 'Every month' },
+  { value: 'quarterly', label: 'Every 3 months' },
+  { value: 'yearly', label: 'Every year' },
+];
+
+/** Marks this charge's merchant as a bill, for bills "Find them" misses. */
+function BillToggle({ txnId }: { txnId: number }) {
+  const { toast } = useApp();
+  const [bill, setBill] = useState<Bill | null>(null);
+  const [guess, setGuess] = useState<BillGuess | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [cadence, setCadence] = useState<Cadence>('monthly');
+  const [amount, setAmount] = useState<number | null>(null);
+
+  useEffect(() => {
+    setBill(null);
+    setGuess(null);
+    setEditing(false);
+    api<{ bill: Bill | null; guess: BillGuess | null }>(`/transactions/${txnId}/bill`)
+      .then((res) => {
+        setBill(res.bill);
+        setGuess(res.guess);
+      })
+      .catch(() => undefined);
+  }, [txnId]);
+
+  if (!guess) return null;
+  const isBill = bill?.status === 'confirmed';
+
+  function startEditing() {
+    const from = isBill && bill ? bill : guess!;
+    setCadence(from.cadence);
+    setAmount(from.amountCents);
+    setEditing(true);
+  }
+
+  async function save(body: Record<string, unknown>) {
+    try {
+      const res = await put<{ bill: Bill | null }>(`/transactions/${txnId}/bill`, body);
+      setBill(res.bill);
+      setEditing(false);
+      toast(res.bill ? `${res.bill.name} saved as a bill` : 'No longer a bill');
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    }
+  }
+
+  return (
+    <div className="stack-sm">
+      <Toggle
+        checked={isBill || editing}
+        onChange={(v) => (v ? startEditing() : isBill ? void save({ isBill: false, billId: bill?.id }) : setEditing(false))}
+        label="This is a bill"
+        hint={
+          isBill && bill && !editing
+            ? `${CADENCES.find((c) => c.value === bill.cadence)?.label ?? ''}, about ${money(bill.amountCents)}. Shows in Plan › Bills and upcoming bills.`
+            : 'It repeats, like rent, a utility, or a subscription.'
+        }
+      />
+      {isBill && !editing && (
+        <Button small variant="ghost" onClick={startEditing}>
+          Change how often or how much
+        </Button>
+      )}
+      {editing && (
+        <div className="card stack-sm">
+          <div className="grid-2">
+            <Field label="How often">
+              <select value={cadence} onChange={(e) => setCadence(e.target.value as Cadence)}>
+                {CADENCES.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Usually about">
+              <AmountInput cents={amount} onChange={setAmount} />
+            </Field>
+          </div>
+          <div className="cluster">
+            <Button small variant="primary" disabled={!amount} onClick={() => void save({ isBill: true, billId: bill?.id, cadence, amountCents: amount })}>
+              Save bill
+            </Button>
+            <Button small variant="ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

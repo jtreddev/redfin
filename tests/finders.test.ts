@@ -207,3 +207,160 @@ describe('bills finder', () => {
     });
   });
 });
+
+describe('marking a charge as a bill', () => {
+  let db: TestD1;
+  let env: Env;
+  const YOU = 'you@example.com';
+  const PARTNER = 'partner@example.com';
+
+  beforeEach(async () => {
+    db = new TestD1();
+    env = testEnv(db);
+    await api(env, 'GET', '/me', undefined, YOU);
+    await api(env, 'GET', '/me', undefined, PARTNER);
+    db.exec(`INSERT INTO accounts (name, type) VALUES ('Checking', 'checking')`);
+  });
+
+  const charge = (daysAgo: number, cents: number, name: string, privateMemberId: number | null = null) => {
+    db.exec(
+      `INSERT INTO transactions (account_id, date, amount_cents, name, normalized_merchant, source, private_member_id)
+       VALUES (1, ?, ?, ?, ?, 'plaid', ?)`,
+      addDays(todayIn('America/Chicago'), -daysAgo), cents, name, normalizeMerchant(name), privateMemberId,
+    );
+    return db.rows<{ id: number }>('SELECT MAX(id) AS id FROM transactions')[0]!.id;
+  };
+  const bills = () =>
+    db.rows<{ merchant: string; cadence: string; cents: number; status: string; p: number | null }>(
+      'SELECT merchant, cadence, expected_amount_cents AS cents, status, private_member_id AS p FROM recurring_bills ORDER BY merchant',
+    );
+  const mark = (id: number, body: Record<string, unknown>, email = YOU) => api(env, 'PUT', `/transactions/${id}/bill`, body, email);
+
+  it('guesses how often and how much from the other charges, even when the amount changes', async () => {
+    // An electric bill the finder skips: it swings more than 10% month to month.
+    [80, 120, 95, 140].forEach((dollars, k) => charge(5 + 30 * k, -dollars * 100, 'CITY POWER & LIGHT AUTOPAY'));
+    const id = charge(200, -9000, 'CITY POWER & LIGHT AUTOPAY');
+    const res = (await (await api(env, 'GET', `/transactions/${id}/bill`, undefined, YOU)).json()) as { bill: unknown; guess: { cadence: string; amountCents: number } };
+    expect(res.bill).toBeNull();
+    expect(res.guess).toMatchObject({ cadence: 'monthly', amountCents: 9500 });
+  });
+
+  it('saves a confirmed bill under the key the finder uses, and the finder leaves it alone', async () => {
+    for (let k = 0; k < 4; k++) charge(5 + 30 * k, -1549, 'NETFLIX.COM');
+    const id = charge(130, -1549, 'NETFLIX.COM');
+    expect((await mark(id, { isBill: true, cadence: 'monthly', amountCents: 1549 })).status).toBe(200);
+    await api(env, 'POST', '/recurring/detect', undefined, YOU);
+    expect(bills()).toEqual([{ merchant: normalizeMerchant('NETFLIX.COM'), cadence: 'monthly', cents: -1549, status: 'confirmed', p: null }]);
+    // Upcoming bills see it.
+    const row = db.rows<{ next: string }>('SELECT next_date AS next FROM recurring_bills')[0]!;
+    expect(row.next > addDays(todayIn('America/Chicago'), -1)).toBe(true);
+  });
+
+  it('works for loan payments the finder skips as transfers', async () => {
+    const id = charge(3, -38612, 'CAPITAL ONE AUTO PAYMENT');
+    db.exec('UPDATE transactions SET transfer_pair_id = 999 WHERE id = ?', id);
+    expect((await mark(id, { isBill: true, cadence: 'monthly', amountCents: 38612 })).status).toBe(200);
+    expect(bills()).toHaveLength(1);
+  });
+
+  it('turning it off dismisses the bill so the finder won’t suggest it again', async () => {
+    for (let k = 0; k < 4; k++) charge(5 + 30 * k, -1549, 'NETFLIX.COM');
+    const id = charge(130, -1549, 'NETFLIX.COM');
+    await mark(id, { isBill: true, cadence: 'monthly', amountCents: 1549 });
+    await mark(id, { isBill: false });
+    await api(env, 'POST', '/recurring/detect', undefined, YOU);
+    expect(bills().map((b) => b.status)).toEqual(['dismissed']);
+  });
+
+  it('keeps a second subscription from the same merchant separate', async () => {
+    const big = charge(4, -999, 'APPLE.COM/BILL');
+    const small = charge(9, -99, 'APPLE.COM/BILL');
+    await mark(big, { isBill: true, cadence: 'monthly', amountCents: 999 });
+    expect((await mark(small, { isBill: true, cadence: 'monthly', amountCents: 99 })).status).toBe(200);
+    expect(bills().map((b) => `${b.merchant} ${b.cents}`)).toEqual(['APPLE COM BILL -999', 'APPLE COM BILL $1 -99']);
+  });
+
+  it('turning it off works even after you changed the usual amount', async () => {
+    const id = charge(3, -9000, 'CITY WATER UTIL');
+    const saved = (await (await mark(id, { isBill: true, cadence: 'monthly', amountCents: 20000 })).json()) as { bill: { id: number } };
+    await mark(id, { isBill: false, billId: saved.bill.id });
+    expect(bills().map((b) => b.status)).toEqual(['dismissed']);
+  });
+
+  it('a bill that swings a lot stays one bill', async () => {
+    const low = charge(40, -4500, 'CITY WATER UTIL');
+    const high = charge(10, -11000, 'CITY WATER UTIL');
+    await mark(low, { isBill: true, cadence: 'monthly', amountCents: 4500 });
+    const res = (await (await api(env, 'GET', `/transactions/${high}/bill`, undefined, YOU)).json()) as { bill: { status: string } | null };
+    expect(res.bill?.status).toBe('confirmed');
+    await mark(high, { isBill: true, cadence: 'monthly', amountCents: 7500 });
+    expect(bills()).toEqual([expect.objectContaining({ merchant: normalizeMerchant('CITY WATER UTIL'), cents: -7500 })]);
+  });
+
+  it('needs to be told whether it is a bill', async () => {
+    const id = charge(3, -1549, 'NETFLIX.COM');
+    await mark(id, { isBill: true, cadence: 'monthly', amountCents: 1549 });
+    expect((await mark(id, {})).status).toBe(400);
+    expect(bills().map((b) => b.status)).toEqual(['confirmed']);
+  });
+
+  it('marking your fun money charge leaves the shared bill from that merchant shared', async () => {
+    const you = db.rows<{ id: number }>('SELECT id FROM members WHERE email = ?', YOU)[0]!.id;
+    await mark(charge(20, -1599, 'HULU'), { isBill: true, cadence: 'monthly', amountCents: 1599 });
+    await mark(charge(5, -1599, 'HULU', you), { isBill: true, cadence: 'monthly', amountCents: 1599 });
+    expect(bills().map((b) => `${b.merchant} ${b.p === null ? 'shared' : 'private'}`)).toEqual(['HULU shared', 'HULU $16 private']);
+  });
+
+  it('a fun money charge makes a private bill, and your partner can’t mark it', async () => {
+    const you = db.rows<{ id: number }>('SELECT id FROM members WHERE email = ?', YOU)[0]!.id;
+    const id = charge(2, -1099, 'SPOTIFY USA', you);
+    expect((await mark(id, { isBill: true, cadence: 'monthly', amountCents: 1099 }, PARTNER)).status).toBe(404);
+    await mark(id, { isBill: true, cadence: 'monthly', amountCents: 1099 });
+    expect(bills()).toEqual([expect.objectContaining({ status: 'confirmed', p: you })]);
+    const partnerSees = (await (await api(env, 'GET', '/recurring', undefined, PARTNER)).json()) as unknown[];
+    expect(partnerSees).toEqual([]);
+  });
+});
+
+describe('bills finder with changing amounts', () => {
+  it('finds a monthly utility bill whose amount swings, but not weekly grocery runs', () => {
+    let id = 1;
+    const power = [82, 131, 96, 148, 117, 88].map((dollars, k) => ({ id: id++, date: addDays(TODAY, -5 - 30 * k), amountCents: -dollars * 100, merchant: 'CITY POWER' }));
+    const groceries = [64, 91, 120, 75, 102, 58, 88, 110].map((dollars, k) => ({ id: id++, date: addDays(TODAY, -2 - 7 * k), amountCents: -dollars * 100, merchant: 'KROGER' }));
+    const found = detectRecurring([...power, ...groceries], { today: TODAY });
+    expect(found.map((s) => `${s.merchant} ${s.cadence}`)).toEqual(['CITY POWER monthly']);
+  });
+});
+
+describe('finders on real-world rhythms', () => {
+  const at = (gaps: number[], start: ISODate) => gaps.reduce<ISODate[]>((dates, gap) => [...dates, addDays(dates[dates.length - 1]!, gap)], [start]);
+  const charges = (dates: ISODate[], cents: number | number[], merchant: string, from = 1) =>
+    dates.map((date, i) => ({ id: from + i, date, amountCents: Array.isArray(cents) ? cents[i]! : cents, merchant }));
+
+  it('finds a weekly paycheck after a few weeks, before two months of history', () => {
+    const [found] = findPaychecks(every(7, addDays(TODAY, -45)).map((date) => deposit(date, 1450.25, 'DIRECT DEPOSIT ACME PAYROLL')), { today: TODAY });
+    expect(found).toMatchObject({ frequency: 'weekly', netPayCents: 145025 });
+  });
+
+  it('finds a phone bill paid by hand: a week late, then early', () => {
+    const dates = at([31, 29, 31, 45, 36, 24, 17], addDays(TODAY, -240));
+    const found = detectRecurring(charges(dates, [-8500, -8500, -8500, -7300, -7900, -9100, -8200, -8000], 'PHONE CO'), { today: TODAY });
+    expect(found.map((s) => `${s.merchant} ${s.cadence}`)).toEqual(['PHONE CO monthly']);
+  });
+
+  it('finds a loan payment with months paid from somewhere else', () => {
+    const dates = at([30, 29, 32, 124, 35], addDays(TODAY, -265));
+    expect(detectRecurring(charges(dates, -8650, 'LOAN SERVICER'), { today: TODAY }).map((s) => s.cadence)).toEqual(['monthly']);
+  });
+
+  it('finds a mortgage that is steady lately after a messy stretch', () => {
+    const dates = at([14, 14, 14, 14, 182, 14, 44, 26, 28, 18, 13, 12, 14, 14], addDays(TODAY, -436));
+    expect(detectRecurring(charges(dates, -61000, 'HOME LOANS'), { today: TODAY }).map((s) => s.cadence)).toEqual(['biweekly']);
+  });
+
+  it('still skips places you just go often', () => {
+    const pizza = charges(at([12, 8, 16, 21, 13, 1, 12, 15, 9], addDays(TODAY, -110)), -2400, 'PIZZA PLACE');
+    const burgers = charges(at([24, 35, 30, 16, 23, 3, 2, 24, 35, 30], addDays(TODAY, -225)), -1250, 'BURGER PLACE', 100);
+    expect(detectRecurring([...pizza, ...burgers], { today: TODAY })).toEqual([]);
+  });
+});

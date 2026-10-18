@@ -5,7 +5,8 @@ import { addMonths, minDate, monthEnd, monthOf, monthStart, type ISODate, type M
 import { planPayoff } from '../../shared/debt';
 import { goalProgress } from '../../shared/goals';
 import { toCsv } from '../../shared/import/csv';
-import { detectRecurring } from '../../shared/recurring';
+import { PRIVACY_SQL } from '../../shared/privacy';
+import { detectRecurring, guessCadence, median, nextOccurrence, type Cadence } from '../../shared/recurring';
 import type { AppEnv } from '../env';
 import { all, batchAll, first, nowIso, run, stmt, Updates } from '../lib/db';
 import {
@@ -28,6 +29,7 @@ import {
 import { loadCategories } from '../services/context';
 import { loadLedger } from '../services/ledger';
 import { funMoneyBalances, loadMonth } from '../services/planner';
+import { visibleTxn } from './transactions';
 
 export const planning = new Hono<AppEnv>();
 
@@ -132,6 +134,154 @@ planning.post('/recurring/detect', async (c) => {
     }),
   );
   return c.json({ found: suggestions.length });
+});
+
+// Marking a charge as a bill by hand, for bills the finder misses (changing amounts, loan payments, short history).
+
+const CADENCES = ['weekly', 'biweekly', 'monthly', 'quarterly', 'yearly'] as const;
+
+interface BillRow {
+  id: number;
+  merchant: string;
+  name: string;
+  cadence: Cadence;
+  cents: number;
+  status: 'suggested' | 'confirmed' | 'dismissed';
+  privateMemberId: number | null;
+}
+
+/** Within `ratio` times of each other: allows for bills that change (utilities) but keeps $0.99 and $9.99 apart. */
+const sameBill = (a: number, b: number, ratio = 2) => Math.max(Math.abs(a), Math.abs(b)) <= Math.min(Math.abs(a), Math.abs(b)) * ratio;
+
+/** A transaction's bill key, the same one detection uses. */
+async function billKey(db: D1Database, txnId: number) {
+  const row = await first<{ merchant: string }>(db, 'SELECT COALESCE(normalized_merchant, name) AS merchant FROM transactions WHERE id = ?', txnId);
+  return row?.merchant ?? '';
+}
+
+/** Every bill under this merchant, including "MERCHANT $9" for a second subscription; private ones included so keys don't collide. */
+const billsUnder = (db: D1Database, merchant: string) =>
+  all<BillRow>(
+    db,
+    `SELECT id, merchant, name, cadence, expected_amount_cents AS cents, status, private_member_id AS privateMemberId
+       FROM recurring_bills WHERE merchant = ? OR substr(merchant, 1, length(?) + 2) = ? || ' $'`,
+    merchant,
+    merchant,
+    merchant,
+  );
+
+/**
+ * The bill this charge belongs to: the one the app named, else the closest in amount. Only bills shared or
+ * private the same way as the charge, so marking never moves a bill between the two of you.
+ */
+function billFor(bills: readonly BillRow[], txn: { amountCents: number; privateMemberId: number | null }, billId?: number): BillRow | null {
+  const mine = bills.filter((b) => b.privateMemberId === txn.privateMemberId);
+  const named = mine.find((b) => b.id === billId);
+  if (named) return named;
+  // With one bill from this merchant, a big swing (a summer power bill) is still that bill.
+  const ratio = mine.length === 1 ? 4 : 2;
+  const amountCents = txn.amountCents;
+  const candidates = mine.filter((b) => sameBill(b.cents, amountCents, ratio));
+  candidates.sort((a, b) => Math.abs(Math.abs(a.cents) - Math.abs(amountCents)) - Math.abs(Math.abs(b.cents) - Math.abs(amountCents)));
+  return candidates[0] ?? null;
+}
+
+/** This merchant's charges of about this size that you can see, newest first. */
+const similarCharges = async (db: D1Database, merchant: string, amountCents: number, viewerId: number, since: ISODate) =>
+  (
+    await all<{ date: ISODate; cents: number }>(
+      db,
+      `SELECT t.date, t.amount_cents AS cents FROM transactions t
+        WHERE COALESCE(t.normalized_merchant, t.name) = ? AND t.amount_cents < 0 AND t.deleted_at IS NULL
+          AND t.pending = 0 AND t.date >= ? AND ${PRIVACY_SQL}
+        ORDER BY t.date DESC`,
+      merchant,
+      since,
+      viewerId,
+    )
+  ).filter((t) => sameBill(t.cents, amountCents));
+
+const billJson = (b: BillRow) => ({ id: b.id, name: b.name, cadence: b.cadence, amountCents: Math.abs(b.cents), status: b.status });
+
+planning.get('/transactions/:id/bill', async (c) => {
+  const db = c.env.DB;
+  const viewerId = c.get('viewer').memberId;
+  const txn = await visibleTxn(db, paramId(c), viewerId);
+  if (txn.amountCents >= 0) return c.json({ bill: null, guess: null });
+  const merchant = await billKey(db, txn.id);
+  const bill = billFor(await billsUnder(db, merchant), txn);
+  const charges = await similarCharges(db, merchant, txn.amountCents, viewerId, monthStart(addMonths(monthOf(c.get('today')), -25)));
+  return c.json({
+    bill: bill ? billJson(bill) : null,
+    guess: {
+      name: txn.merchantName ?? titleCase(merchant),
+      cadence: guessCadence(charges.map((t) => t.date)),
+      // Recent charges, so a bill that changes month to month gets a typical amount.
+      amountCents: Math.abs(median(charges.slice(0, 6).map((t) => t.cents))) || Math.abs(txn.amountCents),
+    },
+  });
+});
+
+planning.put('/transactions/:id/bill', async (c) => {
+  const db = c.env.DB;
+  const viewerId = c.get('viewer').memberId;
+  const txn = await visibleTxn(db, paramId(c), viewerId);
+  if (txn.amountCents >= 0) throw badRequest('Only money going out can be a bill');
+  const body = await readBody(c);
+  const merchant = await billKey(db, txn.id);
+  const bills = await billsUnder(db, merchant);
+  const existing = billFor(bills, txn, optInt(body.billId, 'billId', { min: 1 }) ?? undefined);
+
+  const isBill = optBool(body.isBill, 'isBill');
+  if (isBill === undefined) throw badRequest('isBill is required');
+  if (!isBill) {
+    // Dismissed rather than deleted, so "Find them" doesn't suggest it again.
+    if (existing) await run(db, `UPDATE recurring_bills SET status = 'dismissed', updated_at = ? WHERE id = ?`, nowIso(), existing.id);
+    return c.json({ bill: null });
+  }
+
+  const cadence = oneOf(body.cadence, 'cadence', CADENCES) ?? existing?.cadence ?? 'monthly';
+  const amount = reqInt(body.amountCents, 'amountCents', { min: 1 });
+  const name = optStr(body.name, 'name', 80) ?? existing?.name ?? txn.merchantName ?? titleCase(merchant);
+  const today = c.get('today');
+  const [latest] = await similarCharges(db, merchant, txn.amountCents, viewerId, monthStart(addMonths(monthOf(today), -25)));
+  const lastDate = latest && latest.date > txn.date ? latest.date : txn.date;
+
+  // Keep the existing bill's key; a second bill from the same merchant gets "MERCHANT $9", as detection does.
+  let key = existing?.merchant ?? merchant;
+  if (bills.some((b) => b.id !== existing?.id && b.merchant === key && b.cadence === cadence)) key = `${merchant} $${Math.round(amount / 100)}`;
+  const now = nowIso();
+  await batchAll(db, [
+    ...(existing && (existing.merchant !== key || existing.cadence !== cadence) ? [stmt(db, 'DELETE FROM recurring_bills WHERE id = ?', existing.id)] : []),
+    stmt(
+      db,
+      `INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, last_date, next_date, category_id,
+                                    account_id, status, private_member_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)
+       ON CONFLICT (merchant, cadence) DO UPDATE SET name = excluded.name, expected_amount_cents = excluded.expected_amount_cents,
+         last_date = excluded.last_date, next_date = excluded.next_date,
+         category_id = COALESCE(excluded.category_id, recurring_bills.category_id), account_id = excluded.account_id,
+         status = 'confirmed', private_member_id = excluded.private_member_id, updated_at = ?`,
+      key,
+      name,
+      cadence,
+      -amount,
+      lastDate,
+      nextOccurrence(lastDate, cadence),
+      txn.categoryId,
+      txn.accountId,
+      txn.privateMemberId,
+      now,
+    ),
+  ]);
+  const saved = await first<BillRow>(
+    db,
+    `SELECT id, merchant, name, cadence, expected_amount_cents AS cents, status, private_member_id AS privateMemberId
+       FROM recurring_bills WHERE merchant = ? AND cadence = ?`,
+    key,
+    cadence,
+  );
+  return c.json({ bill: saved ? billJson(saved) : null });
 });
 
 planning.patch('/recurring/:id', async (c) => {
