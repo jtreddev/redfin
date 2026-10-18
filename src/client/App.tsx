@@ -7,6 +7,7 @@ import { Home } from './screens/Home';
 import { More } from './screens/More';
 import { Plan } from './screens/Plan';
 import { AppContext, type AppData } from './state';
+import { recategorizeAll } from './sync';
 import type { Account, Category, Me } from './types';
 import { ErrorNote, Loading } from './ui';
 
@@ -81,6 +82,17 @@ export function App() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // History from before automatic categories gets sorted once, quietly, without holding up the screen.
+  const needsCategorizing = base !== null && base.me.household.categorizedAllAt === null;
+  const categorizing = useRef(false);
+  useEffect(() => {
+    if (!needsCategorizing || categorizing.current) return;
+    categorizing.current = true;
+    recategorizeAll()
+      .then(() => reload())
+      .catch((e) => console.error('Background categorizing failed', e));
+  }, [needsCategorizing, reload]);
 
   const showToast = useCallback((text: string, tone: 'ok' | 'error' = 'ok') => {
     setToast({ text, tone });

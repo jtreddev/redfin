@@ -61,7 +61,8 @@ core.patch('/household', async (c) => {
     .set('name', optStr(body.name, 'name', 80) ?? undefined)
     .set('low_balance_cents', optInt(body.lowBalanceCents, 'lowBalanceCents', { min: 0 }) ?? undefined)
     .set('card_pay_mode', oneOf(body.cardPayMode, 'cardPayMode', ['when_made', 'when_paid'] as const))
-    .set('fun_money_start_date', optDate(body.funMoneyStartDate, 'funMoneyStartDate'));
+    .set('fun_money_start_date', optDate(body.funMoneyStartDate, 'funMoneyStartDate'))
+    .set('habit_cutoff_cents', optInt(body.habitCutoffCents, 'habitCutoffCents', { min: 0, max: 100_000 }) ?? undefined);
   if (body.timezone !== undefined) {
     const timezone = reqStr(body.timezone, 'timezone', 64);
     try {

@@ -30,6 +30,8 @@ export interface Me {
     lowBalanceCents: number;
     cardPayMode: 'when_made' | 'when_paid';
     funMoneyStartDate: string | null;
+    habitCutoffCents: number;
+    categorizedAllAt: string | null;
   };
   members: Member[];
   kids: Kid[];

@@ -5,6 +5,7 @@ import { requireViewer } from './middleware/auth';
 import { PlaidError } from './plaid/client';
 import { runCron } from './plaid/sync';
 import { budget } from './routes/budget';
+import { categorize } from './routes/categorize';
 import { core } from './routes/core';
 import { exportRoutes } from './routes/export';
 import { imports } from './routes/imports';
@@ -36,7 +37,7 @@ app.use('/api/*', async (c, next) => {
 });
 app.use('/api/*', requireViewer);
 
-for (const routes of [core, transactions, rules, imports, budget, plaidRoutes, planning, exportRoutes]) {
+for (const routes of [core, transactions, rules, categorize, imports, budget, plaidRoutes, planning, exportRoutes]) {
   app.route('/api', routes);
 }
 app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));

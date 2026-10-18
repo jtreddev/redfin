@@ -32,6 +32,8 @@ export interface HouseholdSettings {
   lowBalanceCents: number;
   cardPayMode: 'when_made' | 'when_paid';
   funMoneyStartDate: ISODate | null;
+  habitCutoffCents: number;
+  categorizedAllAt: string | null;
 }
 
 export type AppEnv = {

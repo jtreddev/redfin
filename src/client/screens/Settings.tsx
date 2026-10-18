@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { GROUPS, kindForGroup } from '../../shared/categorySet';
 import { errorMessage, patch, post } from '../api';
 import { go } from '../router';
+import { recategorizeAll } from '../sync';
 import { useApp } from '../state';
 import type { Member } from '../types';
 import { AmountInput, Button, Card, Field, Sheet, Toggle } from '../ui';
@@ -22,17 +23,32 @@ export function Settings() {
   const [name, setName] = useState(me.household.name);
   const [timezone, setTimezone] = useState(me.household.timezone);
   const [low, setLow] = useState<number | null>(me.household.lowBalanceCents);
+  const [cutoff, setCutoff] = useState<number | null>(me.household.habitCutoffCents);
+  const [recategorizing, setRecategorizing] = useState<number | null>(null);
   const [funStart, setFunStart] = useState(me.household.funMoneyStartDate ?? '');
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
 
   async function save() {
     try {
-      await patch('/household', { name, timezone, lowBalanceCents: low ?? 0, funMoneyStartDate: funStart || null });
+      await patch('/household', { name, timezone, lowBalanceCents: low ?? 0, habitCutoffCents: cutoff ?? 0, funMoneyStartDate: funStart || null });
       await reload();
       toast('Saved');
     } catch (error) {
       toast(errorMessage(error), 'error');
+    }
+  }
+
+  async function recategorize() {
+    setRecategorizing(0);
+    try {
+      const changed = await recategorizeAll(setRecategorizing);
+      await reload();
+      toast(changed === 1 ? '1 charge recategorized' : `${changed} charges recategorized`);
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    } finally {
+      setRecategorizing(null);
     }
   }
 
@@ -61,8 +77,14 @@ export function Settings() {
           <Field label="Fun money counts from" hint="Allowances build up from this date.">
             <input type="date" value={funStart} onChange={(e) => setFunStart(e.target.value)} />
           </Field>
+          <Field label="Small gas-station charges count as Habits under $__" hint="Bigger fill-ups are Gas. Save, then recategorize to apply it to past charges.">
+            <AmountInput cents={cutoff} onChange={setCutoff} />
+          </Field>
           <Button variant="primary" onClick={() => void save()}>
             Save
+          </Button>
+          <Button disabled={recategorizing !== null} onClick={() => void recategorize()}>
+            {recategorizing === null ? 'Recategorize everything' : `Recategorizing… ${recategorizing} changed`}
           </Button>
         </div>
       </Card>
