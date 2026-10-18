@@ -392,7 +392,7 @@ interface GoalRow {
   createdAt: string;
 }
 
-async function goalsWithProgress(db: D1Database, today: ISODate, includeArchived = false) {
+export async function goalsWithProgress(db: D1Database, today: ISODate, includeArchived = false) {
   const goals = await all<GoalRow>(
     db,
     `SELECT g.id, g.name, g.target_cents AS targetCents, g.target_date AS targetDate, g.category_id AS categoryId,

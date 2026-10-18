@@ -10,9 +10,12 @@ import {
   type ProjectionInput,
   usualLessBills,
 } from '../../shared/projection';
+import { projectMonths } from '../../shared/monthsAhead';
 import type { AppEnv } from '../env';
 import { loadForecastInputs, withoutSetAside } from '../services/forecastInputs';
+import { loadMonthsAheadInput } from '../services/monthsAhead';
 import { upcomingBills } from '../services/planner';
+import { goalsWithProgress } from './planning';
 
 /** "Usual" is the last 3 full months, so the current month plus 3. */
 const USUAL_MONTHS = 4;
@@ -73,4 +76,19 @@ forecast.get('/forecast', async (c) => {
     // No cash account has a balance (e.g. only imported files): there's nothing to start from.
     hasBalance: cash.counted > 0,
   });
+});
+
+/**
+ * Months ahead: the inputs for the rest of this month and the next 12, and the 12-month projection. The client
+ * re-runs projectMonths on the inputs for 3 or 6 months and for a what-if.
+ */
+forecast.get('/forecast/months', async (c) => {
+  const db = c.env.DB;
+  const today = c.get('today');
+  const [goals, { input, hasBalance, hasIncome }] = await Promise.all([
+    goalsWithProgress(db, today),
+    loadMonthsAheadInput(db, today, c.get('viewer').memberId, c.get('household')),
+  ]);
+  input.goals = goals.map((g) => ({ name: g.name, remainingCents: g.progress.remainingCents, recentAverageCents: g.progress.recentAverageCents }));
+  return c.json({ today, input, projection: projectMonths(input, 12), hasBalance, hasIncome });
 });
