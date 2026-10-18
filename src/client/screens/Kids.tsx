@@ -150,15 +150,16 @@ function KidSheet({ kid, onClose, onSaved }: { kid: Kid | null; onClose: () => v
         <input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} />
       </Field>
       <Field label="Color">
-        <div className="cluster">
+        <div className="swatches">
           {COLORS.map((c) => (
             <button
               key={c}
               type="button"
               aria-label={c}
               onClick={() => setColor(c)}
-              className="avatar"
-              style={{ background: c, border: color === c ? '3px solid var(--text)' : 'none', cursor: 'pointer' }}
+              aria-pressed={color === c}
+              className={`swatch ${color === c ? 'selected' : ''}`}
+              style={{ background: c }}
             />
           ))}
         </div>

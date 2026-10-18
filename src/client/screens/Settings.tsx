@@ -168,15 +168,16 @@ function MemberSheet({ member, onClose }: { member: Member; onClose: () => void 
         <input value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
       <Field label="Color">
-        <div className="cluster">
+        <div className="swatches">
           {COLORS.map((c) => (
             <button
               key={c}
               type="button"
               aria-label={c}
-              className="avatar"
               onClick={() => setColor(c)}
-              style={{ background: c, border: color === c ? '3px solid var(--text)' : 'none', cursor: 'pointer' }}
+              aria-pressed={color === c}
+              className={`swatch ${color === c ? 'selected' : ''}`}
+              style={{ background: c }}
             />
           ))}
         </div>

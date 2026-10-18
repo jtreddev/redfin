@@ -346,7 +346,7 @@ function SplitEditor({ txn, onCancel, onSaved }: { txn: Transaction; onCancel: (
         </span>
       </div>
       {parts.map((part, i) => (
-        <div key={i} className="stack-sm" style={{ borderTop: i ? '1px solid var(--border)' : undefined, paddingTop: i ? 8 : 0 }}>
+        <div key={i} className="stack-sm" style={{ borderTop: i ? '1px solid var(--hairline)' : undefined, paddingTop: i ? 8 : 0 }}>
           <CategorySelect value={part.categoryId} onChange={(id) => change(i, { categoryId: id })} filter={(c) => c.funMemberId === null} />
           <div className="grid-2">
             <KidSelect value={part.kidId} onChange={(id) => change(i, { kidId: id })} />
