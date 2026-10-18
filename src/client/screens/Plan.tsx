@@ -152,40 +152,53 @@ function BudgetView({ month }: { month: string }) {
               </span>
             </div>
             <div className="list">
-              {rows.map((row) => (
-                <button
-                  key={row.categoryId}
-                  type="button"
-                  className="row row-button"
-                  onClick={() => {
-                    if (row.computed === 'paychecks') go('more/income');
-                    else if (row.computed === 'fun_money') go('more/fun');
-                    else setEditing(row);
-                  }}
-                >
-                  <div className="row-main stack-sm">
-                    <div className="spread">
-                      <span className="row-title">{row.name}</span>
-                      <span className="small">
-                        <Money cents={row.actualCents} whole tone={row.kind !== 'income' && row.budgetCents > 0 && row.actualCents > row.budgetCents ? 'bad' : undefined} />
-                        <span className="muted"> / {money(row.budgetCents, { whole: true })}</span>
-                      </span>
+              {rows.map((row) => {
+                const line = (
+                  <button
+                    key={row.categoryId}
+                    type="button"
+                    className="row row-button"
+                    onClick={() => {
+                      if (row.computed === 'paychecks') go('more/income');
+                      else if (row.computed === 'fun_money') go('more/fun');
+                      else setEditing(row);
+                    }}
+                  >
+                    <div className="row-main stack-sm">
+                      <div className="spread">
+                        <span className="row-title">{row.name}</span>
+                        <span className="small">
+                          <Money cents={row.actualCents} whole tone={row.kind !== 'income' && row.budgetCents > 0 && row.actualCents > row.budgetCents ? 'bad' : undefined} />
+                          <span className="muted"> / {money(row.budgetCents, { whole: true })}</span>
+                        </span>
+                      </div>
+                      <Progress value={row.actualCents} max={row.budgetCents} tone={row.kind === 'income' ? 'good' : undefined} />
+                      {row.computed !== 'planned_costs' && (
+                        <div className="row-sub">
+                          {row.computed === 'paychecks'
+                            ? 'From Income & paydays'
+                            : row.computed === 'fun_money'
+                              ? 'Allowance × paydays'
+                              : row.timing === 'due_day' && row.dueDay
+                                ? `Due on the ${ordinal(row.dueDay)}`
+                                : 'Spread across the month'}
+                        </div>
+                      )}
                     </div>
-                    <Progress value={row.actualCents} max={row.budgetCents} tone={row.kind === 'income' ? 'good' : undefined} />
-                    <div className="row-sub">
-                      {row.computed === 'paychecks'
-                        ? 'From Income & paydays'
-                        : row.computed === 'fun_money'
-                          ? 'Allowance × paydays'
-                          : row.computed === 'planned_costs'
-                            ? `Includes ${money(row.plannedCostsCents, { whole: true })} for planned costs`
-                            : row.timing === 'due_day' && row.dueDay
-                            ? `Due on the ${ordinal(row.dueDay)}`
-                            : 'Spread across the month'}
-                    </div>
+                  </button>
+                );
+                if (row.computed !== 'planned_costs') return line;
+                // The row edits the typed part; its planned-costs part has its own tap target.
+                return (
+                  <div key={row.categoryId} className="setaside-planrow">
+                    {line}
+                    <button type="button" className="setaside-planlink" onClick={() => go('plan', { view: 'goals' })}>
+                      Includes {money(row.plannedCostsCents, { whole: true })} for planned costs
+                      <span aria-hidden="true">›</span>
+                    </button>
                   </div>
-                </button>
-              ))}
+                );
+              })}
             </div>
           </div>
         );
@@ -249,6 +262,14 @@ function LineSheet({ month, row, onClose, onSaved }: { month: string; row: Budge
       <Field label="Budget for the month">
         <AmountInput cents={cents} onChange={setCents} autoFocus />
       </Field>
+      {row.computed === 'planned_costs' && (
+        <div className="setaside-suggest">
+          <span className="muted small">Plus {money(row.plannedCostsCents, { whole: true })} for planned costs, added on top.</span>
+          <Button variant="ghost" onClick={() => go('plan', { view: 'goals' })}>
+            See planned costs
+          </Button>
+        </div>
+      )}
       <Segmented
         value={timing}
         onChange={setTiming}

@@ -1234,3 +1234,155 @@ table.compare td:first-child {
 .changes .row-sub {
   white-space: normal;
 }
+
+/* ===== Planned costs (Plan › Goals "Set aside each month"); all classes prefixed .setaside- ===== */
+
+.setaside-total {
+  margin: 0 4px;
+  font-weight: 600;
+}
+
+.setaside-card {
+  display: grid;
+  gap: 4px;
+}
+
+.setaside-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.setaside-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.setaside-top .muted {
+  flex: none;
+}
+
+.setaside-balance {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0;
+  font-size: 1.6rem;
+  font-weight: 700;
+  white-space: normal;
+}
+
+.setaside-icon {
+  flex: none;
+}
+
+.setaside-line {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.setaside-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+.setaside-cats {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.setaside-cats legend {
+  padding: 0;
+  margin-bottom: 6px;
+}
+
+.setaside-group {
+  display: grid;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.setaside-group-name {
+  padding: 8px 12px 4px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.setaside-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.setaside-option input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--brand);
+}
+
+.setaside-option input:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.setaside-option-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.setaside-option.is-taken {
+  cursor: default;
+  color: var(--muted);
+}
+
+.setaside-planrow {
+  border-bottom: 1px solid var(--border);
+}
+
+.setaside-planrow:last-child {
+  border-bottom: none;
+}
+
+.setaside-planrow > .row {
+  border-bottom: none;
+  padding-bottom: 2px;
+}
+
+.setaside-planlink {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 44px;
+  padding: 4px 16px 10px;
+  border: none;
+  background: transparent;
+  color: var(--brand);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.setaside-planlink:active {
+  background: var(--surface-2);
+}

@@ -286,6 +286,22 @@ describe('planned costs API', () => {
     expect(db.rows('SELECT monthly_cents AS cents FROM planned_cost_amounts WHERE planned_cost_id = ?', second.id)).toEqual([{ cents: 200 }]);
   });
 
+  it('links every category of a new cost to that cost', async () => {
+    await list();
+    const shopping = category('Fun & Wants', 'Shopping');
+    const gas = category('Everyday', 'Gas');
+    const habits = category('Habits', 'Habits');
+    const earlier = (await (await api(env, 'POST', '/planned-costs', { name: 'Earlier', monthlyCents: 100 })).json()) as { id: number };
+    const res = await api(env, 'POST', '/planned-costs', { name: 'Several', monthlyCents: 300, categoryIds: [shopping, gas, habits] });
+    expect(res.status).toBe(201);
+    const { id } = (await res.json()) as { id: number };
+    const linked = (costId: number) =>
+      db.rows<{ cat: number }>('SELECT category_id AS cat FROM planned_cost_categories WHERE planned_cost_id = ? ORDER BY category_id', costId).map((r) => r.cat);
+    expect(linked(id)).toEqual([shopping, gas, habits].sort((a, b) => a - b));
+    expect(linked(earlier.id)).toEqual([]);
+    expect(byName(await list(), 'Several').categoryIds.sort((a, b) => a - b)).toEqual([shopping, gas, habits].sort((a, b) => a - b));
+  });
+
   it('does not seed defaults beside a cost added while seeding', async () => {
     // A POST lands after the GET read "no costs" but before its seeding batch runs.
     await api(env, 'POST', '/planned-costs', { name: 'Mine', monthlyCents: 100 });
