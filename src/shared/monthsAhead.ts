@@ -210,9 +210,9 @@ export function projectMonths(input: MonthsAheadInput, horizon: Horizon = 12, wh
       const cents = Math.round(Math.max(0, expected.cents - ownBills) * share);
       byGroup[cost.group] += cents;
       if (expected.likeLast && cents >= BIG_ITEM_CENTS) bigItems.push({ name: cost.name, amountCents: cents, note: `like last ${short(month)}` });
-      // This month's set-aside is already in today's balance.
+      // This month's set-aside is already in today's balance. Its own bills are paid from it too.
       const tracked = costBalances[k]!;
-      tracked.balance += (partial || cost.startMonth > month ? 0 : monthlyFor(cost.amounts, month)) - cents;
+      tracked.balance += (partial || cost.startMonth > month ? 0 : monthlyFor(cost.amounts, month)) - cents - ownBills;
       if (tracked.balance < tracked.lowest) {
         tracked.lowest = tracked.balance;
         tracked.lowestMonth = month;

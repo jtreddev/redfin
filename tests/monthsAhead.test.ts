@@ -164,6 +164,10 @@ describe('projectMonths', () => {
     const march = r.months.find((m) => m.month === '2027-03')!;
     expect(march.byGroup.bills).toBe(61_200);
     expect(march.byGroup.everyday).toBe(8_800);
+    // The bill is still paid from the cost: its balance drops by all 70,000.
+    const balance = r.plannedCosts[0]!;
+    expect(balance.lowestMonth).toBe('2027-03');
+    expect(balance.lowestCents).toBe(31_000 + 5 * 5_000 - 70_000);
   });
 
   it('counts each month’s saving lines', () => {
