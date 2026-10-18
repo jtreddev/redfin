@@ -23,7 +23,7 @@ savedSearches.post('/saved-searches', async (c) => {
   const memberId = c.get('viewer').memberId;
   const body = await readBody(c);
   const name = reqStr(body.name, 'name', 60);
-  const query = optStr(body.query, 'query', 1000) ?? '';
+  const query = reqStr(body.query, 'query', 1000);
   const sort = optStr(body.sort, 'sort', 40) ?? null;
   const count = (await first<{ n: number }>(db, 'SELECT COUNT(*) AS n FROM saved_searches WHERE member_id = ?', memberId))?.n ?? 0;
   if (count >= MAX_PER_PERSON) throw badRequest('That’s a lot of saved searches. Delete one first.');
@@ -42,7 +42,7 @@ savedSearches.patch('/saved-searches/:id', async (c) => {
   const body = await readBody(c);
   const updates = new Updates()
     .set('name', body.name === undefined ? undefined : reqStr(body.name, 'name', 60))
-    .set('query', optStr(body.query, 'query', 1000) ?? undefined)
+    .set('query', body.query === undefined ? undefined : reqStr(body.query, 'query', 1000))
     .set('sort', optStr(body.sort, 'sort', 40));
   if (updates.empty) throw badRequest('Nothing to update');
   const result = await run(

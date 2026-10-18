@@ -158,10 +158,16 @@ core.post('/kids/reorder', async (c) => {
     throw badRequest('ids must be a list of kid ids');
   }
   const db = c.env.DB;
-  await batchAll(
-    db,
-    (body.ids as number[]).map((id, i) => stmt(db, 'UPDATE kids SET sort = ?, updated_at = ? WHERE id = ?', (i + 1) * 10, nowIso(), id)),
-  );
+  const ids = body.ids as number[];
+  const current = (await all<{ id: number }>(db, 'SELECT id FROM kids ORDER BY sort, id')).map((k) => k.id);
+  const known = new Set(current);
+  if (new Set(ids).size !== ids.length || !ids.every((id) => known.has(id))) {
+    throw badRequest('ids must be distinct kids that exist');
+  }
+  // Kids not mentioned (e.g. hidden ones) keep their relative order after the listed ones.
+  const order = [...ids, ...current.filter((id) => !ids.includes(id))];
+  const now = nowIso();
+  await batchAll(db, order.map((id, i) => stmt(db, 'UPDATE kids SET sort = ?, updated_at = ? WHERE id = ?', (i + 1) * 10, now, id)));
   return c.json({ ok: true });
 });
 

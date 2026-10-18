@@ -62,6 +62,12 @@ describe('saved searches', () => {
     expect(await json(await api(env, 'GET', '/saved-searches', undefined, YOU))).toHaveLength(0);
   });
 
+  it('requires a query, on create and on edit', async () => {
+    expect((await api(env, 'POST', '/saved-searches', { name: 'x', query: '' }, YOU)).status).toBe(400);
+    const made = await json(await api(env, 'POST', '/saved-searches', { name: 'x', query: 'q=a' }, YOU));
+    expect((await api(env, 'PATCH', `/saved-searches/${made.id}`, { query: '' }, YOU)).status).toBe(400);
+  });
+
   it('validates the name', async () => {
     expect((await api(env, 'POST', '/saved-searches', { name: '  ', query: 'q=a' }, YOU)).status).toBe(400);
     expect((await api(env, 'POST', '/saved-searches', { query: 'q=a' }, YOU)).status).toBe(400);
@@ -117,13 +123,60 @@ describe('rule preview and apply to past charges', () => {
     expect(res.count).toBe(1);
   });
 
-  it('says how many a category would change, leaving hand-set ones alone', async () => {
+  it('leaves hand-set charges out of the count', async () => {
     await seed();
     const cat = aCategory();
     db.exec(`UPDATE transactions SET category_id = ?, category_source = 'user' WHERE name = 'KROGER #1'`, cat);
     const res = await json(await api(env, 'POST', '/rules/preview', { matchText: 'kroger #', categoryId: cat }, YOU));
-    expect(res.count).toBe(7);
+    expect(res.count).toBe(6);
     expect(res.wouldChange).toBe(6);
+  });
+
+  it('previews kid-only, private-only and ignore-only rules', async () => {
+    await seed();
+    const kid = (await json(await api(env, 'POST', '/kids', { name: 'Ava' }, YOU))).id;
+    expect(await json(await api(env, 'POST', '/rules/preview', { matchText: 'shell', kidId: kid }, YOU))).toMatchObject({ count: 1, wouldChange: 1 });
+    expect(await json(await api(env, 'POST', '/rules/preview', { matchText: 'shell', ignore: true }, YOU))).toMatchObject({ count: 1, wouldChange: 1 });
+    expect(await json(await api(env, 'POST', '/rules/preview', { matchText: 'shell', isPrivate: true }, YOU))).toMatchObject({ count: 1, wouldChange: 1 });
+  });
+
+  it('predicts exactly what saving does', async () => {
+    const { partner } = await seed();
+    const [cat, other] = db.rows<{ id: number }>(`SELECT id FROM categories WHERE fun_member_id IS NULL LIMIT 2`).map((r) => r.id);
+    db.exec(`UPDATE transactions SET category_id = ?, category_source = 'auto' WHERE name = 'KROGER #1'`, cat);
+    db.exec(`INSERT INTO rules (position, match_text, category_id) VALUES (50, 'KROGER #2', ?)`, other);
+    const ruleId = db.rows<{ id: number }>(`SELECT id FROM rules WHERE match_text = 'KROGER #2'`)[0]!.id;
+    db.exec(`UPDATE transactions SET category_id = ?, category_source = 'rule', rule_id = ? WHERE name = 'KROGER #2'`, other, ruleId);
+    db.exec(`UPDATE transactions SET is_split = 1 WHERE name = 'KROGER #3'`);
+    db.exec(`INSERT INTO transactions (account_id, date, amount_cents, name, source) VALUES (1, '2026-10-11', -500, 'KROGER  #9', 'manual')`);
+    db.exec(`UPDATE transactions SET private_member_id = ? WHERE name = 'KROGER #4'`, partner);
+
+    const preview = await json(await api(env, 'POST', '/rules/preview', { matchText: 'kroger #', categoryId: cat }, YOU));
+    expect(preview.wouldChange).toBeGreaterThan(0);
+    expect(preview.count).toBeGreaterThan(preview.wouldChange);
+    expect(preview.sample.length).toBeLessThanOrEqual(5);
+    const names = preview.sample.map((r: { name: string }) => r.name);
+    expect(names).not.toContain('KROGER #4');
+    expect(names).not.toContain('KROGER #3');
+
+    const saved = await json(await api(env, 'POST', '/rules', { matchText: 'kroger #', categoryId: cat, applyToExisting: true }, YOU));
+    expect(saved.updated).toBe(preview.wouldChange);
+    expect(db.rows(`SELECT category_id AS c FROM transactions WHERE name = 'KROGER  #9'`)).toEqual([{ c: cat }]);
+    // Saving still files the partner's private charge too.
+    expect(db.rows(`SELECT category_id AS c FROM transactions WHERE name = 'KROGER #4'`)).toEqual([{ c: cat }]);
+    // Previewing the rule just saved changes nothing more.
+    const after = await json(await api(env, 'POST', '/rules/preview', { ruleId: saved.id, matchText: 'kroger #', categoryId: cat }, YOU));
+    expect(after.wouldChange).toBe(0);
+  });
+
+  it('PATCH previews with ruleId and reports the number it saves', async () => {
+    await seed();
+    const cat = aCategory();
+    const { id } = await json(await api(env, 'POST', '/rules', { matchText: 'SHELL', ignore: true, applyToExisting: false }, YOU));
+    const preview = await json(await api(env, 'POST', '/rules/preview', { ruleId: id, matchText: 'KROGER #', categoryId: cat, ignore: false }, YOU));
+    expect(preview.wouldChange).toBeGreaterThan(0);
+    const res = await json(await api(env, 'PATCH', `/rules/${id}`, { matchText: 'KROGER #', categoryId: cat, ignore: false }, YOU));
+    expect(res.updated).toBe(preview.wouldChange);
   });
 
   it('rejects short or missing text', async () => {
@@ -186,6 +239,15 @@ describe('kids', () => {
     const a = await add('Ava');
     await api(env, 'PATCH', `/kids/${a.id}`, { name: 'Avery' }, YOU);
     expect((await json(await api(env, 'GET', '/kids', undefined, YOU)))[0].name).toBe('Avery');
+  });
+
+  it('rejects unknown or repeated kids in a reorder, and keeps unlisted kids after', async () => {
+    const a = await add('Ava');
+    const b = await add('Ben');
+    expect((await api(env, 'POST', '/kids/reorder', { ids: [a.id, a.id] }, YOU)).status).toBe(400);
+    expect((await api(env, 'POST', '/kids/reorder', { ids: [a.id, 9999] }, YOU)).status).toBe(400);
+    await api(env, 'POST', '/kids/reorder', { ids: [b.id] }, YOU);
+    expect((await json<{ name: string }[]>(await api(env, 'GET', '/kids', undefined, YOU))).map((k) => k.name)).toEqual(['Ben', 'Ava']);
   });
 
   it('adds new kids at the end after a reorder', async () => {
