@@ -13,6 +13,7 @@ import { planning } from './routes/planning';
 import { plaidRoutes } from './routes/plaid';
 import { rules } from './routes/rules';
 import { transactions } from './routes/transactions';
+import { trends } from './routes/trends';
 import { cleanupCategoryMoves } from './services/learn';
 
 const app = new Hono<AppEnv>();
@@ -38,7 +39,7 @@ app.use('/api/*', async (c, next) => {
 });
 app.use('/api/*', requireViewer);
 
-for (const routes of [core, transactions, rules, categorize, imports, budget, plaidRoutes, planning, exportRoutes]) {
+for (const routes of [core, transactions, rules, categorize, imports, budget, plaidRoutes, planning, exportRoutes, trends]) {
   app.route('/api', routes);
 }
 app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));

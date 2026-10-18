@@ -1,7 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ledgerEntries, type CategoryKind, type LedgerSplit, type LedgerTxn } from '../src/shared/actuals';
 import type { ISODate, MonthKey } from '../src/shared/dates';
 import { buildTrends, GROUP_ORDER, whatChanged, type GroupKey, type Trends } from '../src/shared/trends';
+import type { Env } from '../src/worker/env';
+import { loadCategories } from '../src/worker/services/context';
+import { loadLedger } from '../src/worker/services/ledger';
+import { api } from './helpers/api';
+import { TestD1 } from './helpers/d1';
+import { testEnv } from './helpers/plaid';
 
 // ---------------------------------------------------------------------------
 // Pure aggregation
@@ -261,5 +269,205 @@ describe('trends: what changed', () => {
     expect(day7.basis).toBe('this-month');
     // Usual for October = average of Jul–Sep = 19000; 100 * 31 / 7 = 443.
     expect(day7.down).toEqual([{ categoryId: 3, name: 'Groceries', soFar: 100, usual: 19000, projected: 443, diff: -18557 }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/trends
+// ---------------------------------------------------------------------------
+
+describe('GET /api/trends', () => {
+  const YOU = 'you@example.com';
+  const PARTNER = 'partner@example.com';
+  let db: TestD1;
+  let env: Env;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-18T17:00:00Z')); // the 18th in the household's time zone
+    db = new TestD1();
+    env = testEnv(db);
+    db.exec("INSERT INTO accounts (id, name) VALUES (1, 'Checking')");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  type Body = Trends & { changed: ReturnType<typeof whatChanged> };
+  async function trends(query = '', email?: string): Promise<Body> {
+    const res = await api(env, 'GET', `/trends${query}`, undefined, email);
+    expect(res.status).toBe(200);
+    return (await res.json()) as Body;
+  }
+
+  function categoryId(section: string, name: string): number {
+    return db.rows<{ id: number }>(
+      'SELECT c.id FROM categories c JOIN sections s ON s.id = c.section_id WHERE s.name = ? AND c.name = ?',
+      section,
+      name,
+    )[0]!.id;
+  }
+
+  function charge(date: ISODate, cents: number, category: number | null, privateMemberId: number | null = null, name = 'SHOP') {
+    db.exec(
+      `INSERT INTO transactions (account_id, date, amount_cents, name, source, category_id, private_member_id)
+       VALUES (1, ?, ?, ?, 'manual', ?, ?)`,
+      date,
+      cents,
+      name,
+      category,
+      privateMemberId,
+    );
+  }
+
+  async function twoPeople() {
+    await api(env, 'GET', '/me', undefined, YOU);
+    await api(env, 'GET', '/me', undefined, PARTNER);
+    const id = (email: string) => db.rows<{ id: number }>('SELECT id FROM members WHERE email = ?', email)[0]!.id;
+    const fun = (memberId: number) => db.rows<{ id: number }>('SELECT id FROM categories WHERE fun_member_id = ?', memberId)[0]!.id;
+    const you = id(YOU);
+    const partner = id(PARTNER);
+    return { you, partner, yourFun: fun(you), partnerFun: fun(partner) };
+  }
+
+  it('defaults to 12 months ending with the current one, and checks the months asked for', async () => {
+    const body = await trends();
+    expect(body.months).toHaveLength(12);
+    expect(body.months[0]).toBe('2025-11');
+    expect(body.partialMonth).toBe('2026-10');
+    expect(body.months.at(-1)).toBe('2026-10');
+    expect((await trends('?months=3')).months).toEqual(['2026-08', '2026-09', '2026-10']);
+    expect((await trends('?months=24')).months).toHaveLength(24);
+    for (const bad of ['2', '25', 'abc', '3.5']) {
+      expect((await api(env, 'GET', `/trends?months=${bad}`)).status).toBe(400);
+    }
+  });
+
+  it('partner privacy: a partner’s private charges only show inside their Fun Money total', async () => {
+    const { partner, yourFun, partnerFun } = await twoPeople();
+    const groceries = categoryId('Everyday', 'Groceries');
+    charge('2026-09-10', -5000, groceries);
+    charge('2026-09-11', -1000, yourFun);
+    charge('2026-09-12', -4000, partnerFun, partner, 'PRIVATE SPA');
+    charge('2026-09-13', -2500, groceries, partner, 'PRIVATE BOUTIQUE'); // private, misfiled
+    charge('2026-09-14', -700, null, partner, 'PRIVATE KIOSK'); // private, uncategorized
+
+    const body = await trends('', YOU);
+    const sep = body.months.indexOf('2026-09');
+    const row = (id: number) => body.categories.find((c) => c.id === id);
+    expect(row(groceries)?.byMonth[sep]).toBe(5000);
+    expect(row(partnerFun)?.byMonth[sep]).toBe(7200);
+    expect(row(yourFun)?.byMonth[sep]).toBe(1000);
+    expect(body.categories.map((c) => c.id).sort()).toEqual([groceries, yourFun, partnerFun].sort());
+    expect(body.groups.find((g) => g.key === 'everyday')!.byMonth[sep]).toBe(5000);
+    expect(body.groups.find((g) => g.key === 'fun')!.byMonth[sep]).toBe(8200);
+    expect(body.uncategorizedByMonth[sep]).toBe(0);
+    expect(JSON.stringify(body)).not.toMatch(/PRIVATE/);
+    // Both partners see the same numbers.
+    expect(await trends('', PARTNER)).toEqual(body);
+  });
+
+  it('usual and what changed don’t depend on how many months are shown', async () => {
+    await twoPeople();
+    const groceries = categoryId('Everyday', 'Groceries');
+    const habits = categoryId('Habits', 'Habits');
+    const history: [string, number][] = [
+      ['2026-05', 90000],
+      ['2026-06', 40000],
+      ['2026-07', 30000],
+      ['2026-08', 20000],
+      ['2026-09', 10000],
+    ];
+    for (const [month, cents] of history) {
+      charge(`${month}-05`, -cents, groceries);
+      charge(`${month}-06`, -cents / 10, habits);
+    }
+    charge('2026-10-02', -60000, groceries);
+    const short = await trends('?months=3');
+    const long = await trends('?months=12');
+    expect(short.usual).toEqual(long.usual);
+    expect(short.usual.everyday).toBe(20000);
+    expect(short.changed).toEqual(long.changed);
+    expect(short.changed.up.map((c) => [c.categoryId, c.usual])).toEqual([[groceries, 20000]]);
+    // Every byMonth matches the months shown.
+    expect(short.groups.every((g) => g.byMonth.length === 3)).toBe(true);
+    expect(short.categories.every((c) => c.byMonth.length === 3)).toBe(true);
+    expect(short.incomeByMonth).toHaveLength(3);
+    expect(short.uncategorizedByMonth).toHaveLength(3);
+
+    // Before day 7: last month against the 3 months before it, even with 3 months shown.
+    vi.setSystemTime(new Date('2026-10-03T17:00:00Z'));
+    const early = await trends('?months=3');
+    expect(early.changed.basis).toBe('last-month');
+    expect(early.changed).toEqual((await trends('?months=12')).changed);
+    expect(early.changed.down.map((c) => [c.categoryId, c.soFar, c.usual])).toEqual([
+      [groceries, 10000, 30000],
+      [habits, 1000, 3000],
+    ]);
+  });
+
+  it('lists only categories with activity in the months shown', async () => {
+    await twoPeople();
+    const gas = categoryId('Everyday', 'Gas');
+    charge('2026-06-05', -5000, gas); // outside a 3-month view
+    expect((await trends('?months=3')).categories).toEqual([]);
+    expect((await trends('?months=12')).categories.map((c) => c.id)).toEqual([gas]);
+  });
+
+  it('history from before the new category set shows under the new categories', async () => {
+    db = new TestD1({ upTo: '0002' });
+    env = testEnv(db);
+    db.exec("INSERT INTO accounts (id, name) VALUES (1, 'Checking')");
+    charge('2026-04-10', -4200, categoryId('Transportation', 'Fuel'));
+    charge('2026-05-01', -150000, categoryId('Housing', 'Mortgage / Rent'));
+    charge('2026-05-02', -3300, categoryId('Food', 'Groceries'));
+    const dir = join(import.meta.dirname, '../migrations');
+    for (const file of readdirSync(dir).filter((f) => f.endsWith('.sql') && f > '0003').sort()) db.migrate(file);
+
+    const body = await trends('?months=12');
+    const archived = new Set(db.rows<{ id: number }>('SELECT id FROM categories WHERE archived = 1').map((r) => r.id));
+    expect(body.categories.map((c) => [c.name, c.group, c.byMonth.reduce((a, b) => a + b, 0)])).toEqual([
+      ['Housing', 'bills', 150000],
+      ['Groceries', 'everyday', 3300],
+      ['Gas', 'everyday', 4200],
+    ]);
+    expect(body.categories.some((c) => archived.has(c.id))).toBe(false);
+  });
+
+  it('3,000 rows stay fast', async () => {
+    await twoPeople();
+    const ids = db.rows<{ id: number }>("SELECT id FROM categories WHERE archived = 0 AND kind != 'transfer'").map((r) => r.id);
+    const months = ['2025-11', '2025-12', '2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'];
+    const insert = db.sqlite.prepare(
+      `INSERT INTO transactions (account_id, date, amount_cents, name, source, category_id)
+       VALUES (1, ?, ?, 'SHOP', 'manual', ?)`,
+    );
+    db.sqlite.exec('BEGIN');
+    for (let i = 0; i < 3000; i++) {
+      const day = String((i % 18) + 1).padStart(2, '0');
+      insert.run(`${months[i % 12]}-${day}`, -((i * 37) % 20000) - 100, i % 10 === 0 ? null : ids[i % ids.length]!);
+    }
+    db.sqlite.exec('COMMIT');
+
+    const ledger = await loadLedger(db.d1, '2025-11-01', '2026-10-31');
+    const categories = (await loadCategories(db.d1)).map((c) => ({ id: c.id, name: c.name, section: c.sectionName, funMemberId: c.funMemberId }));
+    const compute = () =>
+      whatChanged(buildTrends({ entries: ledgerEntries(ledger), categories, months, today: '2026-10-18' }), '2026-10-18');
+    compute(); // warm up
+    let start = performance.now();
+    for (let i = 0; i < 10; i++) compute();
+    const cpuMs = (performance.now() - start) / 10;
+
+    await trends(); // warm up
+    start = performance.now();
+    const body = await trends();
+    const requestMs = performance.now() - start;
+    console.log(`trends timing (3,000 rows): aggregation ${cpuMs.toFixed(2)} ms, whole request on node:sqlite ${requestMs.toFixed(2)} ms`);
+
+    expect(ledger).toHaveLength(3000);
+    expect(body.uncategorizedByMonth.reduce((a, b) => a + b, 0)).toBeGreaterThan(0);
+    expect(cpuMs).toBeLessThan(50);
+    expect(requestMs).toBeLessThan(50);
   });
 });
