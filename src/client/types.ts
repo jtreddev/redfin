@@ -45,11 +45,14 @@ export interface Category {
   id: number;
   sectionId: number;
   sectionName: string;
+  /** The category this is a sub-category of (one level, same group). */
+  parentId: number | null;
   name: string;
   kind: CategoryKind;
   kidScoped: boolean;
   funMemberId: number | null;
   archived: boolean;
+  sort: number;
 }
 
 export interface Account {

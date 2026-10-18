@@ -19,6 +19,17 @@ import {
   reqStr,
 } from '../lib/http';
 import { plaidConfigured } from '../plaid/client';
+import type { CategoryKind } from '../../shared/actuals';
+import {
+  chargesIn,
+  crossesIncome,
+  isSpecial,
+  kindInGroup,
+  loadCategoryInfo,
+  mergeCounts,
+  mergeStatements,
+  type CategoryInfo,
+} from '../services/categories';
 import { loadCategories } from '../services/context';
 
 export const core = new Hono<AppEnv>();
@@ -169,54 +180,227 @@ core.get('/categories', async (c) => {
       id: cat.id,
       sectionId: cat.sectionId,
       sectionName: cat.sectionName,
+      parentId: cat.parentId,
       name: cat.name,
       kind: cat.kind,
       kidScoped: cat.kidScoped === 1,
       funMemberId: cat.funMemberId,
       archived: cat.archived === 1,
+      sort: cat.sort,
     })),
   });
 });
 
+/** A category that can hold sub-categories: top level, not Fun Money, not hidden, not `self`. */
+async function validParent(db: D1Database, parentId: number, self: number | null): Promise<CategoryInfo> {
+  const parent = await loadCategoryInfo(db, parentId);
+  if (!parent) throw badRequest('That parent category doesn’t exist.');
+  if (parent.id === self) throw badRequest('A category can’t be its own sub-category.');
+  if (parent.parentId !== null) throw badRequest('Sub-categories can’t have sub-categories.');
+  if (parent.funMemberId != null) throw badRequest('Fun Money can’t have sub-categories.');
+  if (parent.archived) throw badRequest(`Show ${parent.name} first.`);
+  return parent;
+}
+
+/** The next sort value among a group's top-level categories, or among a parent's children. */
+async function nextSort(db: D1Database, sectionId: number, parentId: number | null): Promise<number> {
+  const row = await first<{ sort: number }>(
+    db,
+    'SELECT COALESCE(MAX(sort), 0) + 10 AS sort FROM categories WHERE section_id = ? AND parent_id IS ?',
+    sectionId,
+    parentId,
+  );
+  return row?.sort ?? 10;
+}
+
+async function sectionName(db: D1Database, id: number): Promise<string> {
+  const row = await first<{ name: string }>(db, 'SELECT name FROM sections WHERE id = ?', id);
+  if (!row) throw badRequest('That group doesn’t exist.');
+  return row.name;
+}
+
+function uniqueName(error: unknown): unknown {
+  return String(error).includes('UNIQUE') ? new HttpError(409, 'That category already exists in this group.') : error;
+}
+
 core.post('/categories', async (c) => {
+  const db = c.env.DB;
   const body = await readBody(c);
-  const sectionId = reqInt(body.sectionId, 'sectionId', { min: 1 });
   const name = reqStr(body.name, 'name', 60);
-  const kind = oneOf(body.kind, 'kind', ['income', 'expense', 'savings', 'debt', 'transfer'] as const) ?? 'expense';
+  const parentId = optInt(body.parentId, 'parentId', { min: 1 }) ?? null;
+  const requestedSection = optInt(body.sectionId, 'sectionId', { min: 1 }) ?? null;
+  const requestedKind = oneOf(body.kind, 'kind', ['income', 'expense', 'savings', 'debt', 'transfer'] as const) ?? null;
+  let sectionId: number;
+  let kind: CategoryKind;
+  if (parentId !== null) {
+    const parent = await validParent(db, parentId, null);
+    if (requestedSection !== null && requestedSection !== parent.sectionId) throw badRequest('A sub-category is in its parent’s group.');
+    sectionId = parent.sectionId;
+    kind = parent.kind;
+  } else {
+    if (requestedSection === null) throw badRequest('sectionId is required');
+    sectionId = requestedSection;
+    // Kind follows the group (debt is allowed where spending is).
+    kind = kindInGroup(await sectionName(db, sectionId), requestedKind);
+  }
   try {
     const row = await first(
-      c.env.DB,
-      `INSERT INTO categories (section_id, name, kind, kid_scoped, sort)
-       VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(sort), 0) + 10 FROM categories WHERE section_id = ?))
-       RETURNING id`,
+      db,
+      'INSERT INTO categories (section_id, parent_id, name, kind, kid_scoped, sort) VALUES (?, ?, ?, ?, ?, ?) RETURNING id',
       sectionId,
+      parentId,
       name,
       kind,
       optBool(body.kidScoped, 'kidScoped') ? 1 : 0,
-      sectionId,
+      await nextSort(db, sectionId, parentId),
     );
     return c.json(row, 201);
   } catch (error) {
-    if (String(error).includes('UNIQUE')) throw new HttpError(409, 'That category already exists in this section.');
-    throw error;
+    throw uniqueName(error);
   }
 });
 
 core.patch('/categories/:id', async (c) => {
+  const db = c.env.DB;
   const id = paramId(c);
   const body = await readBody(c);
-  const category = await first<{ funMemberId: number | null }>(c.env.DB, 'SELECT fun_member_id AS funMemberId FROM categories WHERE id = ?', id);
+  const category = await loadCategoryInfo(db, id);
   if (!category) throw notFound();
   if (category.funMemberId != null && body.name !== undefined) throw badRequest('Fun money categories follow the person’s name.');
+
+  const name = optStr(body.name, 'name', 60) ?? undefined;
   const archived = optBool(body.archived, 'archived');
   const kidScoped = optBool(body.kidScoped, 'kidScoped');
+  const confirm = optBool(body.confirm, 'confirm') === true;
+  const requestedSection = optInt(body.sectionId, 'sectionId', { min: 1 }) ?? undefined;
+  const parentId = body.parentId === undefined ? category.parentId : (optInt(body.parentId, 'parentId', { min: 1 }) ?? null);
+
+  // Under a parent it's in the parent's group; otherwise in the group asked for.
+  let sectionId = requestedSection ?? category.sectionId;
+  let parent: CategoryInfo | null = null;
+  if (parentId !== null) {
+    parent = parentId === category.parentId ? await loadCategoryInfo(db, parentId) : await validParent(db, parentId, id);
+    if (!parent) throw badRequest('That parent category doesn’t exist.');
+    if (parentId !== category.parentId && category.children > 0) {
+      throw badRequest(`${category.name} has sub-categories, so it can’t become one.`);
+    }
+    if (requestedSection !== undefined && requestedSection !== parent.sectionId) {
+      throw badRequest('A sub-category stays in its parent’s group. Take it out of its parent first.');
+    }
+    sectionId = parent.sectionId;
+  }
+  const moved = sectionId !== category.sectionId || parentId !== category.parentId;
+  if (moved && category.funMemberId != null) throw badRequest('Fun Money stays where it is.');
+  if (isSpecial(category) && (sectionId !== category.sectionId || (name !== undefined && name !== category.name))) {
+    throw badRequest(`The app looks for ${category.name} by its name and group, so it keeps them.`);
+  }
+
+  // Kind follows the group: a new child takes its parent's kind; a move to another group, that group's.
+  let kind = category.kind;
+  if (parent && parentId !== category.parentId) kind = parent.kind;
+  else if (sectionId !== category.sectionId) kind = kindInGroup(await sectionName(db, sectionId), category.kind);
+
+  if (crossesIncome(category.kind, kind)) {
+    const charges = await chargesIn(db, id, c.get('viewer').memberId);
+    if (charges.total > 0 && !confirm) {
+      return c.json(
+        {
+          error: `This moves ${category.name} between income and spending, which changes past months’ totals.`,
+          needsConfirm: true,
+          transactionCount: charges.visible,
+          kind,
+        },
+        409,
+      );
+    }
+  }
+
+  if (archived === false && parent?.archived) throw badRequest(`Show ${parent.name} first.`);
+
   const updates = new Updates()
-    .set('name', optStr(body.name, 'name', 60) ?? undefined)
+    .set('name', name)
     .set('archived', archived === undefined ? undefined : archived ? 1 : 0)
     .set('kid_scoped', kidScoped === undefined ? undefined : kidScoped ? 1 : 0);
+  if (moved) updates.set('section_id', sectionId).set('parent_id', parentId).set('sort', await nextSort(db, sectionId, parentId));
+  if (kind !== category.kind) updates.set('kind', kind);
   if (updates.empty) throw badRequest('Nothing to update');
-  await run(c.env.DB, `UPDATE categories SET ${updates.sets.join(', ')} WHERE id = ?`, ...updates.params, id);
+
+  const statements = [stmt(db, `UPDATE categories SET ${updates.sets.join(', ')} WHERE id = ?`, ...updates.params, id)];
+  // Sub-categories go where their parent goes, and are hidden with it.
+  if (category.children > 0 && (sectionId !== category.sectionId || kind !== category.kind)) {
+    statements.push(stmt(db, 'UPDATE categories SET section_id = ?, kind = ? WHERE parent_id = ?', sectionId, kind, id));
+  }
+  if (category.children > 0 && archived === true) statements.push(stmt(db, 'UPDATE categories SET archived = 1 WHERE parent_id = ?', id));
+  try {
+    await db.batch(statements);
+  } catch (error) {
+    throw uniqueName(error);
+  }
   return c.json({ ok: true });
+});
+
+/** Orders a group's top-level categories (or one parent's sub-categories). Ones left out keep their order after. */
+core.post('/categories/reorder', async (c) => {
+  const db = c.env.DB;
+  const body = await readBody(c);
+  const sectionId = reqInt(body.sectionId, 'sectionId', { min: 1 });
+  const parentId = optInt(body.parentId, 'parentId', { min: 1 }) ?? null;
+  if (!Array.isArray(body.ids) || body.ids.length === 0 || body.ids.length > 200) throw badRequest('ids must be a list of categories');
+  const ids = body.ids.map((v: unknown) => reqInt(v, 'ids', { min: 1 }));
+  if (new Set(ids).size !== ids.length) throw badRequest('List each category once.');
+  const siblings = await all<{ id: number }>(
+    db,
+    'SELECT id FROM categories WHERE section_id = ? AND parent_id IS ? ORDER BY sort, name',
+    sectionId,
+    parentId,
+  );
+  const known = new Set(siblings.map((s) => s.id));
+  if (!ids.every((i) => known.has(i))) throw badRequest('Those categories aren’t all in that group.');
+  const listed = new Set(ids);
+  const order = [...ids, ...siblings.map((s) => s.id).filter((i) => !listed.has(i))];
+  await db.batch(order.map((categoryId, i) => stmt(db, 'UPDATE categories SET sort = ? WHERE id = ?', (i + 1) * 10, categoryId)));
+  return c.json({ ok: true });
+});
+
+/** Folds this category into another; `?preview=1` returns the counts without changing anything. */
+core.post('/categories/:id/merge', async (c) => {
+  const db = c.env.DB;
+  const id = paramId(c);
+  const body = await readBody(c);
+  const intoId = reqInt(body.intoId, 'intoId', { min: 1 });
+  const preview = c.req.query('preview') === '1';
+  const confirm = optBool(body.confirm, 'confirm') === true;
+  const viewerId = c.get('viewer').memberId;
+
+  const [from, into] = await Promise.all([loadCategoryInfo(db, id), loadCategoryInfo(db, intoId)]);
+  if (!from) throw notFound();
+  if (!into) throw badRequest('That category doesn’t exist.');
+  if (from.id === into.id) throw badRequest('Pick a different category to merge into.');
+  if (from.funMemberId != null || into.funMemberId != null) throw badRequest('Fun Money can’t be merged.');
+  if (into.archived) throw badRequest(`Show ${into.name} first.`);
+  if (into.parentId === from.id) throw badRequest(`${into.name} is one of ${from.name}’s sub-categories.`);
+  if (from.children > 0 && into.parentId !== null) {
+    throw badRequest(`${from.name} has sub-categories, so it can only merge into a top-level category.`);
+  }
+  if (isSpecial(from)) throw badRequest(`The app relies on ${from.name}, so it can’t be merged away.`);
+
+  if (crossesIncome(from.kind, into.kind)) {
+    const charges = await chargesIn(db, id, viewerId);
+    if (charges.total > 0 && !confirm) {
+      return c.json(
+        {
+          error: 'This moves charges between income and spending, which changes past months’ totals.',
+          needsConfirm: true,
+          transactionCount: charges.visible,
+        },
+        409,
+      );
+    }
+  }
+
+  const counts = await mergeCounts(db, id, viewerId);
+  if (!preview) await db.batch(mergeStatements(db, id, into));
+  return c.json({ preview, intoId, counts });
 });
 
 const ACCOUNT_SELECT = `SELECT a.id, a.name, a.institution, a.mask, a.type, a.is_cash AS isCash, a.hidden,

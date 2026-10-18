@@ -93,14 +93,21 @@ export interface CategoryRow {
   funMemberId: number | null;
   archived: number;
   sort: number;
+  /** The category this is a sub-category of (one level; same group). */
+  parentId: number | null;
 }
 
 export const CATEGORY_SELECT = `SELECT c.id, c.section_id AS sectionId, s.name AS sectionName, s.sort AS sectionSort,
-  c.name, c.kind, c.kid_scoped AS kidScoped, c.fun_member_id AS funMemberId, c.archived, c.sort
+  c.name, c.kind, c.kid_scoped AS kidScoped, c.fun_member_id AS funMemberId, c.archived, c.sort, c.parent_id AS parentId
   FROM categories c JOIN sections s ON s.id = c.section_id`;
 
+/** In tree order: group, then each top-level category followed by its sub-categories, each by sort. */
 export function loadCategories(db: D1Database): Promise<CategoryRow[]> {
-  return all<CategoryRow>(db, `${CATEGORY_SELECT} ORDER BY s.sort, c.sort, c.name`);
+  return all<CategoryRow>(
+    db,
+    `${CATEGORY_SELECT} LEFT JOIN categories p ON p.id = c.parent_id
+      ORDER BY s.sort, COALESCE(p.sort, c.sort), COALESCE(p.name, c.name), COALESCE(p.id, c.id), c.parent_id IS NOT NULL, c.sort, c.name`,
+  );
 }
 
 export function findSpecialCategory(categories: readonly CategoryRow[], section: string, name: string): number | null {
