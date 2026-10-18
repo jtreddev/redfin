@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { addMonths, monthOf } from '../../shared/dates';
 import { api, del, errorMessage, patch, post, put } from '../api';
 import { money, plural, shortDate } from '../format';
+import { budgetState } from '../budgetState';
 import { Icon } from '../icons';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
@@ -153,38 +154,54 @@ function BudgetView({ month }: { month: string }) {
               </span>
             </div>
             <div className="list">
-              {rows.map((row) => (
-                <button
-                  key={row.categoryId}
-                  type="button"
-                  className="row row-button"
-                  onClick={() => {
-                    if (row.computed === 'paychecks') go('more/income');
-                    else if (row.computed === 'fun_money') go('more/fun');
-                    else setEditing(row);
-                  }}
-                >
-                  <div className="row-main stack-sm">
-                    <div className="spread">
-                      <span className="row-title">{row.name}</span>
-                      <span className="small">
-                        <Money cents={row.actualCents} whole tone={row.kind !== 'income' && row.budgetCents > 0 && row.actualCents > row.budgetCents ? 'bad' : undefined} />
-                        <span className="muted"> / {money(row.budgetCents, { whole: true })}</span>
-                      </span>
+              {rows.map((row) => {
+                const line = (
+                  <button
+                    key={row.categoryId}
+                    type="button"
+                    className="row row-button"
+                    onClick={() => {
+                      if (row.computed === 'paychecks') go('more/income');
+                      else if (row.computed === 'fun_money') go('more/fun');
+                      else setEditing(row);
+                    }}
+                  >
+                    <div className="row-main stack-sm">
+                      <div className="spread">
+                        <span className="row-title">{row.name}</span>
+                        <span className="small">
+                          <Money cents={row.actualCents} whole tone={row.kind !== 'income' && row.budgetCents > 0 && row.actualCents > row.budgetCents ? 'bad' : undefined} />
+                          <span className="muted"> / {money(row.budgetCents, { whole: true })}</span>
+                        </span>
+                      </div>
+                      <Progress value={row.actualCents} max={row.budgetCents} tone={row.kind === 'income' ? 'good' : undefined} />
+                      <BudgetState row={row} />
+                      {row.computed !== 'planned_costs' && (
+                        <div className="row-sub">
+                          {row.computed === 'paychecks'
+                            ? 'From Income & paydays'
+                            : row.computed === 'fun_money'
+                              ? 'Allowance × paydays'
+                              : row.timing === 'due_day' && row.dueDay
+                                ? `Due on the ${ordinal(row.dueDay)}`
+                                : 'Spread across the month'}
+                        </div>
+                      )}
                     </div>
-                    <Progress value={row.actualCents} max={row.budgetCents} tone={row.kind === 'income' ? 'good' : undefined} />
-                    <div className="row-sub">
-                      {row.computed === 'paychecks'
-                        ? 'From Income & paydays'
-                        : row.computed === 'fun_money'
-                          ? 'Allowance × paydays'
-                          : row.timing === 'due_day' && row.dueDay
-                            ? `Due on the ${ordinal(row.dueDay)}`
-                            : 'Spread across the month'}
-                    </div>
+                  </button>
+                );
+                if (row.computed !== 'planned_costs') return line;
+                // The row edits the typed part; its planned-costs part has its own tap target.
+                return (
+                  <div key={row.categoryId} className="setaside-planrow">
+                    {line}
+                    <button type="button" className="setaside-planlink" onClick={() => go('plan', { view: 'goals' })}>
+                      Includes {money(row.plannedCostsCents, { whole: true })} for planned costs
+                      <Icon name="forward" />
+                    </button>
                   </div>
-                </button>
-              ))}
+                );
+              })}
             </div>
           </div>
         );
@@ -208,6 +225,18 @@ function BudgetView({ month }: { month: string }) {
   );
 }
 
+function BudgetState({ row }: { row: BudgetRow }) {
+  if (row.kind === 'income') return null;
+  const state = budgetState(row.actualCents, row.budgetCents);
+  if (!state) return null;
+  return (
+    <div className={`row-state tone-${state.tone}`}>
+      <Icon name={state.tone === 'bad' ? 'alert' : 'gauge'} />
+      {state.text}
+    </div>
+  );
+}
+
 function ordinal(n: number) {
   const suffix = n % 10 === 1 && n !== 11 ? 'st' : n % 10 === 2 && n !== 12 ? 'nd' : n % 10 === 3 && n !== 13 ? 'rd' : 'th';
   return `${n}${suffix}`;
@@ -215,7 +244,8 @@ function ordinal(n: number) {
 
 function LineSheet({ month, row, onClose, onSaved }: { month: string; row: BudgetRow; onClose: () => void; onSaved: () => Promise<void> }) {
   const { toast } = useApp();
-  const [cents, setCents] = useState<number | null>(row.budgetCents);
+  // Only the typed part; planned-cost set-asides are added on top by the server.
+  const [cents, setCents] = useState<number | null>(row.budgetCents - row.plannedCostsCents);
   const [timing, setTiming] = useState(row.timing);
   const [dueDay, setDueDay] = useState(row.dueDay ?? 1);
   const [notes, setNotes] = useState(row.notes ?? '');
@@ -248,6 +278,14 @@ function LineSheet({ month, row, onClose, onSaved }: { month: string; row: Budge
       <Field label="Budget for the month">
         <AmountInput cents={cents} onChange={setCents} autoFocus />
       </Field>
+      {row.computed === 'planned_costs' && (
+        <div className="setaside-suggest">
+          <span className="muted small">Plus {money(row.plannedCostsCents, { whole: true })} for planned costs, added on top.</span>
+          <Button variant="ghost" onClick={() => go('plan', { view: 'goals' })}>
+            See planned costs
+          </Button>
+        </div>
+      )}
       <Segmented
         value={timing}
         onChange={setTiming}

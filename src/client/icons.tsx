@@ -24,6 +24,8 @@ const PATHS = {
   check: 'M5 12.5 10 17.5 19 7',
   lock: 'M6.5 11h11v8.5h-11zM8.5 11V8a3.5 3.5 0 0 1 7 0v3',
   table: 'M4.5 5.5h15v13h-15zM4.5 10h15M4.5 14.5h15M10 10v8.5',
+  alert: 'M12 4 20.5 19h-17zM12 10v4M12 16.5h.01',
+  gauge: 'M4.5 16a7.5 7.5 0 1 1 15 0M12 16l3.5-4M4.5 16h1.5M18 16h1.5',
 } as const;
 
 export type IconName = keyof typeof PATHS;

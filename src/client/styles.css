@@ -58,17 +58,6 @@
   --chart-grid: var(--hairline);
   --chart-axis: var(--control);
   --chart-hover: rgb(27 36 48 / 4%);
-
-  /* The old token names, kept as aliases so styles written against them (e.g. a branch developed in
-     parallel) pick up the new palette in both modes. New code uses the names above. */
-  --bg: var(--paper);
-  --text: var(--ink);
-  --muted: var(--slate);
-  --border: var(--hairline);
-  --surface-2: var(--tint);
-  --brand: var(--accent);
-  --brand-ink: var(--accent-ink);
-  --brand-soft: var(--accent-soft);
   color-scheme: light;
 }
 
@@ -2012,4 +2001,166 @@ code {
   .week-pill .money {
     letter-spacing: -0.02em;
   }
+}
+
+/* ---------- Planned costs (Plan › Goals "Set aside each month"); classes prefixed .setaside- ---------- */
+
+.setaside-total {
+  margin: 0;
+  font-weight: 600;
+}
+
+.setaside-card {
+  gap: 4px;
+}
+
+.setaside-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.setaside-name {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.setaside-top .muted {
+  flex: none;
+}
+
+.setaside-balance {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 2px 0;
+  font-size: var(--t-xl);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+  white-space: normal;
+}
+
+.setaside-icon {
+  flex: none;
+}
+
+.setaside-line {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.setaside-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+/* The category picker: plain rows divided by hairlines, grouped under slate section names. */
+.setaside-cats {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.setaside-cats legend {
+  padding: 0;
+  margin-bottom: 4px;
+}
+
+.setaside-group {
+  display: grid;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.setaside-group-name {
+  padding: 4px 0 6px;
+  color: var(--slate);
+  font-weight: 600;
+}
+
+.setaside-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 6px 0;
+  border-top: 1px solid var(--hairline);
+  cursor: pointer;
+}
+
+.setaside-option input {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.setaside-option-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.setaside-option.is-taken {
+  cursor: default;
+  color: var(--slate);
+}
+
+/* Plan › Budget: a row whose budget includes planned costs, with its own link to them. */
+.setaside-planrow {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.setaside-planrow > .row {
+  border-bottom: none;
+  padding-bottom: 2px;
+}
+
+.setaside-planlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 0 0 6px;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.setaside-planlink:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.setaside-planlink .icon {
+  width: 16px;
+  height: 16px;
+}
+
+.row-state {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--t-sm);
+  font-weight: 600;
+}
+
+.row-state .icon {
+  width: 16px;
+  height: 16px;
 }

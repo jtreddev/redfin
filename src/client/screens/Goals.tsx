@@ -7,6 +7,7 @@ import { money, monthShortLabel, shortDate } from '../format';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import { AmountInput, Button, Card, CategorySelect, Empty, ErrorNote, Field, Loading, Money, Progress, Segmented, Sheet } from '../ui';
+import { PlannedCostsSection } from './PlannedCosts';
 
 type Tab = 'goals' | 'debts';
 
@@ -23,7 +24,19 @@ export function Goals({ params }: { params: URLSearchParams }) {
           { value: 'debts', label: 'Debt payoff' },
         ]}
       />
-      {tab === 'goals' ? <GoalsView /> : <DebtsView />}
+      {tab === 'goals' ? (
+        <>
+          <PlannedCostsSection />
+          <section className="stack" aria-labelledby="goals-title">
+            <div className="section-title">
+              <h3 id="goals-title">Savings goals</h3>
+            </div>
+            <GoalsView />
+          </section>
+        </>
+      ) : (
+        <DebtsView />
+      )}
     </div>
   );
 }

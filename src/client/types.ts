@@ -133,7 +133,9 @@ export interface BudgetRow {
   notes: string | null;
   actualCents: number;
   byWeek: number[];
-  computed: 'paychecks' | 'fun_money' | null;
+  /** planned_costs: budgetCents is the typed line plus plannedCostsCents. */
+  computed: 'paychecks' | 'fun_money' | 'planned_costs' | null;
+  plannedCostsCents: number;
 }
 
 export interface BudgetResponse {
