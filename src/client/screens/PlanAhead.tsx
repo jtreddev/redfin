@@ -86,7 +86,7 @@ export function PlanAhead() {
   const reload = () => load.reload();
 
   function fill() {
-    const filled = autoFill({ ...input, surpriseCents: w.plan.surpriseCents, strategy: w.plan.strategy }, horizon);
+    const filled = autoFill({ ...input, surpriseCents: w.plan.surpriseCents, strategy: w.plan.strategy }, horizon, w.plan.order);
     update({ debtExtra: filled.debtExtra, costMonthly: filled.costMonthly, goalMonthly: filled.goalMonthly });
     setAnnounce('Filled automatically. Nothing is saved yet.');
   }

@@ -324,6 +324,20 @@ describe('autoFill', () => {
     expect(r.debtExtra).toEqual({ 2: 75_000 - 6_500 - 12_000, 1: 0 });
   });
 
+  it('aims the debt money in the order chosen', () => {
+    const debts = [
+      debt({ id: 1, name: 'Low rate, small', balanceCents: 100_000, aprPercent: 9, minPaymentCents: 10_000 }),
+      debt({ id: 2, name: 'High rate, big', balanceCents: 900_000, aprPercent: 25, minPaymentCents: 10_000 }),
+    ];
+    const base = { income: [monthly], usual: { ...ZERO, everyday: 200_000 }, debts };
+    // Left over 80,000: the first debt in the order gets all of it.
+    expect(autoFill(input(base)).debtExtra).toEqual({ 1: 0, 2: 80_000 });
+    expect(autoFill(input({ ...base, strategy: 'snowball' })).debtExtra).toEqual({ 1: 80_000, 2: 0 });
+    const mine = autoFill(input({ ...base, strategy: 'custom' }), 12, [1, 2]);
+    expect(mine.debtExtra).toEqual({ 1: 80_000, 2: 0 });
+    expect(mine.order).toEqual([1, 2]);
+  });
+
   it('raises a set-aside that starts later by what its own months need', () => {
     // Starts in January at $50; last March's $300 comes again in March: short $150 after 3 set-asides.
     const later = cost({ balanceNowCents: 0, startMonth: '2027-01', amounts: [{ month: '2027-01', monthlyCents: 5_000 }], spendByMonth: { '2026-03': 30_000 } });

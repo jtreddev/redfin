@@ -1,5 +1,5 @@
 import { addMonths, clampDay, monthOf, parseMonth, type ISODate, type MonthKey } from './dates';
-import { planPayoff, type DebtInput, type PayoffPlan } from './debt';
+import { payoffOrder, planPayoff, type DebtInput, type PayoffPlan } from './debt';
 import type { Cents } from './money';
 import {
   projectMonths,
@@ -344,12 +344,13 @@ export function emptyPlan(input: AheadInput): AheadPlan {
 /**
  * Fill automatically (P7-R3): the left-over goes, in $5 steps, to (1) each set-aside, raised to what keeps it
  * from running short within the horizon; (2) each goal with a target date, what reaches it on time; (3) the
- * rest to debts by highest APR (ties: smallest balance), each up to its balance; (4) with no debts, the rest to
+ * rest to debts in the chosen order (by default highest APR, ties: smallest balance), each up to its balance; (4) with no debts, the rest to
  * goals evenly. A step that can't be paid in full gets what's left, and later steps nothing.
  */
-export function autoFill(input: AheadInput, horizon: Horizon = 12): AheadPlan {
+export function autoFill(input: AheadInput, horizon: Horizon = 12, order?: readonly number[]): AheadPlan {
   const current = monthOf(input.today);
   const plan = emptyPlan(input);
+  if (order) plan.order = [...order];
   const start = planAhead(input, plan, horizon);
   let left = start.leftOverCents;
   const give = (want: Cents) => {
@@ -376,15 +377,15 @@ export function autoFill(input: AheadInput, horizon: Horizon = 12): AheadPlan {
     plan.goalMonthly[g.id] = give(g.remainingCents / months);
   }
 
-  const debts = input.debts
-    .filter((d) => !d.paidInFull && d.balanceCents > 0)
-    .sort((a, b) => b.aprPercent - a.aprPercent || a.balanceCents - b.balanceCents);
+  // The debt order the household chose (highest interest first unless changed).
+  const open = input.debts.filter((d) => !d.paidInFull && d.balanceCents > 0).map((d) => ({ ...d, balance: d.balanceCents }));
+  const debts = payoffOrder(open, input.strategy, plan.order);
   for (const d of debts) plan.debtExtra[d.id] = give(Math.min(left, d.balanceCents));
 
   if (!debts.length) {
-    const open = input.aheadGoals.filter((g) => g.remainingCents > 0);
-    const each = floorStep(left / open.length);
-    for (const g of open) plan.goalMonthly[g.id] = (plan.goalMonthly[g.id] ?? 0) + give(each);
+    const goals = input.aheadGoals.filter((g) => g.remainingCents > 0);
+    const each = floorStep(left / goals.length);
+    for (const g of goals) plan.goalMonthly[g.id] = (plan.goalMonthly[g.id] ?? 0) + give(each);
   }
   return plan;
 }

@@ -64,9 +64,9 @@ export function estimatedMinimum(balanceCents: Cents, aprPercent: number): Cents
   return Math.min(balanceCents, Math.max(2_500, Math.round(balanceCents * 0.01) + monthlyInterest(balanceCents, aprPercent)));
 }
 
-type Ordered = { id: string | number; balance: number; aprPercent: number };
+export type Ordered = { id: string | number; balance: number; aprPercent: number };
 
-function payoffOrder<T extends Ordered>(state: readonly T[], strategy: PayoffStrategy, custom: readonly (string | number)[] = []): T[] {
+export function payoffOrder<T extends Ordered>(state: readonly T[], strategy: PayoffStrategy, custom: readonly (string | number)[] = []): T[] {
   const byRate = (a: T, b: T) => b.aprPercent - a.aprPercent || a.balance - b.balance;
   if (strategy === 'snowball') return [...state].sort((a, b) => a.balance - b.balance || b.aprPercent - a.aprPercent);
   if (strategy === 'avalanche') return [...state].sort(byRate);

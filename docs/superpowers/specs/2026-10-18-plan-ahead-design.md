@@ -118,7 +118,7 @@ left-over, the bar reads "$Y over what's left". That state is allowed, but it is
 **Fill automatically.** This button splits the left-over, in this order (P7-R3):
 1. Each set-aside is raised to what keeps it from running short within the horizon.
 2. Each goal with a target date gets what reaches it on time.
-3. Everything left goes to debts by highest APR. Ties go to the smallest balance.
+3. Everything left goes to debts in the chosen debt order: highest APR by default (ties go to the smallest balance), or smallest balance first, or "My order" when chosen (P7-R35).
 4. If no debts are left, the remainder goes to goals evenly.
 
 The split is a pure function and can be tested. Moving a slider by hand never moves the other
