@@ -290,6 +290,7 @@ describe('categories API', () => {
       db.exec("INSERT INTO rules (position, match_text, category_id) VALUES (1, 'TACO', ?)", from);
       db.exec("INSERT INTO recurring_bills (merchant, name, cadence, expected_amount_cents, category_id) VALUES ('x', 'X', 'monthly', 100, ?)", from);
       db.exec("INSERT INTO goals (name, target_cents, category_id) VALUES ('G', 100, ?)", from);
+      db.exec("INSERT INTO debts (name, balance_cents, category_id) VALUES ('Car loan', 100000, ?)", from);
       db.exec("INSERT INTO planned_costs (id, name, start_month) VALUES (1, 'P', '2026-10')");
       db.exec('INSERT INTO planned_cost_categories (planned_cost_id, category_id) VALUES (1, ?)', from);
       db.exec('INSERT INTO category_moves (id, member_id, fix_category_id) VALUES (1, ?, ?)', youId, from);

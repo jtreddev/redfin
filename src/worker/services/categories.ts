@@ -30,6 +30,7 @@ export const CATEGORY_REFERENCES: readonly { table: string; column: string }[] =
   { table: 'category_move_items', column: 'new_category_id' },
   { table: 'category_move_items', column: 'old_category_id' },
   { table: 'category_moves', column: 'fix_category_id' },
+  { table: 'debts', column: 'category_id' },
   { table: 'goals', column: 'category_id' },
   { table: 'kid_budgets', column: 'category_id' },
   { table: 'planned_cost_categories', column: 'category_id' },
