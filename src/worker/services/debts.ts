@@ -3,7 +3,7 @@ import { estimatedMinimum } from '../../shared/debt';
 import type { Cents } from '../../shared/money';
 import { cardPaidInFull, type AheadDebt, type DebtKind } from '../../shared/planAhead';
 import { all, nowIso, stmt } from '../lib/db';
-import type { UpcomingBill } from './planner';
+import { ownLineRows, type BudgetRow, type UpcomingBill } from './planner';
 
 /** estimatedMinimum in SQL, for a balance expression and the debt's rate. Keep the two in step. */
 export const estimatedMinimumSql = (balance: string, apr = 'apr_percent') =>
@@ -110,7 +110,8 @@ function linkStatements(db: D1Database, json: string, candidates: string): D1Pre
     // An unlinked debt of the same name takes the account (and its balance).
     stmt(
       db,
-      `UPDATE debts SET account_id = j.id, balance_cents = j.balance, paid_in_full = j.paidInFull, updated_at = ?,
+      `UPDATE debts SET account_id = j.id, balance_cents = j.balance, updated_at = ?,
+              paid_in_full = CASE WHEN debts.paid_in_full_checked = 1 THEN debts.paid_in_full ELSE j.paidInFull END,
               paid_in_full_checked = CASE WHEN j.type = 'credit' THEN 1 ELSE debts.paid_in_full_checked END,
               kind = CASE WHEN j.type = 'credit' AND debts.kind = 'other' THEN 'credit_card' ELSE debts.kind END
          FROM ${candidates} j
@@ -196,13 +197,27 @@ export async function loadDebts(db: D1Database, viewerId: number): Promise<DebtR
   return rows.map((r) => ({ ...r, minEstimated: r.minEstimated === 1, paidInFull: r.paidInFull === 1, billConfirmed: r.billConfirmed === 1 }));
 }
 
-/** Its payment is counted elsewhere: a confirmed bill the viewer sees, or its category's budget line (P7-R8). */
-export const isCovered = (d: Pick<DebtRow, 'billId' | 'billConfirmed' | 'categoryId'>) => (d.billId !== null && d.billConfirmed) || d.categoryId !== null;
+/**
+ * Its payment this month is counted elsewhere (P7-R8): a confirmed bill the viewer sees, or a due-day line in its
+ * category (or the category's parent). `dueDayCategories`: this month's due-day lines' categories.
+ */
+export function isCovered(
+  d: Pick<DebtRow, 'billId' | 'billConfirmed' | 'categoryId'>,
+  dueDayCategories: ReadonlySet<number>,
+  parentOf: ReadonlyMap<number, number | null>,
+): boolean {
+  if (d.billId !== null && d.billConfirmed) return true;
+  return d.categoryId !== null && (dueDayCategories.has(d.categoryId) || dueDayCategories.has(parentOf.get(d.categoryId) ?? -1));
+}
+
+/** This month's due-day lines' categories (as the forecasts count them), for isCovered. */
+export const dueDayCategories = (rows: readonly BudgetRow[]) =>
+  new Set(ownLineRows(rows).filter((r) => r.timing === 'due_day' && r.dueDay != null && r.kind !== 'income').map((r) => r.categoryId));
 
 /** Debts that take part in payoff: not paid in full, with a balance. */
 export const inPayoff = (d: Pick<DebtRow, 'paidInFull' | 'balanceCents'>) => !d.paidInFull && d.balanceCents > 0;
 
-export function aheadDebt(d: DebtRow): AheadDebt {
+export function aheadDebt(d: DebtRow, dueDay: ReadonlySet<number>, parentOf: ReadonlyMap<number, number | null>): AheadDebt {
   return {
     id: d.id,
     name: d.name,
@@ -214,7 +229,7 @@ export function aheadDebt(d: DebtRow): AheadDebt {
     endMonth: d.endMonth,
     paidInFull: d.paidInFull,
     sort: d.sort,
-    covered: isCovered(d),
+    covered: isCovered(d, dueDay, parentOf),
   };
 }
 

@@ -60,7 +60,7 @@ interface AheadDebt {
   id: number; name: string; kind: DebtKind;
   balanceCents: Cents; aprPercent: number; minPaymentCents: Cents; dueDay: number | null;
   endMonth: MonthKey | null; paidInFull: boolean; sort: number;
-  /** A linked bill or line counts this month's payment (P7-R11). */
+  /** A linked confirmed bill, or a due-day line in its category, counts this month's payment (P7-R11). */
   covered: boolean;
 }
 

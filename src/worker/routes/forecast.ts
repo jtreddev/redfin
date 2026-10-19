@@ -16,7 +16,7 @@ import type { AppEnv } from '../env';
 import { loadForecastInputs, withoutSetAside } from '../services/forecastInputs';
 import { loadMonthsAheadInput } from '../services/monthsAhead';
 import { all } from '../lib/db';
-import { aheadDebt, loadDebts, takenByPlan } from '../services/debts';
+import { aheadDebt, dueDayCategories, loadDebts, takenByPlan } from '../services/debts';
 import { upcomingBills } from '../services/planner';
 
 /** "Usual" is the last 3 full months, so the current month plus 3. */
@@ -56,7 +56,7 @@ forecast.get('/forecast', async (c) => {
   // lines they own.
   const parentOf = new Map(planner.data.rows.map((r) => [r.categoryId, r.parentId]));
   const taken = takenByPlan(debts, parentOf, monthOf(today), new Set(goals.flatMap((g) => (g.categoryId === null ? [] : [g.categoryId]))));
-  const planEvents = aheadEvents({ debts: debts.map(aheadDebt), goals, debtExtra: Object.fromEntries(debts.map((d) => [d.id, d.extraCents])) }, today, lastDate);
+  const planEvents = aheadEvents({ debts: debts.map((d) => aheadDebt(d, dueDayCategories(planner.data.rows), parentOf)), goals, debtExtra: Object.fromEntries(debts.map((d) => [d.id, d.extraCents])) }, today, lastDate);
   // Planned-cost set-asides stay in the account, so they aren't taken off (P6-R5). Home says "before set-asides".
   const events: ProjectionEvent[] = bills
     .filter((b) => !taken(b))

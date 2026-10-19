@@ -19,6 +19,8 @@ ALTER TABLE debts ADD COLUMN category_id INTEGER REFERENCES categories(id) ON DE
 -- When a hand-kept balance was last typed in.
 ALTER TABLE debts ADD COLUMN balance_as_of TEXT;
 UPDATE debts SET kind = 'credit_card' WHERE account_id IN (SELECT id FROM accounts WHERE type = 'credit');
+-- A $0 minimum (the old form's default, or a bank that gave none) becomes an estimate that follows the balance.
+UPDATE debts SET min_estimated = 1 WHERE min_payment_cents = 0 AND balance_cents > 0;
 
 -- NULL: not set (the budget line, or nothing).
 ALTER TABLE goals ADD COLUMN monthly_cents INTEGER;

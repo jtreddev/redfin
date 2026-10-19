@@ -7,7 +7,7 @@ import { monthlyEquivalent } from '../../shared/projection';
 import { GROUP_ORDER, usualOf, type GroupKey } from '../../shared/trends';
 import type { HouseholdSettings } from '../env';
 import { all, first } from '../lib/db';
-import { aheadDebt, debtCategoryIds, linkDebts, loadDebts, takenByPlan, type DebtRow } from './debts';
+import { aheadDebt, debtCategoryIds, dueDayCategories, linkDebts, loadDebts, takenByPlan, type DebtRow } from './debts';
 import { loadForecastInputs, withoutSetAside, type ForecastInputs } from './forecastInputs';
 import { goalsWithProgress } from './goals';
 import { loadLaterMonths, ownLineRows, upcomingBills, type BudgetRow } from './planner';
@@ -157,7 +157,7 @@ export async function loadMonthsAheadInput(
     goals: goals.map((g) => ({ name: g.name, remainingCents: g.progress.remainingCents, recentAverageCents: g.monthlyCents ?? g.progress.recentAverageCents })),
     // A debt's category money is its payment, counted by the plan.
     otherBillsCents: otherBills(inputs, historyStart, new Set([...costOf.keys(), ...debtCategoryIds(debts)])),
-    debts: debts.map(aheadDebt),
+    debts: debts.map((d) => aheadDebt(d, dueDayCategories(planner.data.rows), parentOf)),
     aheadGoals: goals.map((g) => ({ id: g.id, name: g.name, remainingCents: g.progress.remainingCents, targetDate: g.targetDate })),
     items,
     surpriseCents,
@@ -171,7 +171,14 @@ export async function loadMonthsAheadInput(
       debtExtra: Object.fromEntries(debts.map((d) => [d.id, d.extraCents])),
       costMonthly: Object.fromEntries(input.plannedCosts.map((c) => [c.id, currentMonthly(c, today)])),
       // Not set: next month's line, as the forecast had it.
-      goalMonthly: Object.fromEntries(goals.map((g) => [g.id, g.monthlyCents ?? (g.categoryId === null ? 0 : (goalLines.get(g.categoryId) ?? 0))])),
+      // Two goals on one category: the line is the first's.
+      goalMonthly: Object.fromEntries(
+        goals.map((g) => {
+          const line = g.categoryId === null ? 0 : (goalLines.get(g.categoryId) ?? 0);
+          if (g.categoryId !== null) goalLines.delete(g.categoryId);
+          return [g.id, g.monthlyCents ?? line];
+        }),
+      ),
       surpriseCents,
       strategy: household.debtStrategy,
       order: debts.map((d) => d.id),

@@ -324,6 +324,14 @@ describe('autoFill', () => {
     expect(r.debtExtra).toEqual({ 2: 75_000 - 6_500 - 12_000, 1: 0 });
   });
 
+  it('raises a set-aside that starts later by what its own months need', () => {
+    // Starts in January at $50; last March's $300 comes again in March: short $150 after 3 set-asides.
+    const later = cost({ balanceNowCents: 0, startMonth: '2027-01', amounts: [{ month: '2027-01', monthlyCents: 5_000 }], spendByMonth: { '2026-03': 30_000 } });
+    const r = autoFill(input({ historyStart: '2025-01', income: [monthly], plannedCosts: [later] }));
+    expect(r.costMonthly).toEqual({ 7: 10_000 });
+    expect(planAhead(input({ historyStart: '2025-01', income: [monthly], plannedCosts: [later] }), { ...r }).costs[0]!.runsShortMonth).toBeNull();
+  });
+
   it('gives what’s left to goals evenly when there are no debts, and stops when the money runs out', () => {
     const goals = [
       { id: 3, name: 'Trip', remainingCents: 600_000, targetDate: null },

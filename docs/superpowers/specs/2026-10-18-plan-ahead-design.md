@@ -366,14 +366,17 @@ Money totals.
   months only. In the rest of this month a debt pays its minimum if its due day is still ahead, with no
   interest yet, and known items dated this month count. *Cost:* an extra paid this month shows from next.
 - **P7-R11 A linked debt is counted once, by the plan from next month.**
-  - This month its linked bill, or its category's line, counts it. It isn't paid again.
+  - This month its linked bill, or a due-day line in its category (or the category's parent), counts it. It
+    isn't paid again. Linked to a category with no due-day line this month, the plan counts its minimum on
+    its due day (fix round 2).
   - From next month the gatherer takes out its linked bill and the bills and due-day lines in its category
     (sub-categories too). The plan then counts minimum + extra on the due day (the 15th without one).
   - Its category's money is also left out of "other bills" (P6b-R17).
   - *Cost:* a hand-typed line bigger than the minimum shows as minimum + extra until the plan is saved.
     Another payment filed in that category is dropped from next month on.
 - **P7-R12 A goal's saving line becomes the goal's monthly amount from next month.**
-  - With no saved amount, the slider starts at next month's line (or $0).
+  - With no saved amount, the slider starts at next month's line (or $0). Two goals on one category: the
+    line is the first goal's, and the other starts at $0 (fix round 2).
   - Saving stops once the goal is reached.
   - Months ahead's goal readout uses a saved amount as the pace.
   - *Cost:* a line that differs month to month is flattened to next month's.
@@ -409,6 +412,9 @@ Money totals.
   - A debt added by hand with no minimum is estimated too.
   - So is a Plaid card whose bank gives no minimum. Before this it was $0.
   - Any typed minimum, or one from the bank, ends the estimate.
+  - Migration 0011 turns a $0 minimum on a debt with a balance into an estimate (fix round 2).
+  - A fixed-term loan's budget is its actual payment, and that is what rolls on once it's paid off; it never
+    takes another debt's extra (fix round 2).
 - **P7-R18 Surprise suggestion details** (fix round 2).
   - It is worked out from the 13-month ledger the forecast already loads, so it costs no extra query.
   - Private charges count only as fun, as Trends counts them.
@@ -435,7 +441,7 @@ Money totals.
   name, or the reverse, or whose merchant (3+ letters) appears in either.
 - **P7-R24 Measured D1 queries** (middleware included):
   - `/ahead`: 29 on a load that links a card, 27 after (fix round 2 dropped the surprise charges query).
-  - `/forecast/months`: 27.
+  - `/forecast/months`: 26 (27 before fix round 2).
   - `/forecast`: 20.
   - The test bound is 35. This month's planner now shares the cash, categories, income-source and paydays
     queries the forecasts make, and later months reuse its members.

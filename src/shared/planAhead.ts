@@ -358,11 +358,14 @@ export function autoFill(input: AheadInput, horizon: Horizon = 12): AheadPlan {
     return cents;
   };
 
-  start.costs.forEach((cost) => {
-    // Short by −b at month i, after i more set-asides: each needs to be −b / i more.
+  start.costs.forEach((cost, k) => {
+    // Short by −b at month i, after n more set-asides (whole months from its start): each needs −b / n more.
+    const startMonth = input.plannedCosts[k]!.startMonth;
     let need = 0;
+    let made = 0;
     cost.balances.forEach((b, i) => {
-      if (i > 0 && b < 0) need = Math.max(need, -b / i);
+      if (i > 0 && startMonth <= addMonths(current, i)) made++;
+      if (made > 0 && b < 0) need = Math.max(need, -b / made);
     });
     plan.costMonthly[cost.id] = cost.currentMonthlyCents + give(need);
   });

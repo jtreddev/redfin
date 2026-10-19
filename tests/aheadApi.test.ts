@@ -221,6 +221,13 @@ describe('Plan › Ahead API', () => {
       expect(db.rows('SELECT paid_in_full_checked FROM debts WHERE account_id = 6')).toEqual([{ paid_in_full_checked: 1 }]);
     });
 
+    it('keeps the user’s choice when a debt of the same name is linked', async () => {
+      db.exec('DELETE FROM debts');
+      db.exec("INSERT INTO debts (name, balance_cents, min_payment_cents, paid_in_full, paid_in_full_checked) VALUES ('Clear Card', 42000, 2500, 0, 1)");
+      await ahead();
+      expect(db.rows('SELECT account_id, paid_in_full, paid_in_full_checked FROM debts')).toEqual([{ account_id: 5, paid_in_full: 0, paid_in_full_checked: 1 }]);
+    });
+
     it('never re-detects a card the user toggled', async () => {
       const id = db.rows<{ id: number }>('SELECT id FROM debts WHERE account_id = 5')[0]!.id;
       expect((await api(env, 'PATCH', `/debts/${id}`, { paidInFull: false })).status).toBe(200);
@@ -258,6 +265,27 @@ describe('Plan › Ahead API', () => {
   });
 
   describe('counting debts and goals once', () => {
+    it('counts a category-linked debt this month only when the category has a due-day line', async () => {
+      const loans = category('Bills');
+      await api(env, 'POST', '/debts', { name: 'Car loan', balanceCents: 900000, minPaymentCents: 30000, dueDay: 25, categoryId: loans });
+      // No line: nothing else counts this month's payment, so the plan does.
+      let body = await ahead();
+      expect(body.input.debts[0]).toMatchObject({ covered: false });
+      expect(planAhead(body.input, body.saved, 3).projection.months[0]!.ahead.lines.map((l) => [l.name, l.amountCents])).toEqual([['Car loan', 30000]]);
+      await api(env, 'PUT', '/budget/lines', { month: '2026-10', categoryId: loans, budgetCents: 30000, timing: 'due_day', dueDay: 25 });
+      body = await ahead();
+      expect(body.input.debts[0]).toMatchObject({ covered: true });
+      expect(planAhead(body.input, body.saved, 3).projection.months[0]!.ahead.lines).toEqual([]);
+    });
+
+    it('gives a line shared by two goals to the first only', async () => {
+      const first = ((await (await api(env, 'POST', '/goals', { name: 'Trip', targetCents: 100000 })).json()) as { id: number }).id;
+      const fund = db.rows<{ c: number }>('SELECT category_id AS c FROM goals')[0]!.c;
+      const second = ((await (await api(env, 'POST', '/goals', { name: 'Trip 2', targetCents: 100000, categoryId: fund })).json()) as { id: number }).id;
+      await api(env, 'PUT', '/budget/lines', { month: '2026-11', categoryId: fund, budgetCents: 20000, timing: 'even' });
+      expect((await ahead()).saved.goalMonthly).toEqual({ [first]: 20000, [second]: 0 });
+    });
+
     it('counts a debt linked to a bill as the bill this month, then as min + extra', async () => {
       const id = bill('Car Loan', '2026-10-20', 35000);
       await api(env, 'POST', '/debts', { name: 'Car loan', kind: 'car', balanceCents: 900000, minPaymentCents: 35000, dueDay: 20, billId: id });
