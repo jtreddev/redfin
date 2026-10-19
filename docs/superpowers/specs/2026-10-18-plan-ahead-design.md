@@ -70,9 +70,18 @@ Examples: tax refund (in), car registration (out), a transfer to savings (out), 
 
 The cushion is a monthly amount for the unexpected. It is counted as money out in every whole month.
 
-- **Suggested value:** the median, over the last 6 full months, of each month's spending that was
-  neither a confirmed bill, a due-day budget line, a planned-cost category, nor under $100 per
-  transaction (P7-R2). It is rounded to $25.
+- **Suggested value** (P7-R2, redefined in fix round 2): how far spending ran over what "usual" would have
+  said.
+  - For each of the last 6 full months and each top-level Everyday, Habits, Fun or Bills category, take
+    that month's spending less the average of the 3 full months before it, floored at 0.
+  - Add those up for each month, average over the months, and round to $25.
+  - Planned-cost and debt-linked categories are left out, because the forecast counts them elsewhere.
+    A sub-category of either kind comes out of its parent.
+  - A month whose 3-month window starts before the household's history doesn't count.
+  - *Why:* the first definition (the median of charges of $100 and up) counted large everyday and bills
+    charges a second time, on top of "usual".
+  - *Cost if wrong:* a household with under 4 full months of history gets $0, and the cushion can be
+    stepped by hand.
 - **Display:** shown as "Surprises: $150 a month (suggested)" with a stepper.
   - Once changed, it reads "(your amount)".
   - A **Use suggestion** button switches back.
@@ -390,6 +399,9 @@ Money totals.
 - **P7-R16 Paid-in-full detection.**
   - Cycles are calendar months. In each of the last 3 full months, a payment came in that covered the month
     before's charges, to the dollar.
+  - And (fix round 2) the balance is no more than the last 2 full months' charges plus this month's so far,
+    plus $1: a statement not yet paid, never a carried balance. When unsure it says no, because a hidden debt
+    is the worse mistake. A $5,000 carried card being paid down $200 a month stays in payoff.
   - It runs once per card: when the card is linked, or on the first load for a card linked before migration 0011
     (`debts.paid_in_full_checked`). The user's toggle also marks the debt checked, so it is never overridden.
   - *Cost:* a card that starts or stops being cleared later isn't re-detected; the toggle is there.
@@ -397,11 +409,12 @@ Money totals.
   - A debt added by hand with no minimum is estimated too.
   - So is a Plaid card whose bank gives no minimum. Before this it was $0.
   - Any typed minimum, or one from the bank, ends the estimate.
-- **P7-R18 Surprise suggestion details.**
-  - It counts shared charges only. Private ones are fun money.
-  - It counts charges with no category or an expense category, and leaves out transfers and splits.
-  - A charge is a confirmed bill when its merchant matches a confirmed bill's.
-  - A month with nothing counts as $0.
+- **P7-R18 Surprise suggestion details** (fix round 2).
+  - It is worked out from the 13-month ledger the forecast already loads, so it costs no extra query.
+  - Private charges count only as fun, as Trends counts them.
+  - Each category's overshoot is floored at 0 before the months are added up, so a quiet category doesn't
+    cancel another's spike.
+  - The mean over the months is used, not the median, which is often $0.
 - **P7-R19 Save.**
   - In later months that already have a budget, a goal line is added where it's missing.
   - A new debt line is due on the linked debts' first due day.
@@ -421,7 +434,7 @@ Money totals.
 - **P7-R23 Bill-link suggestion.** A visible confirmed bill whose name contains the debt's or its account's
   name, or the reverse, or whose merchant (3+ letters) appears in either.
 - **P7-R24 Measured D1 queries** (middleware included):
-  - `/ahead`: 30 on a load that links a card, 28 after.
+  - `/ahead`: 29 on a load that links a card, 27 after (fix round 2 dropped the surprise charges query).
   - `/forecast/months`: 27.
   - `/forecast`: 20.
   - The test bound is 35. This month's planner now shares the cash, categories, income-source and paydays

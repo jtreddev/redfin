@@ -24,7 +24,7 @@ ahead.get('/ahead', async (c) => {
     today,
     c.get('viewer').memberId,
     c.get('household'),
-    { link: true, suggest: true },
+    { link: true },
   );
   return c.json({ today, input, saved, surprise, debts, goals, items, hasBalance, hasIncome });
 });

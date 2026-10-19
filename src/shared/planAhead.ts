@@ -12,7 +12,7 @@ import {
 } from './monthsAhead';
 import { monthlyFor, roundUpToFive } from './plannedCosts';
 import type { ProjectionEvent } from './projection';
-import { median } from './recurring';
+import type { GroupKey } from './trends';
 
 /**
  * Plan › Ahead: where the extra money goes. Months ahead (Project 6b) plus debt payments, known items, a
@@ -29,8 +29,6 @@ export type DebtStrategy = (typeof DEBT_STRATEGIES)[number];
 export const DEFAULT_DUE_DAY = 15;
 /** Payoff runs at most 30 years ahead. */
 export const PAYOFF_MONTHS = 360;
-/** Charges from this much up can be surprises (P7-R2). */
-export const SURPRISE_MIN_CENTS = 10_000;
 const SURPRISE_MONTHS = 6;
 const SURPRISE_ROUND_CENTS = 2_500;
 const STEP_CENTS = 500;
@@ -388,31 +386,60 @@ export function autoFill(input: AheadInput, horizon: Horizon = 12): AheadPlan {
   return plan;
 }
 
-export interface SurpriseCharge {
-  date: ISODate;
-  /** Negative = money out. */
-  amountCents: Cents;
-  categoryId: number | null;
-  /** Its merchant is a confirmed bill's. */
-  isBill: boolean;
+export interface SurpriseCategory {
+  id: number;
+  parentId: number | null;
+  group: GroupKey;
+  /** Money out by month, aligned with `months` (a parent's includes its sub-categories'). */
+  byMonth: readonly Cents[];
 }
 
+/** The groups whose usual (or other bills) the forecast already counts; surprises are their overshoot. */
+const SURPRISE_GROUPS: ReadonlySet<GroupKey> = new Set(['everyday', 'habits', 'fun', 'bills']);
+const TRAILING_MONTHS = 3;
+
 /**
- * The suggested surprises cushion (P7-R2): the median, over the last 6 full months, of each month's spending
- * that isn't a confirmed bill, in a due-day or planned-cost category (`excluded`), or under $100 a charge;
- * rounded to $25.
+ * The suggested surprises cushion (P7-R2): how far spending ran over what "usual" would have said. For each of
+ * the last 6 full months and each top-level Everyday, Habits, Fun or Bills category, the month's spending less
+ * the average of the 3 full months before it, floored at 0 (so a quiet month elsewhere doesn't cancel it);
+ * summed, averaged over the months, rounded to $25. Planned-cost and debt-linked categories (`excluded`, a
+ * sub-category taken out of its parent) are counted elsewhere. A month whose trailing window starts before the
+ * household's history doesn't count; with under 4 full months of history the suggestion is $0.
  */
-export function suggestSurprise(charges: readonly SurpriseCharge[], today: ISODate, excluded: ReadonlySet<number>): Cents {
+export function suggestSurprise(
+  trends: { months: readonly MonthKey[]; categories: readonly SurpriseCategory[] },
+  today: ISODate,
+  excluded: ReadonlySet<number>,
+  historyStart: MonthKey | null,
+): Cents {
+  if (historyStart === null) return 0;
   const current = monthOf(today);
-  const months = Array.from({ length: SURPRISE_MONTHS }, (_, i) => addMonths(current, i - SURPRISE_MONTHS));
-  const totals = new Map(months.map((m) => [m, 0]));
-  for (const c of charges) {
-    const month = monthOf(c.date);
-    if (!totals.has(month) || c.isBill || -c.amountCents < SURPRISE_MIN_CENTS) continue;
-    if (c.categoryId !== null && excluded.has(c.categoryId)) continue;
-    totals.set(month, totals.get(month)! - c.amountCents);
+  const index = new Map(trends.months.map((m, i) => [m, i]));
+  const series = trends.categories
+    .filter((c) => c.parentId === null && SURPRISE_GROUPS.has(c.group) && !excluded.has(c.id))
+    .map((c) => {
+      const out = [...c.byMonth];
+      for (const child of trends.categories) {
+        if (child.parentId !== c.id || !excluded.has(child.id)) continue;
+        child.byMonth.forEach((v, i) => (out[i] = (out[i] ?? 0) - v));
+      }
+      return out;
+    });
+
+  let total = 0;
+  let counted = 0;
+  for (let k = SURPRISE_MONTHS; k >= 1; k--) {
+    const month = addMonths(current, -k);
+    const i = index.get(month);
+    if (i === undefined || i < TRAILING_MONTHS || addMonths(month, -TRAILING_MONTHS) < historyStart) continue;
+    counted++;
+    for (const s of series) {
+      let usual = 0;
+      for (let t = i - TRAILING_MONTHS; t < i; t++) usual += s[t] ?? 0;
+      total += Math.max(0, (s[i] ?? 0) - usual / TRAILING_MONTHS);
+    }
   }
-  return Math.round(median([...totals.values()]) / SURPRISE_ROUND_CENTS) * SURPRISE_ROUND_CENTS;
+  return counted ? Math.round(total / counted / SURPRISE_ROUND_CENTS) * SURPRISE_ROUND_CENTS : 0;
 }
 
 /**

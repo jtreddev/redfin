@@ -515,8 +515,8 @@ function SurprisesCard({
         Surprises: <Money cents={cents} whole /> a month <span className="muted">({working.ownSurprise ? 'your amount' : 'suggested'})</span>
       </p>
       <p className="muted small">
-        Counted as money out every month, for what nobody planned. The suggestion is the usual month of one-off spending of <Money cents={10_000} whole /> and up over the last
-        half year.
+        Counted as money out every month, for what nobody planned. The suggestion is how far spending ran over its usual level, on average, over the last half
+        year (planned costs and debt payments are counted elsewhere).
       </p>
       {stepper ? (
         <div className="cluster">

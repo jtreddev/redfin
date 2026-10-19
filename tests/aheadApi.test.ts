@@ -419,20 +419,20 @@ describe('Plan › Ahead API', () => {
   });
 
   describe('surprises', () => {
-    it('suggests the median of the last 6 months’ unplanned spending of $100 and up', async () => {
+    it('suggests how far spending ran over its usual, leaving out debt-linked categories', async () => {
       const everyday = category('Everyday');
-      bill('Insurance', '2026-11-05', 30000);
-      for (const [i, month] of ['2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09'].entries()) {
-        charge(1, `${month}-05`, -(10000 + i * 5000), { category_id: everyday });
-        charge(1, `${month}-06`, -9999, { category_id: everyday });
-        charge(1, `${month}-07`, -30000, { name: 'INSURANCE' });
-        charge(1, `${month}-08`, -40000, { private_member_id: partner });
+      const loans = category('Bills');
+      await api(env, 'POST', '/debts', { name: 'Car loan', balanceCents: 900000, minPaymentCents: 30000, categoryId: loans });
+      for (const month of ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09']) {
+        // July's groceries ran $600 over; the loan's category jumps too, but the plan counts the debt.
+        charge(1, `${month}-05`, month === '2026-07' ? -90000 : -30000, { category_id: everyday });
+        charge(1, `${month}-06`, month === '2026-07' ? -200000 : -30000, { category_id: loans });
       }
       const body = await ahead();
-      // 100, 150, 200, 250, 300, 350: median 225.
-      expect(body.surprise).toEqual({ suggestedCents: 22500, savedCents: null });
-      expect(body.saved.surpriseCents).toBe(22500);
-      expect(body.input.surpriseCents).toBe(22500);
+      // $600 over in one of the last 6 months: $100 a month.
+      expect(body.surprise).toEqual({ suggestedCents: 10000, savedCents: null });
+      expect(body.saved.surpriseCents).toBe(10000);
+      expect(body.input.surpriseCents).toBe(10000);
     });
   });
 

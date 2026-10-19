@@ -1,7 +1,7 @@
 import { addMonths, monthEnd, monthOf, monthStart, type ISODate, type MonthKey } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import type { MonthBill, PlannedCostInput } from '../../shared/monthsAhead';
-import { currentMonthly, suggestSurprise, SURPRISE_MIN_CENTS, type AheadInput, type AheadItem, type AheadPlan, type SurpriseCharge } from '../../shared/planAhead';
+import { currentMonthly, suggestSurprise, type AheadInput, type AheadItem, type AheadPlan } from '../../shared/planAhead';
 import { costBalance, spendByCategoryMonth, spendIn, withSubcategories, type SpendMap } from '../../shared/plannedCosts';
 import { monthlyEquivalent } from '../../shared/projection';
 import { GROUP_ORDER, usualOf, type GroupKey } from '../../shared/trends';
@@ -43,27 +43,24 @@ export interface MonthsAheadInputs {
  * category become its minimum + extra; a goal's saving line becomes the goal's monthly amount. This month is
  * left as it is.
  *
- * `link` runs debt auto-link first (Plan › Ahead and Debts). The surprise suggestion costs a query, so it's only
- * worked out when `suggest` is on or no cushion is saved.
+ * `link` runs debt auto-link first (Plan › Ahead and Debts).
  */
 export async function loadMonthsAheadInput(
   db: D1Database,
   today: ISODate,
   viewerId: number,
   household: HouseholdSettings,
-  opts: { link?: boolean; suggest?: boolean } = {},
+  opts: { link?: boolean } = {},
 ): Promise<MonthsAheadInputs> {
   const current = monthOf(today);
   const until = monthEnd(addMonths(current, MONTHS_AHEAD));
   if (opts.link) await linkDebts(db, today);
-  const suggest = opts.suggest === true || household.surpriseCents === null;
-  const [inputs, costs, history, debts, items, charges] = await Promise.all([
+  const [inputs, costs, history, debts, items] = await Promise.all([
     loadForecastInputs(db, today, viewerId, household, { payUntil: until, trendsMonths: LEDGER_MONTHS }),
     loadPlannedCosts(db),
     first<{ first: ISODate | null }>(db, 'SELECT MIN(date) AS first FROM transactions WHERE deleted_at IS NULL'),
     loadDebts(db, viewerId),
     loadItems(db),
-    suggest ? loadSurpriseCharges(db, today) : Promise.resolve([]),
   ]);
   const { planner } = inputs;
 
@@ -142,9 +139,8 @@ export async function loadMonthsAheadInput(
     .filter((b) => b.amountCents > 0);
 
   // Surprises leave out due-day lines' and planned costs' categories (P7-R2).
-  const suggestedCents = suggest
-    ? suggestSurprise(charges, today, new Set([...dueDayOwnLines(planner.data.rows).map((r) => r.categoryId), ...costOf.keys()]))
-    : (household.surpriseCents ?? 0);
+  // Surprises: how far spending ran over its usual, leaving out what's counted elsewhere (P7-R2).
+  const suggestedCents = suggestSurprise(inputs.trends, today, new Set([...costOf.keys(), ...debtCategoryIds(debts)]), historyStart);
   const surpriseCents = household.surpriseCents ?? suggestedCents;
   const input: AheadInput = {
     today,
@@ -194,28 +190,6 @@ export function loadItems(db: D1Database): Promise<AheadItem[]> {
     db,
     'SELECT id, name, amount_cents AS amountCents, month, repeat, end_month AS endMonth FROM ahead_items ORDER BY month, id',
   );
-}
-
-/**
- * Shared charges of $100 and up in the last 6 full months that could be surprises: spending (no category, or an
- * expense one), not a transfer, flagged when a confirmed bill has its merchant. Private charges are fun money.
- */
-function loadSurpriseCharges(db: D1Database, today: ISODate): Promise<SurpriseCharge[]> {
-  const current = monthOf(today);
-  return all<SurpriseCharge>(
-    db,
-    `SELECT t.date, t.amount_cents AS amountCents, t.category_id AS categoryId,
-            EXISTS (SELECT 1 FROM recurring_bills r WHERE r.status = 'confirmed'
-                       AND (lower(r.merchant) = lower(COALESCE(t.normalized_merchant, t.name))
-                            OR lower(r.merchant) LIKE lower(COALESCE(t.normalized_merchant, t.name)) || ' $%')) AS isBill
-       FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
-      WHERE t.deleted_at IS NULL AND t.is_ignored = 0 AND t.pending = 0 AND t.transfer_pair_id IS NULL AND t.is_split = 0
-        AND t.private_member_id IS NULL AND (c.kind IS NULL OR c.kind = 'expense')
-        AND t.amount_cents <= ? AND t.date BETWEEN ? AND ?`,
-    -SURPRISE_MIN_CENTS,
-    monthStart(addMonths(current, -6)),
-    monthEnd(addMonths(current, -1)),
-  ).then((rows) => rows.map((r) => ({ ...r, isBill: Boolean(r.isBill) })));
 }
 
 /** This month's due-day spending lines of their own (as dueDayLines counts them), at their hand amount. */
