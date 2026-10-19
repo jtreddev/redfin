@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { MonthKey } from '../../shared/dates';
 import { GROUP_ORDER, usualOf, type Change, type GroupKey } from '../../shared/trends';
 import { api } from '../api';
@@ -6,11 +6,10 @@ import { Bars } from '../charts/Bars';
 import { GROUP_COLOR, useTableToggle } from '../charts/cards';
 import { StackedBars, type Series } from '../charts/StackedBars';
 import { monthLabel, monthShortLabel } from '../format';
-import { go, replaceRoute, useRoute } from '../router';
+import { go, useRoute } from '../router';
 import { useApp, useLoad } from '../state';
 import type { TrendsResponse } from '../types';
-import { Button, Card, Empty, ErrorNote, Loading, Money, PageHeader, Segmented } from '../ui';
-import { MonthsAhead } from './MonthsAhead';
+import { Button, Card, Empty, ErrorNote, Loading, Money, PageHeader } from '../ui';
 
 const TILE_GROUPS: GroupKey[] = ['bills', 'everyday', 'habits'];
 
@@ -21,24 +20,19 @@ function visibleRange(t: TrendsResponse): number {
   return first < 0 ? 0 : first;
 }
 
-/** Trends: the months behind (Past) or ahead (#/trends?view=ahead). */
+/** Trends: the months behind. The months ahead moved to Plan › Ahead (P7-R1): old links land there. */
 export function Trends() {
   const route = useRoute();
-  const view = route.params.get('view') === 'ahead' ? 'ahead' : 'past';
+  const ahead = route.params.get('view') === 'ahead';
+  useEffect(() => {
+    // Replacing, so Back doesn't bounce.
+    if (ahead) window.location.replace('/#/plan?view=ahead');
+  }, [ahead]);
+  if (ahead) return null;
   return (
     <div className="stack trends">
-      <PageHeader title="Trends" subtitle={view === 'ahead' ? 'What the next months look like' : 'What the month costs, over time'} />
-      <div className="trends-view" role="group" aria-label="Show">
-        <Segmented
-          value={view}
-          onChange={(v) => replaceRoute('trends', v === 'ahead' ? 'view=ahead' : '')}
-          options={[
-            { value: 'past', label: 'Past' },
-            { value: 'ahead', label: 'Ahead' },
-          ]}
-        />
-      </div>
-      {view === 'ahead' ? <MonthsAhead /> : <PastTrends />}
+      <PageHeader title="Trends" subtitle="What the month costs, over time" />
+      <PastTrends />
     </div>
   );
 }

@@ -21,9 +21,10 @@ const TABS: { path: string; label: string; icon: IconName }[] = [
   { path: 'more', label: 'More', icon: 'more' },
 ];
 
-/** Screens that use the wide (two-column) layout on a computer: Trends, and Plan's budget. */
+/** Screens that use the wide (two-column) layout on a computer: Trends, Plan's budget and Plan › Ahead. */
 function isWide(route: Route, top: string): boolean {
   if (top === 'trends') return true;
+  if (top === 'plan' && route.params.get('view') === 'ahead') return true;
   return top === 'plan' && !route.params.get('view') && (route.params.get('tab') ?? 'budget') === 'budget';
 }
 

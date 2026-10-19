@@ -11,29 +11,24 @@ import {
   type MonthsWhatIf,
 } from '../../shared/monthsAhead';
 import { GROUP_ORDER } from '../../shared/trends';
-import { api } from '../api';
 import { Bars, type BarDetails } from '../charts/Bars';
 import { GROUP_COLOR, useTableToggle } from '../charts/cards';
 import { StackedBars, type Series } from '../charts/StackedBars';
 import { monthLabel } from '../format';
 import { Icon } from '../icons';
-import { useApp, useLoad } from '../state';
-import { AmountInput, Button, Card, ErrorNote, Loading, Money, Segmented } from '../ui';
+import { AmountInput, Button, Card, Money, Segmented } from '../ui';
 
-/** GET /api/forecast/months. */
-export interface MonthsAheadResponse {
-  today: string;
-  input: MonthsAheadInput;
-  projection: Result;
-  hasBalance: boolean;
-  hasIncome: boolean;
-}
+/**
+ * Project 6b's Months ahead, as cards: the rest of this month and the next 3, 6 or 12, month by month. Plan ›
+ * Ahead shows them with its plan's projection (the server sends a year of inputs; the 3/6/12 switch, the sliders
+ * and the what-if re-run the months here).
+ */
 
+export const HORIZON_LABEL: Record<Horizon, string> = { 3: '3 months', 6: '6 months', 12: '1 year' };
 const HORIZON_KEY = 'monthsAhead.horizon';
-const HORIZON_LABEL: Record<Horizon, string> = { 3: '3 months', 6: '6 months', 12: '1 year' };
 
 /** The 3/6/12 choice, remembered in this browser (private windows may refuse: then it's 6). */
-function savedHorizon(): Horizon {
+export function savedHorizon(): Horizon {
   try {
     const saved = Number(localStorage.getItem(HORIZON_KEY));
     return (HORIZONS as readonly number[]).includes(saved) ? (saved as Horizon) : 6;
@@ -42,7 +37,7 @@ function savedHorizon(): Horizon {
   }
 }
 
-function saveHorizon(horizon: Horizon) {
+export function saveHorizon(horizon: Horizon) {
   try {
     localStorage.setItem(HORIZON_KEY, String(horizon));
   } catch {
@@ -51,43 +46,36 @@ function saveHorizon(horizon: Horizon) {
 }
 
 /** "April" for a month this year, "April 2027" otherwise. */
-function monthName(month: string, today: string): string {
+export function monthName(month: string, today: string): string {
   return month.slice(0, 4) === today.slice(0, 4) ? monthLabel(month).replace(/ \d{4}$/, '') : monthLabel(month);
 }
 
+/** The 3/6/12 switch. */
+export function HorizonSwitch({ horizon, onChange }: { horizon: Horizon; onChange: (h: Horizon) => void }) {
+  return (
+    <div className="ahead-horizon" role="group" aria-label="How far ahead">
+      <Segmented
+        value={String(horizon)}
+        onChange={(v) => {
+          const next = Number(v) as Horizon;
+          onChange(next);
+          saveHorizon(next);
+        }}
+        options={HORIZONS.map((h) => ({ value: String(h), label: HORIZON_LABEL[h] }))}
+      />
+    </div>
+  );
+}
+
 /**
- * Trends › Ahead: the rest of this month and the next 3, 6 or 12, month by month. The server sends a year of
- * inputs; the 3/6/12 switch and the what-if re-run projectMonths here.
+ * The notes above the months: no paydays, no balance, little history. (Project 6b's Months ahead; its cards
+ * below are Plan › Ahead's months, fed the plan's projection.)
  */
-export function MonthsAhead() {
-  const { me } = useApp();
-  const load = useLoad(() => api<MonthsAheadResponse>('/forecast/months'), []);
-  const [horizon, setHorizon] = useState<Horizon>(savedHorizon);
-  const data = load.data;
-  const result = useMemo(() => (data ? projectMonths(data.input, horizon) : null), [data, horizon]);
-
-  if (load.error && !data) return <ErrorNote message={load.error} onRetry={() => void load.reload()} />;
-  if (!data || !result) return <Loading />;
-  const { input, today } = data;
-  const cushion = input.lowBalanceCents;
-  const current = monthOf(today);
-  const fullMonths = input.historyStart === null ? 0 : Math.max(0, monthsBetween(input.historyStart, current));
-
+export function AheadNotes({ input, today, hasIncome, hasBalance }: { input: MonthsAheadInput; today: string; hasIncome: boolean; hasBalance: boolean }) {
+  const fullMonths = input.historyStart === null ? 0 : Math.max(0, monthsBetween(input.historyStart, monthOf(today)));
   return (
     <>
-      <div className="ahead-horizon" role="group" aria-label="How far ahead">
-        <Segmented
-          value={String(horizon)}
-          onChange={(v) => {
-            const next = Number(v) as Horizon;
-            setHorizon(next);
-            saveHorizon(next);
-          }}
-          options={HORIZONS.map((h) => ({ value: String(h), label: HORIZON_LABEL[h] }))}
-        />
-      </div>
-
-      {!data.hasIncome && (
+      {!hasIncome && (
         <div className="banner banner-warn">
           <span>Add your paydays to forecast money in.</span>
           <a className="btn btn-secondary btn-small" href="#/more/income">
@@ -95,19 +83,8 @@ export function MonthsAhead() {
           </a>
         </div>
       )}
-      {!data.hasBalance && <p className="muted small">No cash balance yet, so this starts from $0. Connect a bank or add a balance to a checking account.</p>}
+      {!hasBalance && <p className="muted small">No cash balance yet, so this starts from $0. Connect a bank or add a balance to a checking account.</p>}
       {fullMonths < 2 && <p className="muted small">There’s little history so far, so everyday spending is estimated from what there is.</p>}
-
-      <div className="trends-grid">
-        <SummaryCard result={result} today={today} start={input.startBalanceCents} />
-        <CashCard result={result} cushion={cushion} />
-        <WhereCard result={result} />
-        <WatchCard result={result} cushion={cushion} today={today} />
-        {result.plannedCosts.length > 0 && <SetAsidesCard result={result} today={today} />}
-        {(result.goals.length > 0 || result.habitsTotalCents > 0) && <GoalsCard result={result} today={today} />}
-        {me.viewer.powerTools && <WhatIfCard input={input} horizon={horizon} base={result} today={today} />}
-      </div>
-      <p className="muted small">Based on your bills, budget and the last 3 months of spending. The further out, the rougher.</p>
     </>
   );
 }
@@ -118,7 +95,10 @@ function monthsBetween(from: string, to: string): number {
   return (ty - fy) * 12 + (tm - fm);
 }
 
-function SummaryCard({ result, today, start }: { result: Result; today: string; start: number }) {
+/** Plan › Ahead's own money out in a month (debt payments, goal saving, set-aside changes, known items, surprises): its own series after the five groups. */
+export const PLAN_SERIES = { key: 'plan', name: 'Debts & plan', colorVar: '--series-6' } as const;
+
+export function SummaryCard({ result, today, start }: { result: Result; today: string; start: number }) {
   const { totals } = result;
   const last = result.months.at(-1)!;
   const left = totals.leftOverCents;
@@ -151,6 +131,7 @@ function monthDetails(m: MonthAhead, cushion: number): BarDetails {
         // Inside Bills: what history says goes out beyond the known bills (P6b-R17).
         ...(g.key === 'bills' && m.otherBillsCents > 0 ? [{ key: 'other-bills', name: 'of it, other bills', value: -m.otherBillsCents }] : []),
       ]),
+      ...(m.ahead.outCents ? [{ key: PLAN_SERIES.key, name: PLAN_SERIES.name, colorVar: PLAN_SERIES.colorVar, value: -m.ahead.outCents }] : []),
       ...(m.addedCents ? [{ key: 'added', name: 'Added costs', value: -m.addedCents }] : []),
       { key: 'left', name: 'Left over', value: m.leftOverCents },
       ...m.bigItems.map((b, i) => ({ key: `big-${i}`, name: `Includes ${b.name}${b.note ? `, ${b.note}` : ''}`, value: -b.amountCents })),
@@ -159,7 +140,7 @@ function monthDetails(m: MonthAhead, cushion: number): BarDetails {
   };
 }
 
-function CashCard({ result, cushion }: { result: Result; cushion: number }) {
+export function CashCard({ result, cushion }: { result: Result; cushion: number }) {
   const title = 'Cash at the end of each month';
   const [table, toggle] = useTableToggle(title);
   const { months } = result;
@@ -217,11 +198,13 @@ function CashCard({ result, cushion }: { result: Result; cushion: number }) {
   );
 }
 
-function WhereCard({ result }: { result: Result }) {
+export function WhereCard({ result }: { result: Result }) {
   const title = 'Where it goes';
   const [table, toggle] = useTableToggle(title);
   const { months } = result;
   const series: Series[] = GROUP_ORDER.map((g) => ({ key: g.key, name: g.name, colorVar: GROUP_COLOR[g.key], values: months.map((m) => m.byGroup[g.key]) }));
+  // The plan's lines aren't in the groups: they're their own series, so the stack adds up to money out.
+  if (months.some((m) => m.ahead.outCents !== 0)) series.push({ ...PLAN_SERIES, values: months.map((m) => m.ahead.outCents) });
   return (
     <Card>
       <div className="spread chart-head">
@@ -279,11 +262,14 @@ function WhereCard({ result }: { result: Result }) {
           titleOf={(i) => months[i]!.label}
         />
       )}
+      {series.some((s) => s.key === PLAN_SERIES.key) && (
+        <p className="muted small chart-foot">{PLAN_SERIES.name}: debt payments, goal saving, set-aside changes, known items and surprises.</p>
+      )}
     </Card>
   );
 }
 
-function WatchCard({ result, cushion, today }: { result: Result; cushion: number; today: string }) {
+export function WatchCard({ result, cushion, today }: { result: Result; cushion: number; today: string }) {
   const watch = monthsToWatch(result, cushion);
   const { tightest } = result;
   return (
@@ -332,7 +318,7 @@ function WatchCard({ result, cushion, today }: { result: Result; cushion: number
   );
 }
 
-function SetAsidesCard({ result, today }: { result: Result; today: string }) {
+export function SetAsidesCard({ result, today }: { result: Result; today: string }) {
   const last = result.months.at(-1)!;
   return (
     <Card>
@@ -363,11 +349,12 @@ function SetAsidesCard({ result, today }: { result: Result; today: string }) {
   );
 }
 
-function GoalsCard({ result, today }: { result: Result; today: string }) {
+/** Goals at their recent pace, and habits over a year. `goals={false}`: habits only (Plan › Ahead shows goals by its sliders). */
+export function GoalsCard({ result, today, goals = true }: { result: Result; today: string; goals?: boolean }) {
   return (
     <Card>
-      <h2>Goals and habits</h2>
-      {result.goals.length > 0 && (
+      <h2>{goals ? 'Goals and habits' : 'Habits'}</h2>
+      {goals && result.goals.length > 0 && (
         <ul className="ahead-list">
           {result.goals.map((g) => (
             <li key={g.name}>
@@ -392,7 +379,7 @@ const HABITS: Record<HabitsChoice, number> = { usual: 1, less25: 0.75, less50: 0
 const EVERYDAY: Record<EverydayChoice, number> = { usual: 1, less10: 0.9, less20: 0.8 };
 
 /** "What if…": re-runs the months on the client. Nothing is saved. */
-function WhatIfCard({ input, horizon, base, today }: { input: MonthsAheadInput; horizon: Horizon; base: Result; today: string }) {
+export function WhatIfCard({ input, horizon, base, today }: { input: MonthsAheadInput; horizon: Horizon; base: Result; today: string }) {
   const [habits, setHabits] = useState<HabitsChoice>('usual');
   const [everyday, setEveryday] = useState<EverydayChoice>('usual');
   const [monthlyCents, setMonthlyCents] = useState<number | null>(null);

@@ -260,12 +260,17 @@ export function AmountInput({
   placeholder = '0.00',
   allowNegative = false,
   autoFocus,
+  id,
+  ariaLabel,
 }: {
   cents: number | null;
   onChange: (cents: number | null) => void;
   placeholder?: string;
   allowNegative?: boolean;
   autoFocus?: boolean;
+  id?: string;
+  /** When no <label> names it (a number field beside a slider). */
+  ariaLabel?: string;
 }) {
   const [text, setText] = useState(centsToInput(cents));
   useEffect(() => {
@@ -276,6 +281,8 @@ export function AmountInput({
     <div className="amount-input">
       <span>$</span>
       <input
+        id={id}
+        aria-label={ariaLabel}
         inputMode="decimal"
         value={text}
         placeholder={placeholder}

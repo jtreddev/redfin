@@ -121,7 +121,7 @@ export function UntilPayday({ refresh }: { refresh: unknown }) {
         <Money cents={dailyTotal(input.dailySpend)} whole /> a day).
       </p>
       <p className="small">
-        <a className="edit-link" href="#/trends?view=ahead">
+        <a className="edit-link" href="#/plan?view=ahead">
           See the next few months
         </a>
       </p>

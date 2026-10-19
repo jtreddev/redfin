@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import { addMonths, monthOf } from '../../shared/dates';
 import type { PayoffPlan } from '../../shared/debt';
 import type { GoalProgress } from '../../shared/goals';
+import type { DebtRow } from '../aheadPlan';
 import { useMoneyText } from '../amounts';
 import { api, errorMessage, patch, post } from '../api';
 import { monthShortLabel, shortDate } from '../format';
 import { go } from '../router';
 import { useApp, useLoad } from '../state';
 import { AmountInput, Button, Card, CategorySelect, Empty, ErrorNote, Field, Loading, Money, Progress, Segmented, Sheet } from '../ui';
+import { DebtFlagChips, DebtSheet } from './DebtSheet';
 import { PlannedCostsSection } from './PlannedCosts';
 
 type Tab = 'goals' | 'debts';
@@ -42,7 +44,7 @@ export function Goals({ params }: { params: URLSearchParams }) {
   );
 }
 
-interface Goal {
+export interface Goal {
   id: number;
   name: string;
   targetCents: number;
@@ -113,7 +115,7 @@ function GoalsView() {
   );
 }
 
-function GoalSheet({ goal, onClose, onSaved }: { goal: Goal | null; onClose: () => void; onSaved: () => Promise<void> }) {
+export function GoalSheet({ goal, onClose, onSaved }: { goal: Goal | null; onClose: () => void; onSaved: () => Promise<void> }) {
   const { toast, reload } = useApp();
   const [name, setName] = useState(goal?.name ?? '');
   const [target, setTarget] = useState<number | null>(goal?.targetCents ?? null);
@@ -176,24 +178,13 @@ function GoalSheet({ goal, onClose, onSaved }: { goal: Goal | null; onClose: () 
   );
 }
 
-interface Debt {
-  id: number;
-  name: string;
-  accountName: string | null;
-  balanceCents: number;
-  aprPercent: number;
-  minPaymentCents: number;
-  dueDay: number | null;
-  source: 'manual' | 'plaid';
-}
-
 function DebtsView() {
   const { me } = useApp();
   const moneyText = useMoneyText();
-  const debts = useLoad(() => api<Debt[]>('/debts'), []);
+  const debts = useLoad(() => api<DebtRow[]>('/debts'), []);
   const [extra, setExtra] = useState(10000);
   const [plan, setPlan] = useState<{ snowball: PayoffPlan; avalanche: PayoffPlan } | null>(null);
-  const [editing, setEditing] = useState<Debt | 'new' | null>(null);
+  const [editing, setEditing] = useState<DebtRow | 'new' | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -211,34 +202,67 @@ function DebtsView() {
     months === null ? 'Not with these payments' : months === 0 ? 'Now' : monthShortLabel(addMonths(monthOf(me.today), months));
   const names = new Map(debts.data.map((d) => [d.id, d.name]));
   const better = plan && plan.avalanche.totalInterestCents < plan.snowball.totalInterestCents ? 'avalanche' : 'snowball';
+  const paying = debts.data.filter((d) => !d.paidInFull);
+  const paidInFull = debts.data.filter((d) => d.paidInFull);
+
+  const row = (d: DebtRow) => (
+    <button key={d.id} type="button" className="row row-button" onClick={() => setEditing(d)}>
+      <div className="row-main">
+        <div className="row-title">{d.name}</div>
+        <div className="row-sub">
+          {d.paidInFull ? (
+            'Paid in full each month'
+          ) : (
+            <>
+              {d.aprPercent > 0 ? `${d.aprPercent}% APR · ` : ''}min <Money cents={d.minPaymentCents} />
+              {d.source === 'plaid' && ' · from bank'}
+            </>
+          )}
+          <DebtFlagChips debt={d} />
+        </div>
+      </div>
+      <Money cents={d.balanceCents} />
+    </button>
+  );
 
   return (
     <>
       {debts.data.length === 0 ? (
         <Empty title="No debts tracked">Linked credit cards and loans show up here automatically. You can also add one.</Empty>
       ) : (
-        <div className="list">
-          {debts.data.map((d) => (
-            <button key={d.id} type="button" className="row row-button" onClick={() => setEditing(d)}>
-              <div className="row-main">
-                <div className="row-title">{d.name}</div>
-                <div className="row-sub">
-                  {d.aprPercent}% APR · min <Money cents={d.minPaymentCents} />
-                  {d.source === 'plaid' && ' · from bank'}
-                </div>
+        <>
+          {paying.length > 0 && <div className="list">{paying.map(row)}</div>}
+          {paidInFull.length > 0 && (
+            <section className="stack-sm" aria-labelledby="paid-in-full-title">
+              <div className="section-title">
+                <h3 id="paid-in-full-title">Paid in full</h3>
               </div>
-              <Money cents={d.balanceCents} />
-            </button>
-          ))}
-        </div>
+              <p className="muted small">Cleared every month, so they’re left out of payoff. Tap one to change that.</p>
+              <div className="list">{paidInFull.map(row)}</div>
+            </section>
+          )}
+        </>
       )}
-      <Button onClick={() => setEditing('new')}>Add a debt</Button>
+      <div className="cluster">
+        <Button onClick={() => setEditing('new')}>＋ Add a debt</Button>
+        <Button variant="ghost" onClick={() => go('plan', { view: 'ahead' })}>
+          Plan where extra goes
+        </Button>
+      </div>
 
-      {plan && debts.data.some((d) => d.balanceCents > 0) && (
+      {plan && paying.some((d) => d.balanceCents > 0) && (
         <Card>
           <h2>Payoff plan</h2>
           <Field label={`Extra each month on top of minimums: ${moneyText(extra, { whole: true })}`}>
-            <input type="range" min={0} max={200000} step={2500} value={extra} onChange={(e) => setExtra(Number(e.target.value))} />
+            <input
+              type="range"
+              min={0}
+              max={200000}
+              step={2500}
+              value={extra}
+              aria-valuetext={moneyText(extra, { whole: true })}
+              onChange={(e) => setExtra(Number(e.target.value))}
+            />
           </Field>
           <table className="compare">
             <thead>
@@ -291,70 +315,5 @@ function DebtsView() {
         />
       )}
     </>
-  );
-}
-
-function DebtSheet({ debt, onClose, onSaved }: { debt: Debt | null; onClose: () => void; onSaved: () => Promise<void> }) {
-  const { toast } = useApp();
-  const [name, setName] = useState(debt?.name ?? '');
-  const [balance, setBalance] = useState<number | null>(debt?.balanceCents ?? null);
-  const [apr, setApr] = useState(String(debt?.aprPercent ?? ''));
-  const [min, setMin] = useState<number | null>(debt?.minPaymentCents ?? null);
-  const [dueDay, setDueDay] = useState(debt?.dueDay ? String(debt.dueDay) : '');
-
-  async function save() {
-    try {
-      const body = { name, balanceCents: balance ?? 0, aprPercent: Number(apr) || 0, minPaymentCents: min ?? 0, dueDay: dueDay ? Number(dueDay) : null };
-      if (debt) await patch(`/debts/${debt.id}`, body);
-      else await post('/debts', body);
-      await onSaved();
-    } catch (error) {
-      toast(errorMessage(error), 'error');
-    }
-  }
-
-  async function archive() {
-    if (!debt) return;
-    try {
-      await patch(`/debts/${debt.id}`, { archived: true });
-      await onSaved();
-    } catch (error) {
-      toast(errorMessage(error), 'error');
-    }
-  }
-
-  return (
-    <Sheet open onClose={onClose} title={debt ? debt.name : 'Add a debt'}>
-      {debt?.source === 'plaid' && <p className="muted small">Balance, rate and minimum refresh from the bank daily.</p>}
-      <Field label="Name">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Capital One card" />
-      </Field>
-      <div className="grid-2">
-        <Field label="Balance">
-          <AmountInput cents={balance} onChange={setBalance} />
-        </Field>
-        <Field label="APR %">
-          <input inputMode="decimal" value={apr} onChange={(e) => setApr(e.target.value)} placeholder="24.99" />
-        </Field>
-      </div>
-      <div className="grid-2">
-        <Field label="Minimum payment">
-          <AmountInput cents={min} onChange={setMin} />
-        </Field>
-        <Field label="Due day">
-          <input type="number" min={1} max={31} value={dueDay} onChange={(e) => setDueDay(e.target.value)} />
-        </Field>
-      </div>
-      <div className="cluster">
-        <Button variant="primary" onClick={() => void save()} disabled={!name}>
-          Save
-        </Button>
-        {debt && (
-          <Button variant="danger" onClick={() => void archive()}>
-            Paid off / remove
-          </Button>
-        )}
-      </div>
-    </Sheet>
   );
 }

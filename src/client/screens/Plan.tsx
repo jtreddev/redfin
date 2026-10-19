@@ -29,13 +29,16 @@ import {
 } from '../ui';
 import { IncreaseActions, IncreaseText } from './BillIncreases';
 import { Goals } from './Goals';
+import { PlanAhead } from './PlanAhead';
 
 type Tab = 'budget' | 'weeks' | 'bills';
 
 export function Plan({ params }: { params: URLSearchParams }) {
   const { me } = useApp();
-  // Goals live here as their own view (#/plan?view=goals); its own tab param picks goals or debts.
-  const goals = params.get('view') === 'goals';
+  // Goals and Ahead are their own views (#/plan?view=goals, #/plan?view=ahead); Goals' own tab param picks goals or debts.
+  const view = params.get('view');
+  const goals = view === 'goals';
+  const ahead = view === 'ahead';
   const tab = (params.get('tab') as Tab) || 'budget';
   const month = params.get('month') ?? monthOf(me.today);
   const setRoute = (next: { tab?: Tab; month?: string }) => go('plan', { tab, month, ...next });
@@ -43,18 +46,21 @@ export function Plan({ params }: { params: URLSearchParams }) {
   return (
     <div className="stack">
       <PageHeader title="Plan" />
-      <Segmented<Tab | 'goals'>
-        value={goals ? 'goals' : tab}
-        onChange={(t) => (t === 'goals' ? go('plan', { view: 'goals' }) : go('plan', { tab: t, month: params.get('month') }))}
+      <Segmented<Tab | 'goals' | 'ahead'>
+        value={goals ? 'goals' : ahead ? 'ahead' : tab}
+        onChange={(t) => (t === 'goals' || t === 'ahead' ? go('plan', { view: t }) : go('plan', { tab: t, month: params.get('month') }))}
         options={[
           { value: 'budget', label: 'Budget' },
           { value: 'weeks', label: 'Weeks' },
           { value: 'bills', label: 'Bills' },
           { value: 'goals', label: 'Goals' },
+          { value: 'ahead', label: 'Ahead' },
         ]}
       />
       {goals ? (
         <Goals params={params} />
+      ) : ahead ? (
+        <PlanAhead />
       ) : (
         <>
           <MonthPicker month={month} onChange={(m) => setRoute({ month: m })} />

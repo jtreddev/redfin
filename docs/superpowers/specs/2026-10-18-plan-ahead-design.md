@@ -426,3 +426,35 @@ Money totals.
   - `/forecast`: 20.
   - The test bound is 35. This month's planner now shares the cash, categories, income-source and paydays
     queries the forecasts make, and later months reuse its members.
+
+## Rulings made while building (Task 2: the screen)
+
+- **P7-R25 The month sheet without power tools shows section totals.** Paydays, bills, usual spending, planned
+  costs, debt payments, known items, surprises, set-asides and goals each show their total. With Show more
+  tools on, each line is listed too, with its date and where it came from. *Cost:* a simple-mode user can't see
+  which bill is in a month without turning on more tools.
+- **P7-R26 The plan's money out is its own chart series.** Once a plan is saved, its lines leave the five
+  groups. "Where it goes" adds **Debts & plan** (debt payments, goal saving, set-aside changes, known items and
+  surprises) after the five groups, in categorical slot 6 (`#008300` in both modes; the six slots pass the
+  dataviz validator on `#ffffff` and `#181c22`). The table gets the same column and the cash chart's readout
+  the same row, so every view adds up to money out. *Cost:* a sixth colour in the stack.
+- **P7-R27 Set-asides and goals show by their sliders.** In Plan › Ahead the 6b Set-asides card and the goals
+  in "Goals and habits" are left out: the slider rows say the same under the plan being tried (balance at the
+  end, runs short, reached). The habits line stays. *Cost:* the "at your recent pace" goal date isn't shown here.
+- **P7-R28 A slider runs to at least $500.** With nothing left over, the range would be 0 to 0. The number
+  field beside it takes any amount. *Cost:* none beyond a slider that can go past what's left (flagged by the bar).
+- **P7-R29 Unsaved moves survive a reload.** Adding a known item or a debt reloads `/ahead`; the sliders keep
+  what was moved, and new debts, costs or goals start at their saved values. Only Save and Reset start again
+  from the saved plan. A cushion that is still the suggestion follows a new suggestion.
+- **P7-R30 Estimates read in whole dollars.** The left-over, the allocation bar, interest and savings. Plan
+  amounts (set in $5 steps) and minimums keep their cents when they have them.
+- **P7-R31 The debt balance chart reuses the cash line.** `BalanceLine` takes month steps (titles, ticks,
+  readout name and summary) instead of a second line chart. The lowest point isn't marked for debt.
+- **P7-R32 Save sends only what changed.** The confirm sheet lists exactly those changes. A cushion is sent as
+  your amount only when it was typed or stepped; "Use suggestion" sends `null`. The order is sent only under
+  My order.
+- **P7-R33 The debt form sends only what changed.** A linked debt's balance is shown, not editable. A blank
+  minimum stays (or becomes) an estimate. The bill suggestion for a debt not yet saved mirrors P7-R23 in the
+  browser.
+- **P7-R34 Goals › Debts keeps its payoff comparison** (snowball versus avalanche, unsaved), gains the
+  "Paid in full" group, the flags, the shared debt form and a link to Plan › Ahead.

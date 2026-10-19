@@ -18,10 +18,25 @@ export function dayTitle(date: ISODate, today: ISODate): string {
   return date === today ? `Today, ${shortDate(date)}` : weekdayDate(date);
 }
 
+/** For a line that isn't day by day (Plan › Ahead's debt by month): its titles, tick labels and readout. */
+export interface LineSteps {
+  /** The readout's title for point i. */
+  title: (i: number) => string;
+  /** The axis label under point i. */
+  tick: (i: number) => string;
+  /** The readout row's name, e.g. "Debt at month end". */
+  valueName: string;
+  /** "months", for the keyboard hint. */
+  unit: string;
+  /** Replaces the default summary (which reads days and the lowest point). */
+  summary: string;
+}
+
 /**
  * Cash day by day, one series in the accent ink (no legend: the card's title names it). A dashed line marks the
  * low-balance cushion, a dot marks the lowest day, and hover, tap or the arrow keys read out one day: its
- * balance and what comes out that day.
+ * balance and what comes out that day. With `steps`, the points are something else (months) and the lowest
+ * point isn't marked.
  */
 export function BalanceLine({
   points,
@@ -29,12 +44,14 @@ export function BalanceLine({
   cushionCents,
   today,
   label,
+  steps,
 }: {
   points: readonly ProjectionPoint[];
   events: readonly ProjectionEvent[];
   cushionCents: Cents;
   today: ISODate;
   label: string;
+  steps?: LineSteps;
 }) {
   const money = useMoneyText();
   const [ref, width] = useWidth<HTMLDivElement>();
@@ -64,8 +81,9 @@ export function BalanceLine({
 
   const eventsOn = (date: ISODate) => events.filter((e) => e.date === date);
   const last = points[count - 1];
-  const summary =
-    last && lowestPoint
+  const summary = steps
+    ? steps.summary
+    : last && lowestPoint
       ? `${label}. ${money(points[0]!.balanceCents, { whole: true })} today, ${money(last.balanceCents, { whole: true })} on ${shortDate(last.date)}. ` +
         `Lowest ${money(lowestPoint.balanceCents, { whole: true })} on ${shortDate(lowestPoint.date)}.` +
         (cushion !== null ? ` Your cushion is ${money(cushion, { whole: true })}.` : '')
@@ -74,7 +92,7 @@ export function BalanceLine({
   const activePoint = active === null ? null : points[active];
   const rows: TooltipRow[] = activePoint
     ? [
-        { key: 'balance', name: 'Cash at the end of the day', value: activePoint.balanceCents },
+        { key: 'balance', name: steps?.valueName ?? 'Cash at the end of the day', value: activePoint.balanceCents },
         ...eventsOn(activePoint.date).map((e) => ({ key: e.id, name: e.name, value: -e.amountCents })),
       ]
     : [];
@@ -85,7 +103,7 @@ export function BalanceLine({
 
   return (
     <div className="chart balance-line" ref={ref}>
-      <div className="chart-frame" role="group" aria-label={`${label}. Arrow keys move between days.`} {...focus.wrapperProps}>
+      <div className="chart-frame" role="group" aria-label={`${label}. Arrow keys move between ${steps?.unit ?? 'days'}.`} {...focus.wrapperProps}>
         {width > 0 && count > 0 && (
           <svg
             width={width}
@@ -118,7 +136,7 @@ export function BalanceLine({
                   y={baseline + 18}
                   textAnchor={count === 1 ? 'middle' : i === 0 ? 'start' : i === count - 1 ? 'end' : 'middle'}
                 >
-                  {i === 0 ? 'Today' : shortDate(points[i]!.date)}
+                  {steps ? steps.tick(i) : i === 0 ? 'Today' : shortDate(points[i]!.date)}
                 </text>
               ))}
               {cushion !== null && (
@@ -131,7 +149,7 @@ export function BalanceLine({
               )}
               {activePoint && <line className="chart-crosshair" x1={xOf(active!)} x2={xOf(active!)} y1={LINE.top} y2={baseline} />}
               {count > 1 && <path className="balance-path" d={path} />}
-              {lowestPoint && (
+              {lowestPoint && !steps && (
                 <>
                   <circle className="balance-dot" cx={lowX} cy={yOf(lowestPoint.balanceCents)} r={4} />
                   <text className="chart-label chart-amount" x={lowX} y={yOf(lowestPoint.balanceCents) + (yOf(lowestPoint.balanceCents) > baseline - 20 ? -10 : 18)} textAnchor={lowAnchor}>
@@ -140,7 +158,7 @@ export function BalanceLine({
                   </text>
                 </>
               )}
-              {activePoint && active !== lowest && <circle className="balance-dot" cx={xOf(active!)} cy={yOf(activePoint.balanceCents)} r={4} />}
+              {activePoint && (active !== lowest || steps) && <circle className="balance-dot" cx={xOf(active!)} cy={yOf(activePoint.balanceCents)} r={4} />}
             </g>
           </svg>
         )}
@@ -148,7 +166,7 @@ export function BalanceLine({
           <Tooltip
             x={xOf(active!)}
             containerWidth={width}
-            title={dayTitle(activePoint.date, today)}
+            title={steps ? steps.title(active!) : dayTitle(activePoint.date, today)}
             interactive={focus.pinned}
             rows={rows}
             note={cushion !== null && activePoint.balanceCents < cushion ? 'Under your cushion' : undefined}
@@ -157,7 +175,7 @@ export function BalanceLine({
       </div>
       <div className="sr-only" aria-live="polite">
         {activePoint &&
-          `${dayTitle(activePoint.date, today)}: ${money(activePoint.balanceCents, { whole: true })}` +
+          `${steps ? steps.title(active!) : dayTitle(activePoint.date, today)}: ${money(activePoint.balanceCents, { whole: true })}` +
             eventsOn(activePoint.date)
               .map((e) => `, ${e.name} ${money(e.amountCents, { whole: true })}`)
               .join('')}
