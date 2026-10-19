@@ -207,6 +207,20 @@ describe('Plan › Ahead API', () => {
       expect(row()).toEqual([{ paid_in_full: 0, paid_in_full_checked: 1 }]);
     });
 
+    it('keeps a carried card being paid down in payoff', async () => {
+      // $5,000 carried: $300 of charges and $500 paid each month.
+      db.exec(`INSERT INTO accounts (id, name, type, current_balance_cents) VALUES (6, 'Carried Card', 'credit', 500000)`);
+      for (const month of ['2026-06', '2026-07', '2026-08', '2026-09']) {
+        charge(6, `${month}-10`, -30000);
+        charge(6, `${month}-20`, 50000);
+      }
+      db.exec("INSERT INTO debts (name, account_id, balance_cents, min_payment_cents, source) VALUES ('Carried Card', 6, 500000, 15000, 'plaid')");
+      const body = await ahead();
+      expect(body.debts.find((d) => d.name === 'Carried Card')?.paidInFull).toBe(false);
+      expect(planAhead(body.input, body.saved).debts.map((d) => d.name)).toContain('Carried Card');
+      expect(db.rows('SELECT paid_in_full_checked FROM debts WHERE account_id = 6')).toEqual([{ paid_in_full_checked: 1 }]);
+    });
+
     it('never re-detects a card the user toggled', async () => {
       const id = db.rows<{ id: number }>('SELECT id FROM debts WHERE account_id = 5')[0]!.id;
       expect((await api(env, 'PATCH', `/debts/${id}`, { paidInFull: false })).status).toBe(200);

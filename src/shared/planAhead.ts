@@ -417,16 +417,22 @@ export function suggestSurprise(charges: readonly SurpriseCharge[], today: ISODa
 
 /**
  * "Paid in full each month" (P7-R7), with calendar months for statement cycles: in each of the last 3 full
- * months a payment came in and it was at least the charges of the month before (to the dollar).
+ * months a payment came in and it was at least the charges of the month before (to the dollar), and the balance
+ * is no more than the last 2 full months' charges and this month's so far (to the dollar): a statement not yet
+ * paid, never a carried balance. When unsure it says no: a hidden debt is the worse mistake.
  */
-export function cardPaidInFull(byMonth: Readonly<Record<MonthKey, { paidCents: Cents; chargedCents: Cents }>>, today: ISODate): boolean {
+export function cardPaidInFull(
+  byMonth: Readonly<Record<MonthKey, { paidCents: Cents; chargedCents: Cents }>>,
+  today: ISODate,
+  balanceCents: Cents,
+): boolean {
   const current = monthOf(today);
+  const charged = (n: number) => byMonth[addMonths(current, -n)]?.chargedCents ?? 0;
   for (let i = 1; i <= 3; i++) {
     const paid = byMonth[addMonths(current, -i)]?.paidCents ?? 0;
-    const charged = byMonth[addMonths(current, -i - 1)]?.chargedCents ?? 0;
-    if (paid <= 0 || paid + 100 < charged) return false;
+    if (paid <= 0 || paid + 100 < charged(i + 1)) return false;
   }
-  return true;
+  return Math.max(0, balanceCents) <= charged(0) + charged(1) + charged(2) + 100;
 }
 
 /**

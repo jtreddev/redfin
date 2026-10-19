@@ -128,6 +128,31 @@ describe('planPayoff, extended', () => {
     expect(r.debts[0]!.payoffMonth).toBe(3);
   });
 
+  it('pays a term loan’s actual payment without taking another debt’s extra, and rolls that payment on', () => {
+    const r = planPayoff(
+      [
+        // $400 in 4, minimum left as the $25 estimate: it really takes $100 a month.
+        { id: 'bnpl', name: 'Pay in 4', balanceCents: 40_000, aprPercent: 0, minPaymentCents: 2_500, termMonths: 4 },
+        { id: 'card', name: 'Card', balanceCents: 300_000, aprPercent: 25, minPaymentCents: 9_000, extraCents: 10_000 },
+      ],
+      'avalanche',
+      { seriesMonths: 6 },
+    );
+    const [bnpl, card] = r.debts;
+    expect(bnpl!.payments.slice(0, 4)).toEqual([10_000, 10_000, 10_000, 10_000]);
+    // The card gets its minimum + extra every month, then the loan's $100 too once it's paid off.
+    expect(card!.payments).toEqual([19_000, 19_000, 19_000, 19_000, 29_000, 29_000]);
+    const minimumOnly = planPayoff(
+      [
+        { id: 'bnpl', name: 'Pay in 4', balanceCents: 40_000, aprPercent: 0, minPaymentCents: 2_500, termMonths: 4 },
+        { id: 'card', name: 'Card', balanceCents: 300_000, aprPercent: 25, minPaymentCents: 9_000 },
+      ],
+      'avalanche',
+      { seriesMonths: 1 },
+    );
+    expect(minimumOnly.debts.map((d) => d.payments[0])).toEqual([10_000, 9_000]);
+  });
+
   it('leaves out a card paid in full', () => {
     const r = planPayoff([{ id: 'x', name: 'X', balanceCents: 40_000, aprPercent: 20, minPaymentCents: 2_500, paidInFull: true }], 'avalanche');
     expect(r.debts).toEqual([]);
@@ -357,10 +382,21 @@ describe('cardPaidInFull', () => {
       '2026-08': { paidCents: 30_000, chargedCents: 50_000 },
       '2026-09': { paidCents: 49_950, chargedCents: 20_000 },
     };
-    expect(cardPaidInFull(months, TODAY)).toBe(true);
-    expect(cardPaidInFull({ ...months, '2026-08': { paidCents: 20_000, chargedCents: 50_000 } }, TODAY)).toBe(false);
+    // The balance is September's charges, not yet due.
+    expect(cardPaidInFull(months, TODAY, 20_000)).toBe(true);
+    expect(cardPaidInFull({ ...months, '2026-08': { paidCents: 20_000, chargedCents: 50_000 } }, TODAY, 20_000)).toBe(false);
     // A card not used and not paid isn't "paid in full".
-    expect(cardPaidInFull({}, TODAY)).toBe(false);
+    expect(cardPaidInFull({}, TODAY, 0)).toBe(false);
+  });
+
+  it('isn’t fooled by a carried card being paid down', () => {
+    // $5,000 carried: $300 of charges and $500 paid each month.
+    const months = Object.fromEntries(['2026-06', '2026-07', '2026-08', '2026-09'].map((m) => [m, { paidCents: 50_000, chargedCents: 30_000 }]));
+    expect(cardPaidInFull(months, TODAY, 500_000)).toBe(false);
+    // The balance may be the last 2 full months' charges and this month's so far (a statement not yet paid), and $1.
+    const withOctober = { ...months, '2026-10': { paidCents: 0, chargedCents: 10_000 } };
+    expect(cardPaidInFull(withOctober, TODAY, 30_000 + 30_000 + 10_000 + 100)).toBe(true);
+    expect(cardPaidInFull(withOctober, TODAY, 30_000 + 30_000 + 10_000 + 101)).toBe(false);
   });
 });
 

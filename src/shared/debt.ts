@@ -109,23 +109,33 @@ export function planPayoff(
   const order = payoffOrder(state, strategy, opts.order);
   const minimumBelowInterest = state.filter((d) => d.min <= monthlyInterest(d.balance, d.aprPercent)).map((d) => d.id);
 
-  const monthlyBudget = state.reduce((total, d) => total + d.min + d.own, 0) + sharedExtra;
+  // What each debt takes a month: its minimum (a fixed-term loan: its actual payment) plus its own extra. Once
+  // it's paid off, that money rolls on to the next in order.
+  const committed = state.map((d) => d.min + d.own);
   let totalPaid = 0;
   let months: number | null = state.length === 0 ? 0 : null;
   const paid = new Array<number>(state.length).fill(0);
+  const due = new Array<number>(state.length).fill(0);
 
   for (let month = 1; month <= limit && months === null; month++) {
-    let pool = monthlyBudget;
     for (let i = 0; i < state.length; i++) {
       const d = state[i]!;
       paid[i] = 0;
+      due[i] = 0;
       if (d.balance <= 0) continue;
       const interest = monthlyInterest(d.balance, d.aprPercent);
       d.balance += interest;
       d.interest += interest;
       // A term loan's payment clears what's left over the payments left.
-      const due = d.term === null ? d.min : Math.max(d.min, Math.ceil(d.balance / Math.max(1, d.term - month + 1)));
-      const pay = Math.min(due, d.balance);
+      due[i] = d.term === null ? d.min : Math.max(d.min, Math.ceil(d.balance / Math.max(1, d.term - month + 1)));
+      // Its money this month (a paid-off debt keeps its last, to roll on).
+      committed[i] = due[i]! + d.own;
+    }
+    let pool = committed.reduce((total, c) => total + c, 0) + sharedExtra;
+    for (let i = 0; i < state.length; i++) {
+      const d = state[i]!;
+      if (d.balance <= 0) continue;
+      const pay = Math.min(due[i]!, d.balance);
       d.balance -= pay;
       pool -= pay;
       paid[i] = pay;

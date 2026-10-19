@@ -1,4 +1,4 @@
-import { addMonths, monthEnd, monthOf, monthStart, type ISODate, type MonthKey } from '../../shared/dates';
+import { addMonths, monthOf, monthStart, type ISODate, type MonthKey } from '../../shared/dates';
 import { estimatedMinimum } from '../../shared/debt';
 import type { Cents } from '../../shared/money';
 import { cardPaidInFull, type AheadDebt, type DebtKind } from '../../shared/planAhead';
@@ -51,7 +51,8 @@ export async function linkDebts(db: D1Database, today: ISODate, { refresh = fals
       WHERE a.type IN ('credit', 'loan') AND a.hidden = 0 AND (d.id IS NULL OR (a.type = 'credit' AND d.paid_in_full_checked = 0))
       ORDER BY a.id`,
     monthStart(addMonths(current, -4)),
-    monthEnd(addMonths(current, -1)),
+    // Through today: this month's charges so far count toward the balance check.
+    today,
   );
   if (!accounts.length) {
     if (refresh) await refreshStatement(db).run();
@@ -73,7 +74,7 @@ export async function linkDebts(db: D1Database, today: ISODate, { refresh = fals
       balance,
       min: estimatedMinimum(balance, 0),
       kind: a.type === 'credit' ? 'credit_card' : 'other',
-      paidInFull: a.type === 'credit' && cardPaidInFull(byMonth, today) ? 1 : 0,
+      paidInFull: a.type === 'credit' && cardPaidInFull(byMonth, today, a.balanceCents ?? 0) ? 1 : 0,
     };
   });
   const unchecked = rows.filter((_, i) => accounts[i]!.debtId !== null);
