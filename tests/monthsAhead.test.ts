@@ -246,6 +246,8 @@ describe('projectMonths', () => {
         endCents: -13_000 + 4 * 5_000,
         // 13,000 over Nov and Dec = 6,500 a month.
         fixMonthlyCents: 6_500,
+        balances: [31_000, 36_000, -13_000, -8_000, -3_000, 2_000, 7_000],
+        spends: [0, 0, 54_000, 0, 0, 0, 0],
       },
     ]);
     const rounded = projectMonths(input({ historyStart: '2025-01', plannedCosts: [cost({ balanceNowCents: 31_010, spendByMonth: { '2025-12': 54_030 } })] }), 6);

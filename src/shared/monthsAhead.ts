@@ -77,6 +77,27 @@ export interface MonthsAheadInput {
    * as a monthly amount: counted in Bills each month (P6b-R17).
    */
   otherBillsCents: Cents;
+  /** Plan › Ahead's lines by month (debt payments, known items, surprises, set-aside changes, goal saving). */
+  ahead?: Readonly<Record<MonthKey, AheadMonthLines>>;
+}
+
+export type AheadLineKind = 'debt' | 'item' | 'surprise' | 'setAside' | 'goal';
+
+export interface AheadLine {
+  kind: AheadLineKind;
+  /** The debt, item, planned cost or goal; null for surprises. */
+  id: number | null;
+  name: string;
+  /** Positive = money out, negative = money in (a known item coming in, a set-aside lowered). */
+  amountCents: Cents;
+}
+
+export interface AheadMonthLines {
+  /** Known items coming in. */
+  inCents: Cents;
+  /** Everything else, as money out. */
+  outCents: Cents;
+  lines: AheadLine[];
 }
 
 export interface MonthsWhatIf {
@@ -117,6 +138,9 @@ export interface MonthAhead {
   otherBillsCents: Cents;
   /** What-if costs. */
   addedCents: Cents;
+  /** Plan › Ahead's lines (their money in is in inCents, their money out in outCents). */
+  ahead: AheadMonthLines;
+  /** byGroup + addedCents + ahead.outCents. */
   outCents: Cents;
   leftOverCents: Cents;
   endCents: Cents;
@@ -131,6 +155,10 @@ export interface PlannedCostAhead {
   endCents: Cents;
   /** More to set aside each month to keep it from going below 0 (rounded up to $5); 0 when it doesn't. */
   fixMonthlyCents: Cents;
+  /** Its balance at the end of each month shown. */
+  balances: Cents[];
+  /** Its expected spending (bills included) in each month shown. */
+  spends: Cents[];
 }
 
 export interface GoalAhead {
@@ -157,6 +185,7 @@ export interface MonthsAhead {
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const short = (month: MonthKey) => MONTH_SHORT[parseMonth(month).m - 1]!;
 const zeros = (): ByGroup => ({ bills: 0, everyday: 0, habits: 0, fun: 0, saving: 0 });
+const NO_AHEAD: AheadMonthLines = { inCents: 0, outCents: 0, lines: [] };
 const SPREAD_GROUPS = ['everyday', 'habits', 'fun'] as const;
 
 /**
@@ -195,7 +224,7 @@ export function projectMonths(input: MonthsAheadInput, horizon: Horizon = 12, wh
   }
   const factor = { everyday: whatIf.everydayFactor ?? 1, habits: whatIf.habitsFactor ?? 1, fun: 1 };
 
-  const costBalances = input.plannedCosts.map((c) => ({ balance: c.balanceNowCents, lowest: Number.POSITIVE_INFINITY, lowestMonth: current }));
+  const costBalances = input.plannedCosts.map((c) => ({ balance: c.balanceNowCents, lowest: Number.POSITIVE_INFINITY, lowestMonth: current, balances: [] as Cents[], spends: [] as Cents[] }));
   const months: MonthAhead[] = [];
   let cash = input.startBalanceCents;
   for (let i = 0; i <= horizon; i++) {
@@ -242,10 +271,14 @@ export function projectMonths(input: MonthsAheadInput, horizon: Horizon = 12, wh
         tracked.lowest = tracked.balance;
         tracked.lowestMonth = month;
       }
+      tracked.balances.push(tracked.balance);
+      tracked.spends.push(cents + ownBills);
     });
 
     const addedCents = (partial ? 0 : (whatIf.monthlyCents ?? 0)) + (whatIf.oneOffMonth === month ? (whatIf.oneOffCents ?? 0) : 0);
-    const outCents = byGroup.bills + byGroup.everyday + byGroup.habits + byGroup.fun + byGroup.saving + addedCents;
+    const ahead = input.ahead?.[month] ?? NO_AHEAD;
+    inCents += ahead.inCents;
+    const outCents = byGroup.bills + byGroup.everyday + byGroup.habits + byGroup.fun + byGroup.saving + addedCents + ahead.outCents;
     cash += inCents - outCents;
     months.push({
       month,
@@ -257,6 +290,7 @@ export function projectMonths(input: MonthsAheadInput, horizon: Horizon = 12, wh
       byGroup,
       otherBillsCents,
       addedCents,
+      ahead,
       outCents,
       leftOverCents: inCents - outCents,
       endCents: cash,
@@ -280,7 +314,7 @@ export function projectMonths(input: MonthsAheadInput, horizon: Horizon = 12, wh
     endCents: cash,
     habitsTotalCents: input.usual.habits * 12,
     plannedCosts: input.plannedCosts.map((cost, k) => {
-      const { balance, lowest, lowestMonth } = costBalances[k]!;
+      const { balance, lowest, lowestMonth, balances, spends } = costBalances[k]!;
       // Spread over the set-asides still to come before it's lowest (at least one).
       const monthsUntil = Math.max(1, parseMonthIndex(lowestMonth) - parseMonthIndex(current));
       return {
@@ -290,6 +324,8 @@ export function projectMonths(input: MonthsAheadInput, horizon: Horizon = 12, wh
         lowestMonth,
         endCents: balance,
         fixMonthlyCents: lowest < 0 ? roundUpToFive(-lowest / monthsUntil) : 0,
+        balances,
+        spends,
       };
     }),
     goals: input.goals.map((g) => ({

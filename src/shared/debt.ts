@@ -7,9 +7,26 @@ export interface DebtInput {
   /** Annual percentage rate, e.g. 24.99. */
   aprPercent: number;
   minPaymentCents: Cents;
+  /** Its own extra each month on top of the minimum; once it's paid off, this rolls on with the rest. */
+  extraCents?: Cents;
+  /** A fixed-term loan: payments left. Each payment is at least what clears it by the last one. */
+  termMonths?: number | null;
+  /** A card paid in full each month: left out of payoff. */
+  paidInFull?: boolean;
 }
 
-export type PayoffStrategy = 'snowball' | 'avalanche';
+/** 'custom': the order given (debts left out of it follow by highest rate). */
+export type PayoffStrategy = 'snowball' | 'avalanche' | 'custom';
+
+export interface PayoffOptions {
+  /** Extra aimed at the first debt in order (not tied to one debt). */
+  extraCents?: Cents;
+  maxMonths?: number;
+  /** For 'custom': debt ids, first to be paid off first. */
+  order?: readonly (string | number)[];
+  /** Keep each debt's balance and payment for this many months (from month 1). */
+  seriesMonths?: number;
+}
 
 export interface DebtPayoff {
   id: string | number;
@@ -17,6 +34,10 @@ export interface DebtPayoff {
   /** Month number (1 = next payment) when the balance hits zero; null if not within the horizon. */
   payoffMonth: number | null;
   interestCents: Cents;
+  /** Balance at the end of months 1…seriesMonths. */
+  balances: Cents[];
+  /** Paid in months 1…seriesMonths. */
+  payments: Cents[];
 }
 
 export interface PayoffPlan {
@@ -37,48 +58,85 @@ export function monthlyInterest(balanceCents: Cents, aprPercent: number): Cents 
   return Math.round((balanceCents * aprPercent) / 100 / 12);
 }
 
+/** A minimum when the bank gives none: the larger of $25 and 1% of the balance plus a month's interest, at most the balance. */
+export function estimatedMinimum(balanceCents: Cents, aprPercent: number): Cents {
+  if (balanceCents <= 0) return 0;
+  return Math.min(balanceCents, Math.max(2_500, Math.round(balanceCents * 0.01) + monthlyInterest(balanceCents, aprPercent)));
+}
+
+type Ordered = { id: string | number; balance: number; aprPercent: number };
+
+function payoffOrder<T extends Ordered>(state: readonly T[], strategy: PayoffStrategy, custom: readonly (string | number)[] = []): T[] {
+  const byRate = (a: T, b: T) => b.aprPercent - a.aprPercent || a.balance - b.balance;
+  if (strategy === 'snowball') return [...state].sort((a, b) => a.balance - b.balance || b.aprPercent - a.aprPercent);
+  if (strategy === 'avalanche') return [...state].sort(byRate);
+  const rank = new Map(custom.map((id, i) => [id, i]));
+  return [...state].sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity) || byRate(a, b));
+}
+
 /**
- * Month-by-month payoff simulation. Each month: interest accrues, every debt gets its
- * minimum, and the extra (plus minimums freed up by paid-off debts) goes to the target:
- * smallest balance first (snowball) or highest APR first (avalanche).
+ * Month-by-month payoff simulation. Each month: interest accrues, every debt gets its minimum (a fixed-term loan
+ * at least what clears it on time) and its own extra, and the rest of the money (the shared extra, plus whatever
+ * paid-off debts no longer take) goes to the target: smallest balance first (snowball), highest APR first
+ * (avalanche) or the order given (custom).
  */
 export function planPayoff(
   debts: readonly DebtInput[],
   strategy: PayoffStrategy,
-  extraCents = 0,
+  extra: Cents | PayoffOptions = 0,
   maxMonths = 600,
 ): PayoffPlan {
+  const opts: PayoffOptions = typeof extra === 'number' ? { extraCents: extra, maxMonths } : extra;
+  const limit = opts.maxMonths ?? maxMonths;
+  const seriesMonths = Math.min(opts.seriesMonths ?? 0, limit);
+  const sharedExtra = Math.max(0, opts.extraCents ?? 0);
   const state = debts
-    .filter((d) => d.balanceCents > 0)
-    .map((d) => ({ ...d, balance: d.balanceCents, interest: 0, payoffMonth: null as number | null }));
+    .filter((d) => d.balanceCents > 0 && !d.paidInFull)
+    .map((d) => ({
+      id: d.id,
+      name: d.name,
+      aprPercent: d.aprPercent,
+      min: d.minPaymentCents,
+      own: Math.max(0, d.extraCents ?? 0),
+      term: d.termMonths ?? null,
+      balance: d.balanceCents,
+      interest: 0,
+      payoffMonth: null as number | null,
+      balances: [] as Cents[],
+      payments: [] as Cents[],
+    }));
 
-  const order = [...state].sort((a, b) =>
-    strategy === 'snowball'
-      ? a.balance - b.balance || b.aprPercent - a.aprPercent
-      : b.aprPercent - a.aprPercent || a.balance - b.balance,
-  );
-  const minimumBelowInterest = state
-    .filter((d) => d.minPaymentCents <= monthlyInterest(d.balance, d.aprPercent))
-    .map((d) => d.id);
+  const order = payoffOrder(state, strategy, opts.order);
+  const minimumBelowInterest = state.filter((d) => d.min <= monthlyInterest(d.balance, d.aprPercent)).map((d) => d.id);
 
-  const monthlyBudget = state.reduce((total, d) => total + d.minPaymentCents, 0) + Math.max(0, extraCents);
+  const monthlyBudget = state.reduce((total, d) => total + d.min + d.own, 0) + sharedExtra;
   let totalPaid = 0;
   let months: number | null = state.length === 0 ? 0 : null;
+  const paid = new Array<number>(state.length).fill(0);
 
-  for (let month = 1; month <= maxMonths && months === null; month++) {
-    const active = state.filter((d) => d.balance > 0);
-    for (const d of active) {
+  for (let month = 1; month <= limit && months === null; month++) {
+    let pool = monthlyBudget;
+    for (let i = 0; i < state.length; i++) {
+      const d = state[i]!;
+      paid[i] = 0;
+      if (d.balance <= 0) continue;
       const interest = monthlyInterest(d.balance, d.aprPercent);
       d.balance += interest;
       d.interest += interest;
-    }
-
-    let pool = monthlyBudget;
-    for (const d of active) {
-      const pay = Math.min(d.minPaymentCents, d.balance, pool);
+      // A term loan's payment clears what's left over the payments left.
+      const due = d.term === null ? d.min : Math.max(d.min, Math.ceil(d.balance / Math.max(1, d.term - month + 1)));
+      const pay = Math.min(due, d.balance);
       d.balance -= pay;
       pool -= pay;
-      totalPaid += pay;
+      paid[i] = pay;
+    }
+    for (let i = 0; i < state.length; i++) {
+      const d = state[i]!;
+      if (d.balance <= 0 || pool <= 0) continue;
+      const pay = Math.min(d.own, d.balance, pool);
+      d.balance -= pay;
+      pool -= pay;
+      paid[i] = paid[i]! + pay;
     }
     for (const d of order) {
       if (pool <= 0) break;
@@ -86,23 +144,38 @@ export function planPayoff(
       const pay = Math.min(pool, d.balance);
       d.balance -= pay;
       pool -= pay;
-      totalPaid += pay;
+      paid[state.indexOf(d)] += pay;
     }
 
-    for (const d of active) {
+    let done = true;
+    for (let i = 0; i < state.length; i++) {
+      const d = state[i]!;
+      totalPaid += paid[i]!;
+      if (month <= seriesMonths) {
+        d.balances.push(d.balance);
+        d.payments.push(paid[i]!);
+      }
       if (d.balance <= 0 && d.payoffMonth === null) d.payoffMonth = month;
+      if (d.balance > 0) done = false;
     }
-    if (state.every((d) => d.balance <= 0)) months = month;
+    if (done) months = month;
+  }
+  // Paid off early: the rest of the series is zeros.
+  for (const d of state) {
+    while (d.balances.length < seriesMonths) {
+      d.balances.push(Math.max(0, d.balance));
+      d.payments.push(0);
+    }
   }
 
   return {
     strategy,
-    extraCents: Math.max(0, extraCents),
+    extraCents: sharedExtra,
     months,
     totalInterestCents: state.reduce((total, d) => total + d.interest, 0),
     totalPaidCents: totalPaid,
     order: order.map((d) => d.id),
-    debts: state.map((d) => ({ id: d.id, name: d.name, payoffMonth: d.payoffMonth, interestCents: d.interest })),
+    debts: state.map((d) => ({ id: d.id, name: d.name, payoffMonth: d.payoffMonth, interestCents: d.interest, balances: d.balances, payments: d.payments })),
     minimumBelowInterest,
   };
 }
