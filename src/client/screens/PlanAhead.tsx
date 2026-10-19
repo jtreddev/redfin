@@ -60,19 +60,18 @@ export function PlanAhead() {
   const [debtSheet, setDebtSheet] = useState<DebtRow | 'new' | null>(null);
   const [addingGoal, setAddingGoal] = useState(false);
   const [announce, setAnnounce] = useState('');
-  // A reload after Save starts from the saved plan; any other reload keeps unsaved moves.
-  const fresh = useRef(true);
-  const seen = useRef<AheadResponse | null>(null);
+  // A reload after Save starts from the saved plan; any other reload keeps unsaved moves. Worked out while
+  // rendering (not in an effect), so a reload never flashes "Loading…" and the screen keeps its place.
+  const [fresh, setFresh] = useState(true);
+  const [seen, setSeen] = useState<AheadResponse | null>(null);
   const data = load.data;
+  if (data && data !== seen) {
+    setSeen(data);
+    setWorking(working === null || fresh ? startWorking(data) : rebase(working, data));
+    setFresh(false);
+  }
 
-  useEffect(() => {
-    if (!data || seen.current === data) return;
-    seen.current = data;
-    setWorking((w) => (w === null || fresh.current ? startWorking(data) : rebase(w, data)));
-    fresh.current = false;
-  }, [data]);
-
-  const ready = data && working && seen.current === data ? { data, working } : null;
+  const ready = data && working && seen === data ? { data, working } : null;
   const plan = ready?.working.plan;
   const result = useMemo(() => (ready && plan ? planAhead(ready.data.input, plan, horizon) : null), [ready?.data, plan, horizon]);
   const savedResult = useMemo(() => (data ? planAhead(data.input, fillPlan(data.saved, data.input), horizon) : null), [data, horizon]);
@@ -96,7 +95,7 @@ export function PlanAhead() {
     setSaving(true);
     try {
       await post('/ahead/plan', saveBody(input, ready!.data, w));
-      fresh.current = true;
+      setFresh(true);
       setConfirming(false);
       await load.reload();
       toast('Plan saved');

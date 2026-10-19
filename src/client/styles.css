@@ -2906,6 +2906,12 @@ body:has(.bulk-bar) .toast {
   cursor: pointer;
 }
 
+/* Plan › Ahead's number fields sit beside blurred readouts all the time: blurred too, until you type in one. */
+.hide-amounts .slider-number input:not(:focus),
+.hide-amounts .stepper input:not(:focus) {
+  filter: blur(6px);
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .money,
   .chart-amount {
