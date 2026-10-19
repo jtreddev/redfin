@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { addDays } from '../../shared/dates';
+import { addDays, monthOf } from '../../shared/dates';
 import {
   DAYS_PER_MONTH,
   fallbackLastDate,
@@ -10,12 +10,14 @@ import {
   type ProjectionInput,
   usualLessBills,
 } from '../../shared/projection';
-import { projectMonths } from '../../shared/monthsAhead';
+import { projectMonths, type MonthsAheadInput } from '../../shared/monthsAhead';
+import { aheadEvents, aheadLines } from '../../shared/planAhead';
 import type { AppEnv } from '../env';
 import { loadForecastInputs, withoutSetAside } from '../services/forecastInputs';
 import { loadMonthsAheadInput } from '../services/monthsAhead';
+import { all } from '../lib/db';
+import { aheadDebt, loadDebts, takenByPlan } from '../services/debts';
 import { upcomingBills } from '../services/planner';
-import { goalsWithProgress } from './planning';
 
 /** "Usual" is the last 3 full months, so the current month plus 3. */
 const USUAL_MONTHS = 4;
@@ -42,9 +44,22 @@ forecast.get('/forecast', async (c) => {
 
   // This month's due-day lines, recurring bills (every time they come up) and, past the month end, next
   // month's due-day lines (P6-R3b), to the last day.
-  const bills = await upcomingBills(db, planner, today, viewer.memberId, { until: lastDate, repeat: true, laterMonths: true });
+  const [bills, debts, goals] = await Promise.all([
+    upcomingBills(db, planner, today, viewer.memberId, { until: lastDate, repeat: true, laterMonths: true }),
+    loadDebts(db, viewer.memberId),
+    all<{ id: number; name: string; categoryId: number | null; monthlyCents: number }>(
+      db,
+      'SELECT id, name, category_id AS categoryId, monthly_cents AS monthlyCents FROM goals WHERE archived = 0 AND monthly_cents IS NOT NULL',
+    ),
+  ]);
+  // The saved plan (Plan › Ahead): from next month its debt payments and goal amounts stand in for the bills and
+  // lines they own.
+  const parentOf = new Map(planner.data.rows.map((r) => [r.categoryId, r.parentId]));
+  const taken = takenByPlan(debts, parentOf, monthOf(today), new Set(goals.flatMap((g) => (g.categoryId === null ? [] : [g.categoryId]))));
+  const planEvents = aheadEvents({ debts: debts.map(aheadDebt), goals, debtExtra: Object.fromEntries(debts.map((d) => [d.id, d.extraCents])) }, today, lastDate);
   // Planned-cost set-asides stay in the account, so they aren't taken off (P6-R5). Home says "before set-asides".
   const events: ProjectionEvent[] = bills
+    .filter((b) => !taken(b))
     .map((b, i): ProjectionEvent => ({
       id: `${b.source}-${i}`,
       date: b.date,
@@ -52,7 +67,9 @@ forecast.get('/forecast', async (c) => {
       amountCents: withoutSetAside(b, inputs),
       kind: b.source === 'budget' ? 'budget' : 'bill',
     }))
-    .filter((e) => e.amountCents > 0);
+    .filter((e) => e.amountCents > 0)
+    .concat(planEvents)
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
   // Bills and Saving are left out: their money is in the events (P6-R4). So are confirmed bills filed under
   // Everyday, Habits or Fun: they come out as events too. The viewer's private bills come out of fun, where
@@ -85,9 +102,8 @@ forecast.get('/forecast', async (c) => {
 forecast.get('/forecast/months', async (c) => {
   const db = c.env.DB;
   const today = c.get('today');
-  const { input, ledger, hasBalance, hasIncome } = await loadMonthsAheadInput(db, today, c.get('viewer').memberId, c.get('household'));
-  // Goals reuse the ledger just loaded when it reaches back far enough (fewer D1 queries).
-  const goals = await goalsWithProgress(db, today, false, ledger);
-  input.goals = goals.map((g) => ({ name: g.name, remainingCents: g.progress.remainingCents, recentAverageCents: g.progress.recentAverageCents }));
-  return c.json({ today, input, projection: projectMonths(input, 12), hasBalance, hasIncome });
+  const { input, saved, hasBalance, hasIncome } = await loadMonthsAheadInput(db, today, c.get('viewer').memberId, c.get('household'));
+  // The saved plan's lines (Plan › Ahead), so a re-run for 3 or 6 months or a what-if keeps them.
+  const withPlan: MonthsAheadInput = { ...input, ahead: aheadLines(input, saved, 12) };
+  return c.json({ today, input: withPlan, projection: projectMonths(withPlan, 12), hasBalance, hasIncome });
 });

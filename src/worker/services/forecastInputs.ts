@@ -5,7 +5,7 @@ import type { Cadence } from '../../shared/recurring';
 import { buildTrends, GROUP_ORDER, type GroupKey, type Trends, type TrendsInput } from '../../shared/trends';
 import type { HouseholdSettings } from '../env';
 import { all, first } from '../lib/db';
-import { loadCategories, loadIncomeSources, scheduleOf, type CategoryRow } from './context';
+import { loadCategories, scheduleOf, type CategoryRow } from './context';
 import { buildPlanner, CASH_ACCOUNTS_WHERE, type Planner, type UpcomingBill } from './planner';
 import { loadTrendsInput, monthsBack } from './trends';
 
@@ -46,12 +46,11 @@ export async function loadForecastInputs(
   opts: { payUntil: ISODate; trendsMonths: number },
 ): Promise<ForecastInputs> {
   const categories = loadCategories(db);
-  const [cash, sources, received, planner, trendsInput, confirmed, categoryRows] = await Promise.all([
+  const [cash, received, planner, trendsInput, confirmed, categoryRows] = await Promise.all([
     first<{ total: number; counted: number }>(
       db,
       `SELECT COALESCE(SUM(current_balance_cents), 0) AS total, COUNT(current_balance_cents) AS counted FROM accounts WHERE ${CASH_ACCOUNTS_WHERE}`,
     ),
-    loadIncomeSources(db),
     all<{ sourceId: number; payDate: string }>(
       db,
       `SELECT DISTINCT income_source_id AS sourceId, pay_date AS payDate FROM transactions
@@ -76,7 +75,8 @@ export async function loadForecastInputs(
   const sectionOf = new Map(trendsInput.categories.map((c) => [c.id, c.section]));
   return {
     cash: { total: cash?.total ?? 0, counted: cash?.counted ?? 0 },
-    sources: sources.map((s) => ({
+    // The planner loaded the active sources already.
+    sources: planner.data.sources.map((s) => ({
       name: s.name,
       netPayCents: s.netPayCents,
       schedule: scheduleOf(s),

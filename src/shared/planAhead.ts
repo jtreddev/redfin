@@ -233,6 +233,11 @@ function linesByMonth(input: AheadInput, plan: AheadPlan, horizon: Horizon, debt
   return out;
 }
 
+/** Just the plan's lines by month, for Months ahead to show the saved plan (MonthsAheadInput.ahead). */
+export function aheadLines(input: AheadInput, plan: AheadPlan, horizon: Horizon = 12): Record<MonthKey, AheadMonthLines> {
+  return linesByMonth(input, plan, horizon, runDebts(input, plan, horizon, true), true);
+}
+
 /** The plan's months: Project 6b's projection with the plan's lines, plus payoff, set-asides and goals. */
 export function planAhead(input: AheadInput, plan: AheadPlan, horizon: Horizon = 12): PlanAheadResult {
   const current = monthOf(input.today);

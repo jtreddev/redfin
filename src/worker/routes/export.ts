@@ -26,7 +26,7 @@ exportRoutes.get('/export/json', async (c) => {
   const db = c.env.DB;
   const viewerId = c.get('viewer').memberId;
   const q = (sql: string, ...params: (string | number)[]) => all<Record<string, unknown>>(db, sql, ...params);
-  const [household, members, kids, sections, categories, accounts, budgetLines, kidBudgets, incomeSources, rules, recurring, goals, debts, checkins, funAdjustments, monthSettings, plannedCosts, plannedCostAmounts, plannedCostCategories] =
+  const [household, members, kids, sections, categories, accounts, budgetLines, kidBudgets, incomeSources, rules, recurring, goals, debts, checkins, funAdjustments, monthSettings, plannedCosts, plannedCostAmounts, plannedCostCategories, aheadItems] =
     await Promise.all([
       q('SELECT * FROM household'),
       q('SELECT id, email, name, color, fun_allowance_cents, default_private_account_id FROM members'),
@@ -48,6 +48,7 @@ exportRoutes.get('/export/json', async (c) => {
       q('SELECT * FROM planned_costs ORDER BY sort, id'),
       q('SELECT * FROM planned_cost_amounts ORDER BY planned_cost_id, month'),
       q('SELECT * FROM planned_cost_categories ORDER BY planned_cost_id, category_id'),
+      q('SELECT * FROM ahead_items ORDER BY month, id'),
     ]);
   const body = JSON.stringify({
     exportedAt: new Date().toISOString(),
@@ -71,6 +72,7 @@ exportRoutes.get('/export/json', async (c) => {
     plannedCosts,
     plannedCostAmounts,
     plannedCostCategories,
+    aheadItems,
   });
   return c.body(body, 200, { 'Content-Type': 'application/json', ...attachment(`family-budget-${c.get('today')}.json`) });
 });

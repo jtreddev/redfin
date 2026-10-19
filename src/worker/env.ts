@@ -37,6 +37,9 @@ export interface HouseholdSettings {
   funMoneyStartDate: ISODate | null;
   habitCutoffCents: number;
   categorizedAllAt: string | null;
+  /** Plan › Ahead's surprises cushion; null: the suggestion. */
+  surpriseCents: number | null;
+  debtStrategy: 'avalanche' | 'snowball' | 'custom';
 }
 
 export type AppEnv = {

@@ -83,7 +83,7 @@ export const requireViewer: MiddlewareHandler<AppEnv> = async (c, next) => {
     env.DB,
     `SELECT name, timezone, low_balance_cents AS lowBalanceCents, card_pay_mode AS cardPayMode,
             fun_money_start_date AS funMoneyStartDate, habit_cutoff_cents AS habitCutoffCents,
-            categorized_all_at AS categorizedAllAt
+            categorized_all_at AS categorizedAllAt, surprise_cents AS surpriseCents, debt_strategy AS debtStrategy
        FROM household WHERE id = 1`,
   );
   if (!household) return c.json({ error: 'Database is not initialized. Run the migrations.' }, 500);

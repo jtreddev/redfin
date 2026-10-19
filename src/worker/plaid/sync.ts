@@ -2,7 +2,9 @@ import { addDays, todayIn, type ISODate } from '../../shared/dates';
 import { findImportedTwin } from '../../shared/dedupe';
 import type { Env } from '../env';
 import { all, allByIds, batchAll, first, nowIso, placeholders, run, stmt } from '../lib/db';
+import { estimatedMinimum } from '../../shared/debt';
 import { loadIngestContext } from '../services/context';
+import { linkDebts } from '../services/debts';
 import { insertTransactions, reclassify, rederive, STORED_SELECT, type IncomingTxn, type StoredTxn } from '../services/ingest';
 import { matchTransfers } from '../services/transfers';
 import {
@@ -338,7 +340,12 @@ async function syncItem(env: Env, item: ItemRow, trigger: 'cron' | 'manual' | 'l
       item.id,
     );
 
-    if (!page.has_more && !notReady) await refreshExtras(env, item, accessToken, accountIdFor);
+    if (!page.has_more && !notReady) {
+      await refreshExtras(env, item, accessToken, accountIdFor);
+      // Plan › Ahead's auto-link: new cards and loans get a debt; balances follow the accounts.
+      const household = await first<{ timezone: string }>(db, 'SELECT timezone FROM household WHERE id = 1');
+      await linkDebts(db, todayIn(household?.timezone ?? 'America/Chicago'), { refresh: true });
+    }
 
     await finishRun(db, runRow?.id, { status: 'ok', added, modified, removed, hasMore: page.has_more });
     const note = notReady
@@ -730,42 +737,51 @@ async function upsertDebts(db: D1Database, response: LiabilitiesResponse, accoun
     })),
   ];
 
-  for (const entry of entries) {
-    if (!entry.plaidAccountId) continue;
-    const accountId = accountIdFor.get(entry.plaidAccountId);
-    const account = balances.get(entry.plaidAccountId);
-    if (accountId === undefined || !account) continue;
+  // One debt per account: insert only when none has it (a concurrent auto-link may have), then update.
+  const statements = entries.flatMap((entry) => {
+    const accountId = entry.plaidAccountId ? accountIdFor.get(entry.plaidAccountId) : undefined;
+    const account = entry.plaidAccountId ? balances.get(entry.plaidAccountId) : undefined;
+    if (accountId === undefined || !account) return [];
     // A negative card balance is money the bank owes you, not debt.
     const balance = Math.max(0, dollarsOrNull(account.balances.current) ?? 0);
-    const minPayment = dollarsOrNull(entry.minPayment) ?? 0;
+    // No minimum from the bank: estimated (until typed in), as auto-link does.
+    const minPayment = dollarsOrNull(entry.minPayment);
     const dueDay = entry.dueDate ? Number(entry.dueDate.slice(8, 10)) : null;
-    const existing = await first<{ id: number }>(db, 'SELECT id FROM debts WHERE account_id = ?', accountId);
-    if (existing) {
-      await run(
+    const kind = account.type === 'credit' ? 'credit_card' : account.subtype === 'student' ? 'student' : 'other';
+    return [
+      stmt(
         db,
-        `UPDATE debts SET balance_cents = ?, apr_percent = ?, min_payment_cents = ?, due_day = COALESCE(?, due_day),
-           source = 'plaid', updated_at = ? WHERE id = ?`,
-        balance,
-        entry.apr,
-        minPayment,
-        dueDay,
-        now,
-        existing.id,
-      );
-    } else {
-      await run(
-        db,
-        `INSERT INTO debts (name, account_id, balance_cents, apr_percent, min_payment_cents, due_day, source)
-         VALUES (?, ?, ?, ?, ?, ?, 'plaid')`,
+        `INSERT INTO debts (name, account_id, balance_cents, apr_percent, min_payment_cents, min_estimated, due_day, source, kind)
+         SELECT ?, ?, ?, ?, ?, ?, ?, 'plaid', ? WHERE NOT EXISTS (SELECT 1 FROM debts WHERE account_id = ?)`,
         account.name,
         accountId,
         balance,
         entry.apr,
-        minPayment,
+        minPayment ?? estimatedMinimum(balance, entry.apr),
+        minPayment === null ? 1 : 0,
         dueDay,
-      );
-    }
-  }
+        kind,
+        accountId,
+      ),
+      stmt(
+        db,
+        `UPDATE debts SET balance_cents = ?, apr_percent = ?, due_day = COALESCE(?, due_day), source = 'plaid', updated_at = ?,
+           min_payment_cents = CASE WHEN ? IS NOT NULL THEN ? WHEN min_estimated = 1 OR min_payment_cents = 0 THEN ? ELSE min_payment_cents END,
+           min_estimated = CASE WHEN ? IS NOT NULL THEN 0 WHEN min_estimated = 1 OR min_payment_cents = 0 THEN 1 ELSE 0 END
+         WHERE account_id = ?`,
+        balance,
+        entry.apr,
+        dueDay,
+        now,
+        minPayment,
+        minPayment,
+        estimatedMinimum(balance, entry.apr),
+        minPayment,
+        accountId,
+      ),
+    ];
+  });
+  if (statements.length) await batchAll(db, statements);
 }
 
 /** Cron: one sync step, then light housekeeping. */

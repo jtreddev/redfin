@@ -1,12 +1,15 @@
 import { addMonths, monthEnd, monthOf, monthStart, type ISODate, type MonthKey } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
-import type { MonthBill, MonthsAheadInput, PlannedCostInput } from '../../shared/monthsAhead';
+import type { MonthBill, PlannedCostInput } from '../../shared/monthsAhead';
+import { currentMonthly, suggestSurprise, SURPRISE_MIN_CENTS, type AheadInput, type AheadItem, type AheadPlan, type SurpriseCharge } from '../../shared/planAhead';
 import { costBalance, spendByCategoryMonth, spendIn, withSubcategories, type SpendMap } from '../../shared/plannedCosts';
 import { monthlyEquivalent } from '../../shared/projection';
-import { GROUP_ORDER, usualOf, type GroupKey, type TrendsInput } from '../../shared/trends';
+import { GROUP_ORDER, usualOf, type GroupKey } from '../../shared/trends';
 import type { HouseholdSettings } from '../env';
-import { first } from '../lib/db';
+import { all, first } from '../lib/db';
+import { aheadDebt, debtCategoryIds, linkDebts, loadDebts, takenByPlan, type DebtRow } from './debts';
 import { loadForecastInputs, withoutSetAside, type ForecastInputs } from './forecastInputs';
+import { goalsWithProgress } from './goals';
 import { loadLaterMonths, ownLineRows, upcomingBills, type BudgetRow } from './planner';
 import { addOlderSpend, loadPlannedCosts, type PlannedCostRow } from './plannedCosts';
 
@@ -15,39 +18,69 @@ const MONTHS_AHEAD = 12;
 /** The ledger reaches back 12 full months (last year's same month) plus this one. */
 const LEDGER_MONTHS = 13;
 
+export type GoalWithProgress = Awaited<ReturnType<typeof goalsWithProgress>>[number];
+
 export interface MonthsAheadInputs {
-  input: MonthsAheadInput;
-  /** The ledger already loaded (13 months to today's month), for goals to reuse. */
-  ledger: { from: ISODate; entries: TrendsInput['entries'] };
+  /** Months ahead's input plus Plan › Ahead's (debts, goals, items, surprises), without the saved plan's lines. */
+  input: AheadInput;
+  /** The plan as saved: the sliders' starting point. */
+  saved: AheadPlan;
+  debts: DebtRow[];
+  goals: GoalWithProgress[];
+  items: AheadItem[];
+  /** savedCents null: the suggestion is used. */
+  surprise: { suggestedCents: Cents; savedCents: Cents | null };
   hasBalance: boolean;
   hasIncome: boolean;
 }
 
 /**
- * Everything projectMonths needs for the rest of this month and the next 12, as the viewer may see it: a
- * partner's private bills are left out and private charges count only in fun totals.
+ * Everything projectMonths and planAhead need for the rest of this month and the next 12, as the viewer may
+ * see it: a partner's private bills are left out and private charges count only in fun totals.
+ *
+ * From next month the saved plan owns some money, so its old form is taken out here and planAhead puts it back
+ * at the plan's amount (counted once, P7-R8): a debt's linked bill and the bills and due-day lines in its
+ * category become its minimum + extra; a goal's saving line becomes the goal's monthly amount. This month is
+ * left as it is.
+ *
+ * `link` runs debt auto-link first (Plan › Ahead and Debts). The surprise suggestion costs a query, so it's only
+ * worked out when `suggest` is on or no cushion is saved.
  */
 export async function loadMonthsAheadInput(
   db: D1Database,
   today: ISODate,
   viewerId: number,
   household: HouseholdSettings,
+  opts: { link?: boolean; suggest?: boolean } = {},
 ): Promise<MonthsAheadInputs> {
   const current = monthOf(today);
   const until = monthEnd(addMonths(current, MONTHS_AHEAD));
-  const [inputs, costs, history] = await Promise.all([
+  if (opts.link) await linkDebts(db, today);
+  const suggest = opts.suggest === true || household.surpriseCents === null;
+  const [inputs, costs, history, debts, items, charges] = await Promise.all([
     loadForecastInputs(db, today, viewerId, household, { payUntil: until, trendsMonths: LEDGER_MONTHS }),
     loadPlannedCosts(db),
     first<{ first: ISODate | null }>(db, 'SELECT MIN(date) AS first FROM transactions WHERE deleted_at IS NULL'),
+    loadDebts(db, viewerId),
+    loadItems(db),
+    suggest ? loadSurpriseCharges(db, today) : Promise.resolve([]),
   ]);
   const { planner } = inputs;
 
-  // Later months' rows (their due-day lines, their saving lines) in a fixed number of queries.
-  const later = await loadLaterMonths(db, planner, addMonths(current, 1), addMonths(current, MONTHS_AHEAD), costs, inputs.categories);
+  // Later months' rows (their due-day lines, their saving lines) in a fixed number of queries. Goals reuse the
+  // ledger just loaded.
+  const ledger = { from: monthStart(addMonths(current, 1 - LEDGER_MONTHS)), entries: inputs.trendsInput.entries };
+  const [later, goals] = await Promise.all([
+    loadLaterMonths(db, planner, addMonths(current, 1), addMonths(current, MONTHS_AHEAD), costs, inputs.categories),
+    goalsWithProgress(db, today, false, ledger),
+  ]);
   const monthRows = async (month: MonthKey) => later.get(month) ?? planner.data.rows;
   const upcoming = await upcomingBills(db, planner, today, viewerId, { until, repeat: true, laterMonths: true, monthRows });
 
   // Saving: every savings line, any timing, without its set-aside (P6-R5). This month counts what's left.
+  // From next month a goal's line is the goal's monthly amount instead.
+  const goalCategories = new Set(goals.flatMap((g) => (g.categoryId === null ? [] : [g.categoryId])));
+  const goalLines = new Map<number, Cents>();
   const saving: Record<MonthKey, Cents> = {};
   const savingLines = new Map<MonthKey, Set<number>>();
   for (let i = 0; i <= MONTHS_AHEAD; i++) {
@@ -56,7 +89,10 @@ export async function loadMonthsAheadInput(
     savingLines.set(month, new Set(rows.map((r) => r.categoryId)));
     saving[month] = rows.reduce((sum, r) => {
       const left = i === 0 ? (planner.forecast.remainingByLine.get(r.categoryId) ?? []).reduce((a, b) => a + b, 0) : r.budgetCents;
-      return sum + Math.max(0, left - r.plannedCostsCents);
+      const cents = Math.max(0, left - r.plannedCostsCents);
+      if (i === 0 || !goalCategories.has(r.categoryId)) return sum + cents;
+      if (i === 1) goalLines.set(r.categoryId, cents);
+      return sum;
     }, 0);
   }
 
@@ -72,6 +108,8 @@ export async function loadMonthsAheadInput(
   for (const cost of plannedCosts) for (const id of cost.coveredIds) costOf.set(id, cost.input.id);
 
   const parentOf = new Map(inputs.trendsInput.categories.map((c) => [c.id, c.parentId ?? null]));
+  // From next month a debt's payment is its minimum + extra (see above).
+  const taken = takenByPlan(debts, parentOf, current);
   const historyStart = history?.first ? monthOf(history.first) : null;
   const groupOf = groupsOf(inputs);
   // Due-day lines come out as bills; one filed in Everyday, Habits or Fun mustn't be in that group's usual too.
@@ -83,6 +121,7 @@ export async function loadMonthsAheadInput(
   });
   const kindOf = new Map(planner.data.rows.map((r) => [r.categoryId, r.kind]));
   const bills: MonthBill[] = upcoming
+    .filter((b) => !taken(b))
     // A savings line (or a bill standing in for one) is counted in saving.
     .filter((b) => {
       if (b.categoryId === null || kindOf.get(b.categoryId) !== 'savings') return true;
@@ -102,26 +141,81 @@ export async function loadMonthsAheadInput(
     }))
     .filter((b) => b.amountCents > 0);
 
+  // Surprises leave out due-day lines' and planned costs' categories (P7-R2).
+  const suggestedCents = suggest
+    ? suggestSurprise(charges, today, new Set([...dueDayOwnLines(planner.data.rows).map((r) => r.categoryId), ...costOf.keys()]))
+    : (household.surpriseCents ?? 0);
+  const surpriseCents = household.surpriseCents ?? suggestedCents;
+  const input: AheadInput = {
+    today,
+    startBalanceCents: inputs.cash.total,
+    lowBalanceCents: household.lowBalanceCents,
+    income: inputs.sources,
+    bills,
+    usual: inputs.trends.usual,
+    billsInUsual: [...inputs.confirmed, ...linesInUsual],
+    saving,
+    plannedCosts: plannedCosts.map((c) => c.input),
+    historyStart,
+    // A goal's saved monthly amount is its pace; otherwise its recent average.
+    goals: goals.map((g) => ({ name: g.name, remainingCents: g.progress.remainingCents, recentAverageCents: g.monthlyCents ?? g.progress.recentAverageCents })),
+    // A debt's category money is its payment, counted by the plan.
+    otherBillsCents: otherBills(inputs, historyStart, new Set([...costOf.keys(), ...debtCategoryIds(debts)])),
+    debts: debts.map(aheadDebt),
+    aheadGoals: goals.map((g) => ({ id: g.id, name: g.name, remainingCents: g.progress.remainingCents, targetDate: g.targetDate })),
+    items,
+    surpriseCents,
+    surpriseSuggestedCents: suggestedCents,
+    strategy: household.debtStrategy,
+  };
+
   return {
-    input: {
-      today,
-      startBalanceCents: inputs.cash.total,
-      lowBalanceCents: household.lowBalanceCents,
-      income: inputs.sources,
-      bills,
-      usual: inputs.trends.usual,
-      billsInUsual: [...inputs.confirmed, ...linesInUsual],
-      saving,
-      plannedCosts: plannedCosts.map((c) => c.input),
-      historyStart,
-      // The route adds them (from Goals' own progress).
-      goals: [],
-      otherBillsCents: otherBills(inputs, historyStart, new Set(costOf.keys())),
+    input,
+    saved: {
+      debtExtra: Object.fromEntries(debts.map((d) => [d.id, d.extraCents])),
+      costMonthly: Object.fromEntries(input.plannedCosts.map((c) => [c.id, currentMonthly(c, today)])),
+      // Not set: next month's line, as the forecast had it.
+      goalMonthly: Object.fromEntries(goals.map((g) => [g.id, g.monthlyCents ?? (g.categoryId === null ? 0 : (goalLines.get(g.categoryId) ?? 0))])),
+      surpriseCents,
+      strategy: household.debtStrategy,
+      order: debts.map((d) => d.id),
     },
-    ledger: { from: monthStart(addMonths(current, 1 - LEDGER_MONTHS)), entries: inputs.trendsInput.entries },
+    debts,
+    goals,
+    items,
+    surprise: { suggestedCents, savedCents: household.surpriseCents },
     hasBalance: inputs.cash.counted > 0,
     hasIncome: inputs.sources.length > 0,
   };
+}
+
+export function loadItems(db: D1Database): Promise<AheadItem[]> {
+  return all<AheadItem>(
+    db,
+    'SELECT id, name, amount_cents AS amountCents, month, repeat, end_month AS endMonth FROM ahead_items ORDER BY month, id',
+  );
+}
+
+/**
+ * Shared charges of $100 and up in the last 6 full months that could be surprises: spending (no category, or an
+ * expense one), not a transfer, flagged when a confirmed bill has its merchant. Private charges are fun money.
+ */
+function loadSurpriseCharges(db: D1Database, today: ISODate): Promise<SurpriseCharge[]> {
+  const current = monthOf(today);
+  return all<SurpriseCharge>(
+    db,
+    `SELECT t.date, t.amount_cents AS amountCents, t.category_id AS categoryId,
+            EXISTS (SELECT 1 FROM recurring_bills r WHERE r.status = 'confirmed'
+                       AND (lower(r.merchant) = lower(COALESCE(t.normalized_merchant, t.name))
+                            OR lower(r.merchant) LIKE lower(COALESCE(t.normalized_merchant, t.name)) || ' $%')) AS isBill
+       FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
+      WHERE t.deleted_at IS NULL AND t.is_ignored = 0 AND t.pending = 0 AND t.transfer_pair_id IS NULL AND t.is_split = 0
+        AND t.private_member_id IS NULL AND (c.kind IS NULL OR c.kind = 'expense')
+        AND t.amount_cents <= ? AND t.date BETWEEN ? AND ?`,
+    -SURPRISE_MIN_CENTS,
+    monthStart(addMonths(current, -6)),
+    monthEnd(addMonths(current, -1)),
+  ).then((rows) => rows.map((r) => ({ ...r, isBill: Boolean(r.isBill) })));
 }
 
 /** This month's due-day spending lines of their own (as dueDayLines counts them), at their hand amount. */

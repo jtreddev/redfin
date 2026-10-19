@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
-import { ledgerEntries, type LedgerEntry } from '../../shared/actuals';
+import { ledgerEntries } from '../../shared/actuals';
 import { draftNextBudget, summarizeMonth, type CheckinLine, type OverspendDecision } from '../../shared/checkin';
 import { GROUPS } from '../../shared/categorySet';
-import { addMonths, minDate, monthEnd, monthOf, monthStart, type ISODate, type MonthKey } from '../../shared/dates';
-import { planPayoff } from '../../shared/debt';
-import { goalProgress } from '../../shared/goals';
+import { addMonths, monthEnd, monthOf, monthStart, type ISODate, type MonthKey } from '../../shared/dates';
+import { estimatedMinimum, planPayoff } from '../../shared/debt';
+import { DEBT_KINDS } from '../../shared/planAhead';
 import { toCsv } from '../../shared/import/csv';
 import { PRIVACY_SQL } from '../../shared/privacy';
 import { likeAnywhere, parseSearch } from '../../shared/search';
@@ -31,6 +31,9 @@ import {
 } from '../lib/http';
 import { loadBillIncreases } from '../services/billIncreases';
 import { loadCategories } from '../services/context';
+import { planLineStatements } from '../services/aheadPlan';
+import { inPayoff, linkDebts, loadDebts } from '../services/debts';
+import { goalsWithProgress } from '../services/goals';
 import { loadLedger } from '../services/ledger';
 import { funMoneyBalances, loadMonth } from '../services/planner';
 import { visibleTxn } from './transactions';
@@ -379,63 +382,6 @@ planning.patch('/recurring/:id', async (c) => {
 
 // ───────────────────────── Goals ─────────────────────────
 
-interface GoalRow {
-  id: number;
-  name: string;
-  targetCents: number;
-  targetDate: ISODate | null;
-  categoryId: number | null;
-  categoryName: string | null;
-  startingSavedCents: number;
-  sort: number;
-  archived: number;
-  createdAt: string;
-}
-
-/** `loaded`: ledger entries a caller already has from `from` to today, used when they reach back far enough. */
-export async function goalsWithProgress(
-  db: D1Database,
-  today: ISODate,
-  includeArchived = false,
-  loaded?: { from: ISODate; entries: readonly LedgerEntry[] },
-) {
-  const goals = await all<GoalRow>(
-    db,
-    `SELECT g.id, g.name, g.target_cents AS targetCents, g.target_date AS targetDate, g.category_id AS categoryId,
-            c.name AS categoryName, g.starting_saved_cents AS startingSavedCents, g.sort, g.archived, g.created_at AS createdAt
-       FROM goals g LEFT JOIN categories c ON c.id = g.category_id
-      ${includeArchived ? '' : 'WHERE g.archived = 0'}
-      ORDER BY g.archived, g.sort, g.id`,
-  );
-  if (!goals.length) return [];
-
-  const currentMonth = monthOf(today);
-  const months: MonthKey[] = [-3, -2, -1, 0].map((n) => addMonths(currentMonth, n));
-  const from = goals.reduce((earliest, g) => minDate(earliest, g.createdAt.slice(0, 10)), monthStart(months[0] ?? currentMonth));
-  const entries =
-    loaded && loaded.from <= from
-      ? loaded.entries.filter((e) => e.date >= from && e.date <= today)
-      : ledgerEntries(await loadLedger(db, from, today));
-
-  return goals.map((g) => {
-    const mine = g.categoryId === null ? [] : entries.filter((e) => e.categoryId === g.categoryId);
-    const flow = (list: typeof mine) => list.reduce((sum, e) => sum + (e.kind === 'income' ? e.amountCents : -e.amountCents), 0);
-    const savedCents = g.startingSavedCents + flow(mine.filter((e) => e.date >= g.createdAt.slice(0, 10)));
-    // Months before the goal existed don't count against it.
-    const createdMonth = g.createdAt.slice(0, 7);
-    const contributionsByMonth = months
-      .filter((m) => m >= createdMonth)
-      .map((m) => flow(mine.filter((e) => monthOf(e.date) === m)));
-    return {
-      ...g,
-      archived: g.archived === 1,
-      savedCents,
-      contributionsByMonth,
-      progress: goalProgress({ targetCents: g.targetCents, savedCents, targetDate: g.targetDate, contributionsByMonth }, today),
-    };
-  });
-}
-
 planning.get('/goals', async (c) => {
   return c.json(await goalsWithProgress(c.env.DB, c.get('today'), c.req.query('all') === '1'));
 });
@@ -491,30 +437,15 @@ planning.patch('/goals/:id', async (c) => {
 
 // ───────────────────────── Debts ─────────────────────────
 
-interface DebtRow {
-  id: number;
-  name: string;
-  accountId: number | null;
-  accountName: string | null;
-  balanceCents: number;
-  aprPercent: number;
-  minPaymentCents: number;
-  dueDay: number | null;
-  source: 'manual' | 'plaid';
-  updatedAt: string;
-}
-
-const DEBT_SELECT = `SELECT d.id, d.name, d.account_id AS accountId, a.name AS accountName, d.balance_cents AS balanceCents,
-  d.apr_percent AS aprPercent, d.min_payment_cents AS minPaymentCents, d.due_day AS dueDay, d.source, d.updated_at AS updatedAt
-  FROM debts d LEFT JOIN accounts a ON a.id = d.account_id WHERE d.archived = 0`;
-
+// Auto-link runs on every load (P7): cards and loans get a debt, balances follow the accounts.
 planning.get('/debts', async (c) => {
-  return c.json(await all<DebtRow>(c.env.DB, `${DEBT_SELECT} ORDER BY d.balance_cents`));
+  await linkDebts(c.env.DB, c.get('today'));
+  return c.json(await loadDebts(c.env.DB, c.get('viewer').memberId));
 });
 
 planning.get('/debts/plan', async (c) => {
   const extra = Math.max(0, Number(c.req.query('extra')) || 0);
-  const debts = (await all<DebtRow>(c.env.DB, DEBT_SELECT)).filter((d) => d.balanceCents > 0);
+  const debts = (await loadDebts(c.env.DB, c.get('viewer').memberId)).filter(inPayoff);
   const inputs = debts.map((d) => ({ id: d.id, name: d.name, balanceCents: d.balanceCents, aprPercent: d.aprPercent, minPaymentCents: d.minPaymentCents }));
   return c.json({
     extraCents: Math.round(extra),
@@ -523,36 +454,85 @@ planning.get('/debts/plan', async (c) => {
   });
 });
 
+/** A bill the viewer may see (not a partner's private one), or a 400. */
+async function visibleBill(db: D1Database, id: number | null | undefined, viewerId: number) {
+  if (id == null) return;
+  const bill = await first(db, 'SELECT id FROM recurring_bills WHERE id = ? AND (private_member_id IS NULL OR private_member_id = ?)', id, viewerId);
+  if (!bill) throw badRequest('No such bill');
+}
+
+const optMonthKey = (value: unknown, name: string) => (value === undefined ? undefined : value === null ? null : reqMonth(value, name));
+
+/** Anything not at a bank, or a card or loan by hand. With no minimum given, it's estimated until edited. */
 planning.post('/debts', async (c) => {
+  const db = c.env.DB;
   const body = await readBody(c);
+  const balance = reqInt(body.balanceCents, 'balanceCents', { min: 0 });
+  const apr = optNumber(body.aprPercent, 'aprPercent', { min: 0, max: 100 }) ?? 0;
+  const min = optInt(body.minPaymentCents, 'minPaymentCents', { min: 0 }) ?? null;
+  const billId = optInt(body.billId, 'billId', { min: 1 }) ?? null;
+  await visibleBill(db, billId, c.get('viewer').memberId);
   const row = await first(
-    c.env.DB,
-    `INSERT INTO debts (name, account_id, balance_cents, apr_percent, min_payment_cents, due_day)
-     VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+    db,
+    `INSERT INTO debts (name, kind, account_id, balance_cents, apr_percent, min_payment_cents, min_estimated, due_day, end_month,
+                        bill_id, category_id, extra_cents, balance_as_of, sort)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort), 0) + 1 FROM debts)) RETURNING id`,
     reqStr(body.name, 'name', 60),
+    oneOf(body.kind, 'kind', DEBT_KINDS) ?? 'other',
     optInt(body.accountId, 'accountId', { min: 1 }) ?? null,
-    reqInt(body.balanceCents, 'balanceCents', { min: 0 }),
-    optNumber(body.aprPercent, 'aprPercent', { min: 0, max: 100 }) ?? 0,
-    optInt(body.minPaymentCents, 'minPaymentCents', { min: 0 }) ?? 0,
+    balance,
+    apr,
+    min ?? estimatedMinimum(balance, apr),
+    min === null ? 1 : 0,
     optInt(body.dueDay, 'dueDay', { min: 1, max: 31 }) ?? null,
+    optMonthKey(body.endMonth, 'endMonth') ?? null,
+    billId,
+    optInt(body.categoryId, 'categoryId', { min: 1 }) ?? null,
+    optInt(body.extraCents, 'extraCents', { min: 0 }) ?? 0,
+    c.get('today'),
   );
   return c.json(row, 201);
 });
 
 planning.patch('/debts/:id', async (c) => {
+  const db = c.env.DB;
   const id = paramId(c);
   const body = await readBody(c);
+  const was = await first<{ accountId: number | null; balanceCents: number; aprPercent: number; minEstimated: number }>(
+    db,
+    'SELECT account_id AS accountId, balance_cents AS balanceCents, apr_percent AS aprPercent, min_estimated AS minEstimated FROM debts WHERE id = ?',
+    id,
+  );
+  if (!was) throw notFound();
+  const balance = optInt(body.balanceCents, 'balanceCents', { min: 0 }) ?? undefined;
+  // The balance comes from the account while it's linked.
+  if (balance !== undefined && was.accountId !== null) throw badRequest('This balance comes from the account.');
+  const apr = optNumber(body.aprPercent, 'aprPercent', { min: 0, max: 100 }) ?? undefined;
+  const min = optInt(body.minPaymentCents, 'minPaymentCents', { min: 0 }) ?? undefined;
+  const billId = optInt(body.billId, 'billId', { min: 1 });
+  await visibleBill(db, billId, c.get('viewer').memberId);
   const archived = optBool(body.archived, 'archived');
+  const paidInFull = optBool(body.paidInFull, 'paidInFull');
+  // A typed minimum stops the estimate; otherwise the estimate follows a new balance or rate.
+  const estimate = min === undefined && was.minEstimated === 1 && (balance !== undefined || apr !== undefined);
   const updates = new Updates()
     .set('name', optStr(body.name, 'name', 60) ?? undefined)
-    .set('balance_cents', optInt(body.balanceCents, 'balanceCents', { min: 0 }) ?? undefined)
-    .set('apr_percent', optNumber(body.aprPercent, 'aprPercent', { min: 0, max: 100 }) ?? undefined)
-    .set('min_payment_cents', optInt(body.minPaymentCents, 'minPaymentCents', { min: 0 }) ?? undefined)
+    .set('kind', oneOf(body.kind, 'kind', DEBT_KINDS))
+    .set('balance_cents', balance)
+    .set('balance_as_of', balance === undefined ? undefined : c.get('today'))
+    .set('apr_percent', apr)
+    .set('min_payment_cents', estimate ? estimatedMinimum(balance ?? was.balanceCents, apr ?? was.aprPercent) : min)
+    .set('min_estimated', min === undefined ? undefined : 0)
     .set('due_day', optInt(body.dueDay, 'dueDay', { min: 1, max: 31 }))
+    .set('end_month', optMonthKey(body.endMonth, 'endMonth'))
+    .set('extra_cents', optInt(body.extraCents, 'extraCents', { min: 0 }) ?? undefined)
+    .set('sort', optInt(body.sort, 'sort') ?? undefined)
+    .set('paid_in_full', paidInFull === undefined ? undefined : paidInFull ? 1 : 0)
+    .set('bill_id', billId)
+    .set('category_id', optInt(body.categoryId, 'categoryId', { min: 1 }))
     .set('archived', archived === undefined ? undefined : archived ? 1 : 0);
   if (updates.empty) throw badRequest('Nothing to update');
-  const result = await run(c.env.DB, `UPDATE debts SET ${updates.sets.join(', ')}, updated_at = ? WHERE id = ?`, ...updates.params, nowIso(), id);
-  if (!result.meta.changes) throw notFound();
+  await run(db, `UPDATE debts SET ${updates.sets.join(', ')}, updated_at = ? WHERE id = ?`, ...updates.params, nowIso(), id);
   return c.json({ ok: true });
 });
 
@@ -889,6 +869,8 @@ planning.post('/checkins/:month/complete', async (c) => {
         viewer.memberId,
         month,
       ),
+      // The saved plan's goal and debt lines carry into the new month.
+      ...(nextMonth > monthOf(c.get('today')) ? planLineStatements(db, { month: nextMonth }, viewer.memberId) : []),
     );
   }
   const changed = draftNextBudget(

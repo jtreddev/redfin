@@ -21,6 +21,7 @@ import {
   reqMonth,
   reqStr,
 } from '../lib/http';
+import { planLineStatements } from '../services/aheadPlan';
 import { loadBillIncreases } from '../services/billIncreases';
 import { INCOME_SOURCE_SELECT, loadCategories, loadIngestContext, scheduleOf, type IncomeSourceRow } from '../services/context';
 import { reclassify, STORED_SELECT, type StoredTxn } from '../services/ingest';
@@ -98,15 +99,21 @@ budget.post('/budget/copy', async (c) => {
   const body = await readBody(c);
   const from = reqMonth(body.from, 'from');
   const to = reqMonth(body.to, 'to');
-  const result = await run(
-    c.env.DB,
-    `INSERT OR IGNORE INTO budget_lines (month, category_id, budget_cents, timing, due_day, notes, updated_by_member_id)
-     SELECT ?, category_id, budget_cents, timing, due_day, notes, ? FROM budget_lines WHERE month = ?`,
-    to,
-    c.get('viewer').memberId,
-    from,
-  );
-  return c.json({ copied: result.meta.changes });
+  const db = c.env.DB;
+  const memberId = c.get('viewer').memberId;
+  const [result] = await db.batch([
+    stmt(
+      db,
+      `INSERT OR IGNORE INTO budget_lines (month, category_id, budget_cents, timing, due_day, notes, updated_by_member_id)
+       SELECT ?, category_id, budget_cents, timing, due_day, notes, ? FROM budget_lines WHERE month = ?`,
+      to,
+      memberId,
+      from,
+    ),
+    // A later month carries the saved plan's goal and debt lines (Plan › Ahead).
+    ...(to > monthOf(c.get('today')) ? planLineStatements(db, { month: to }, memberId) : []),
+  ]);
+  return c.json({ copied: result!.meta.changes });
 });
 
 budget.post('/budget/suggested', async (c) => {

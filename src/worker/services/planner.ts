@@ -417,6 +417,8 @@ export interface UpcomingBill {
   cadence?: Cadence;
   /** A recurring bill that is the viewer's own private one. */
   privateMemberId?: number | null;
+  /** A recurring bill's id. */
+  billId?: number;
 }
 
 /** A later month's budget rows: its own when it has a budget, otherwise this month's carried forward. */
@@ -591,6 +593,7 @@ export async function upcomingBills(
           categoryId: r.categoryId,
           cadence: r.cadence,
           privateMemberId: r.privateMemberId,
+          billId: r.id,
         });
       }
       if (!repeat) break;

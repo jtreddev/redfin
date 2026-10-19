@@ -257,6 +257,10 @@ describe('GET /api/forecast/months', () => {
     const savings = category('Saving', "AND c.name = 'Savings & Planned Costs'");
     expect((await api(env, 'POST', '/planned-costs', { name: 'Car repairs', monthlyCents: 10000 })).status).toBe(201);
     await api(env, 'POST', '/goals', { name: 'Emergency fund', targetCents: 200000 });
+    // Plan › Ahead: a debt linked to a line, a hand-kept one, a known item; the card links itself.
+    await api(env, 'POST', '/debts', { name: 'Car loan', balanceCents: 900000, minPaymentCents: 35000, categoryId: rent });
+    await api(env, 'POST', '/debts', { name: 'Family', kind: 'family', balanceCents: 100000 });
+    await api(env, 'POST', '/ahead/items', { name: 'Tax refund', amountCents: 120000, month: '2027-03' });
     for (const month of ['2026-10', '2026-11', '2026-12', '2027-01']) {
       await api(env, 'PUT', '/budget/lines', { month, categoryId: rent, budgetCents: 150000, timing: 'due_day', dueDay: 1 });
       await api(env, 'PUT', '/budget/lines', { month, categoryId: savings, budgetCents: 30000, timing: 'even' });
@@ -276,6 +280,7 @@ describe('GET /api/forecast/months', () => {
       };
       expect(await count('/forecast/months')).toBeLessThanOrEqual(35);
       expect(await count('/forecast')).toBeLessThanOrEqual(35);
+      expect(await count('/ahead')).toBeLessThanOrEqual(35);
     } finally {
       proto.execute = execute;
     }
