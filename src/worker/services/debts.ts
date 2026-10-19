@@ -33,20 +33,22 @@ function refreshStatement(db: D1Database): D1PreparedStatement {
 
 /**
  * Auto-link: each shown credit card and loan account gets one debt, linked by account_id: an unlinked debt of
- * the same name, or a new one (source 'plaid'). A newly linked card is checked once for "paid in full" (P7-R7).
+ * the same name, or a new one (source 'plaid'). A linked card is checked once for "paid in full" (P7-R7): when
+ * it's linked, or on the first load for one linked before Plan › Ahead; never after the user sets it.
  * Idempotent and safe when two loads run at once: the link and the insert each check, in the same statement,
- * that no debt has the account yet. One query when nothing is new, three when something is, however many
- * accounts (D1's 50 a request). `refresh` also stores every balance (after a sync).
+ * that no debt has the account yet. One query when nothing is new or unchecked, two to four when something is,
+ * however many accounts (D1's 50 a request). `refresh` also stores every balance (after a sync).
  */
 export async function linkDebts(db: D1Database, today: ISODate, { refresh = false } = {}): Promise<void> {
   const current = monthOf(today);
-  const accounts = await all<{ id: number; name: string; type: 'credit' | 'loan'; balanceCents: number | null; recent: string }>(
+  // Accounts with no debt yet, and cards whose debt was never checked for paid in full.
+  const accounts = await all<{ id: number; name: string; type: 'credit' | 'loan'; balanceCents: number | null; recent: string; debtId: number | null }>(
     db,
-    `SELECT a.id, a.name, a.type, a.current_balance_cents AS balanceCents,
+    `SELECT a.id, a.name, a.type, a.current_balance_cents AS balanceCents, d.id AS debtId,
             (SELECT json_group_array(json_array(substr(t.date, 1, 7), t.amount_cents)) FROM transactions t
               WHERE t.account_id = a.id AND t.deleted_at IS NULL AND t.pending = 0 AND t.date BETWEEN ? AND ?) AS recent
-       FROM accounts a
-      WHERE a.type IN ('credit', 'loan') AND a.hidden = 0 AND NOT EXISTS (SELECT 1 FROM debts d WHERE d.account_id = a.id)
+       FROM accounts a LEFT JOIN debts d ON d.account_id = a.id
+      WHERE a.type IN ('credit', 'loan') AND a.hidden = 0 AND (d.id IS NULL OR (a.type = 'credit' AND d.paid_in_full_checked = 0))
       ORDER BY a.id`,
     monthStart(addMonths(current, -4)),
     monthEnd(addMonths(current, -1)),
@@ -74,16 +76,41 @@ export async function linkDebts(db: D1Database, today: ISODate, { refresh = fals
       paidInFull: a.type === 'credit' && cardPaidInFull(byMonth, today) ? 1 : 0,
     };
   });
-  const json = JSON.stringify(rows);
+  const unchecked = rows.filter((_, i) => accounts[i]!.debtId !== null);
+  const json = JSON.stringify(rows.filter((_, i) => accounts[i]!.debtId === null));
+  const checks = JSON.stringify(rows.flatMap((r, i) => (accounts[i]!.debtId === null ? [] : [{ id: accounts[i]!.debtId, paidInFull: r.paidInFull }])));
   const candidates = `(SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.name') AS name, json_extract(value, '$.type') AS type,
                               json_extract(value, '$.balance') AS balance, json_extract(value, '$.min') AS min,
                               json_extract(value, '$.kind') AS kind, json_extract(value, '$.paidInFull') AS paidInFull
                          FROM json_each(?))`;
+  const linking = rows.length > unchecked.length;
   await db.batch([
+    // A card linked before: checked once, unless the user has set it meanwhile.
+    ...(unchecked.length
+      ? [
+          stmt(
+            db,
+            `UPDATE debts SET paid_in_full = j.paidInFull, paid_in_full_checked = 1, updated_at = ?
+               FROM (SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.paidInFull') AS paidInFull FROM json_each(?)) j
+              WHERE debts.id = j.id AND debts.paid_in_full_checked = 0`,
+            nowIso(),
+            checks,
+          ),
+        ]
+      : []),
+    ...(linking ? linkStatements(db, json, candidates) : []),
+    ...(refresh ? [refreshStatement(db)] : []),
+  ]);
+}
+
+/** Link by name, then insert, the accounts in `json` (see linkDebts). */
+function linkStatements(db: D1Database, json: string, candidates: string): D1PreparedStatement[] {
+  return [
     // An unlinked debt of the same name takes the account (and its balance).
     stmt(
       db,
       `UPDATE debts SET account_id = j.id, balance_cents = j.balance, paid_in_full = j.paidInFull, updated_at = ?,
+              paid_in_full_checked = CASE WHEN j.type = 'credit' THEN 1 ELSE debts.paid_in_full_checked END,
               kind = CASE WHEN j.type = 'credit' AND debts.kind = 'other' THEN 'credit_card' ELSE debts.kind END
          FROM ${candidates} j
         WHERE debts.id = (SELECT d.id FROM debts d WHERE d.account_id IS NULL AND d.archived = 0 AND lower(d.name) = lower(j.name) ORDER BY d.id LIMIT 1)
@@ -93,13 +120,12 @@ export async function linkDebts(db: D1Database, today: ISODate, { refresh = fals
     ),
     stmt(
       db,
-      `INSERT INTO debts (name, account_id, balance_cents, min_payment_cents, min_estimated, source, kind, paid_in_full)
-       SELECT j.name, j.id, j.balance, j.min, 1, 'plaid', j.kind, j.paidInFull FROM ${candidates} j
+      `INSERT INTO debts (name, account_id, balance_cents, min_payment_cents, min_estimated, source, kind, paid_in_full, paid_in_full_checked)
+       SELECT j.name, j.id, j.balance, j.min, 1, 'plaid', j.kind, j.paidInFull, j.type = 'credit' FROM ${candidates} j
         WHERE NOT EXISTS (SELECT 1 FROM debts d WHERE d.account_id = j.id)`,
       json,
     ),
-    ...(refresh ? [refreshStatement(db)] : []),
-  ]);
+  ];
 }
 
 export interface DebtRow {

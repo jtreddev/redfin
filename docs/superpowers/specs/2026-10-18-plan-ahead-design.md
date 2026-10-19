@@ -390,8 +390,9 @@ Money totals.
 - **P7-R16 Paid-in-full detection.**
   - Cycles are calendar months. In each of the last 3 full months, a payment came in that covered the month
     before's charges, to the dollar.
-  - It runs only when a card is linked. Debts linked before migration 0011 aren't checked.
-  - *Cost:* a card already linked and paid in full stays in payoff until the toggle is flipped.
+  - It runs once per card: when the card is linked, or on the first load for a card linked before migration 0011
+    (`debts.paid_in_full_checked`). The user's toggle also marks the debt checked, so it is never overridden.
+  - *Cost:* a card that starts or stops being cleared later isn't re-detected; the toggle is there.
 - **P7-R17 Estimated minimums.**
   - A debt added by hand with no minimum is estimated too.
   - So is a Plaid card whose bank gives no minimum. Before this it was $0.
@@ -420,7 +421,8 @@ Money totals.
 - **P7-R23 Bill-link suggestion.** A visible confirmed bill whose name contains the debt's or its account's
   name, or the reverse, or whose merchant (3+ letters) appears in either.
 - **P7-R24 Measured D1 queries** (middleware included):
-  - `/ahead`: 34 on a load that links a card, 32 after.
-  - `/forecast/months`: 31.
-  - `/forecast`: 23.
-  - The test bound is 35. Removing a duplicate income-sources query saved one.
+  - `/ahead`: 30 on a load that links a card, 28 after.
+  - `/forecast/months`: 27.
+  - `/forecast`: 20.
+  - The test bound is 35. This month's planner now shares the cash, categories, income-source and paydays
+    queries the forecasts make, and later months reuse its members.

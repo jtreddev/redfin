@@ -183,6 +183,39 @@ describe('Plan › Ahead API', () => {
     });
   });
 
+  describe('paid in full for debts linked before Plan › Ahead', () => {
+    beforeEach(() => {
+      db.exec(`INSERT INTO accounts (id, name, type, current_balance_cents) VALUES (5, 'Clear Card', 'credit', 42000)`);
+      // Cleared each month: charges, paid off the month after.
+      const charged = { '2026-06': 40000, '2026-07': 30000, '2026-08': 45000, '2026-09': 42000 };
+      for (const [month, cents] of Object.entries(charged)) charge(5, `${month}-10`, -cents);
+      charge(5, '2026-07-20', 40000);
+      charge(5, '2026-08-20', 30000);
+      charge(5, '2026-09-20', 45000);
+      // Linked by an earlier sync, never checked.
+      db.exec("INSERT INTO debts (name, account_id, balance_cents, min_payment_cents, source) VALUES ('Clear Card', 5, 42000, 2500, 'plaid')");
+    });
+    const row = () => db.rows('SELECT paid_in_full, paid_in_full_checked FROM debts WHERE account_id = 5');
+
+    it('checks a linked card once on first load', async () => {
+      await ahead();
+      expect(row()).toEqual([{ paid_in_full: 1, paid_in_full_checked: 1 }]);
+      // Checked: the user's toggle stands after.
+      const id = db.rows<{ id: number }>('SELECT id FROM debts WHERE account_id = 5')[0]!.id;
+      db.exec('UPDATE debts SET paid_in_full = 0 WHERE id = ?', id);
+      await ahead();
+      expect(row()).toEqual([{ paid_in_full: 0, paid_in_full_checked: 1 }]);
+    });
+
+    it('never re-detects a card the user toggled', async () => {
+      const id = db.rows<{ id: number }>('SELECT id FROM debts WHERE account_id = 5')[0]!.id;
+      expect((await api(env, 'PATCH', `/debts/${id}`, { paidInFull: false })).status).toBe(200);
+      await ahead();
+      await api(env, 'GET', '/debts');
+      expect(row()).toEqual([{ paid_in_full: 0, paid_in_full_checked: 1 }]);
+    });
+  });
+
   describe('debts by hand', () => {
     it('adds any kind of debt with an estimated minimum, a term and a link', async () => {
       const loans = category('Bills');

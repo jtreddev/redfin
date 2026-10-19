@@ -1,12 +1,12 @@
-import { addDays, monthOf, type ISODate } from '../../shared/dates';
+import { monthEnd, monthOf, monthStart, type ISODate } from '../../shared/dates';
 import type { Cents } from '../../shared/money';
 import type { PaydaySource } from '../../shared/projection';
 import type { Cadence } from '../../shared/recurring';
 import { buildTrends, GROUP_ORDER, type GroupKey, type Trends, type TrendsInput } from '../../shared/trends';
 import type { HouseholdSettings } from '../env';
-import { all, first } from '../lib/db';
+import { all } from '../lib/db';
 import { loadCategories, scheduleOf, type CategoryRow } from './context';
-import { buildPlanner, CASH_ACCOUNTS_WHERE, type Planner, type UpcomingBill } from './planner';
+import { buildPlanner, cashNow, receivedPays, type CashNow, type Planner, type UpcomingBill } from './planner';
 import { loadTrendsInput, monthsBack } from './trends';
 
 /** A confirmed bill with a next date, with the spending group its usual amount sits in. */
@@ -20,7 +20,7 @@ export interface ConfirmedBill {
 }
 
 export interface ForecastInputs {
-  cash: { total: Cents; counted: number };
+  cash: CashNow;
   /** Active income sources, with the paydays (tomorrow to `payUntil`) whose deposit already came in. */
   sources: PaydaySource[];
   planner: Planner;
@@ -46,19 +46,16 @@ export async function loadForecastInputs(
   opts: { payUntil: ISODate; trendsMonths: number },
 ): Promise<ForecastInputs> {
   const categories = loadCategories(db);
-  const [cash, received, planner, trendsInput, confirmed, categoryRows] = await Promise.all([
-    first<{ total: number; counted: number }>(
-      db,
-      `SELECT COALESCE(SUM(current_balance_cents), 0) AS total, COUNT(current_balance_cents) AS counted FROM accounts WHERE ${CASH_ACCOUNTS_WHERE}`,
-    ),
-    all<{ sourceId: number; payDate: string }>(
-      db,
-      `SELECT DISTINCT income_source_id AS sourceId, pay_date AS payDate FROM transactions
-        WHERE deleted_at IS NULL AND is_ignored = 0 AND income_source_id IS NOT NULL AND pay_date BETWEEN ? AND ?`,
-      addDays(today, 1),
-      opts.payUntil,
-    ),
-    buildPlanner(db, monthOf(today), household, today),
+  // Shared with this month's planner: today's cash, the categories, and received paydays from the month's start
+  // through whichever ends later, the month or the forecast.
+  const month = monthOf(today);
+  const cashNowP = cashNow(db);
+  const end = monthEnd(month) > opts.payUntil ? monthEnd(month) : opts.payUntil;
+  const receivedP = receivedPays(db, monthStart(month), end);
+  const [cash, receivedAll, planner, trendsInput, confirmed, categoryRows] = await Promise.all([
+    cashNowP,
+    receivedP,
+    buildPlanner(db, month, household, today, 0, { cash: cashNowP, categories, received: receivedP }),
     loadTrendsInput(db, monthsBack(today, opts.trendsMonths), today, categories),
     all<{ categoryId: number; cadence: Cadence; amountCents: number; privateMemberId: number | null }>(
       db,
@@ -71,10 +68,11 @@ export async function loadForecastInputs(
     categories,
   ]);
 
+  const received = receivedAll.filter((r) => r.payDate > today && r.payDate <= opts.payUntil);
   const groupOf = new Map(GROUP_ORDER.map((g) => [g.section, g.key]));
   const sectionOf = new Map(trendsInput.categories.map((c) => [c.id, c.section]));
   return {
-    cash: { total: cash?.total ?? 0, counted: cash?.counted ?? 0 },
+    cash,
     // The planner loaded the active sources already.
     sources: planner.data.sources.map((s) => ({
       name: s.name,

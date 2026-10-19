@@ -72,12 +72,15 @@ export interface MonthData {
   sources: IncomeSourceRow[];
   uncategorized: { inCents: Cents; outCents: Cents; inByWeek: Cents[]; outByWeek: Cents[]; count: number };
   allowancePayDates: ISODate[];
+  /** Each member's fun allowance, for later months built from the same load. */
+  members: readonly { id: number; funAllowanceCents: number }[];
 }
 
 /** Budget vs actual for every category in a month, including computed paycheck and fun money lines. */
-export async function loadMonth(db: D1Database, month: MonthKey): Promise<MonthData> {
+/** `categories`: already being loaded by the caller. */
+export async function loadMonth(db: D1Database, month: MonthKey, categoriesLoaded?: Promise<CategoryRow[]>): Promise<MonthData> {
   const [categories, lines, sources, members, ledger, plannedCostsCents] = await Promise.all([
-    loadCategories(db),
+    categoriesLoaded ?? loadCategories(db),
     all<LineRow>(
       db,
       `SELECT id, category_id AS categoryId, budget_cents AS budgetCents, timing, due_day AS dueDay, notes
@@ -197,12 +200,19 @@ function buildMonth(month: MonthKey, { categories, lines, sources, members, ledg
       count: actuals.uncategorizedCount,
     },
     allowancePayDates,
+    members,
   };
 }
 
 export interface StartingBalance {
   cents: Cents;
   source: 'manual' | 'bank' | 'previous_month' | 'none';
+}
+
+/** Today's cash in the shown cash accounts. */
+export interface CashNow {
+  total: Cents;
+  counted: number;
 }
 
 /** The accounts that count as cash: shown checking and savings, never cards or loans. */
@@ -215,6 +225,7 @@ async function startingBalance(
   household: HouseholdSettings,
   today: ISODate,
   depth: number,
+  cash?: Promise<CashNow>,
 ): Promise<StartingBalance> {
   const manual = await first<{ cents: number | null }>(
     db,
@@ -225,12 +236,8 @@ async function startingBalance(
 
   const currentMonth = monthOf(today);
   if (month === currentMonth) {
-    const cash = await first<{ total: number; counted: number }>(
-      db,
-      `SELECT COALESCE(SUM(current_balance_cents), 0) AS total, COUNT(current_balance_cents) AS counted
-         FROM accounts WHERE ${CASH_ACCOUNTS_WHERE}`,
-    );
-    if (!cash?.counted) return { cents: 0, source: 'none' };
+    const now = await (cash ?? cashNow(db));
+    if (!now.counted) return { cents: 0, source: 'none' };
     const movement = await first<{ net: number }>(
       db,
       `SELECT COALESCE(SUM(t.amount_cents), 0) AS net
@@ -239,7 +246,7 @@ async function startingBalance(
           AND t.deleted_at IS NULL AND t.is_ignored = 0 AND t.pending = 0 AND t.date >= ?`,
       monthStart(month),
     );
-    return { cents: cash.total - (movement?.net ?? 0), source: 'bank' };
+    return { cents: now.total - (movement?.net ?? 0), source: 'bank' };
   }
 
   if (month > currentMonth && depth < 12) {
@@ -247,6 +254,31 @@ async function startingBalance(
     return { cents: previous.forecast.totals.endBalance, source: 'previous_month' };
   }
   return { cents: 0, source: 'none' };
+}
+
+export interface ReceivedPay {
+  sourceId: number;
+  payDate: ISODate;
+}
+
+/** Paydays whose deposit came in, from..to. */
+export function receivedPays(db: D1Database, from: ISODate, to: ISODate): Promise<ReceivedPay[]> {
+  return all<ReceivedPay>(
+    db,
+    `SELECT DISTINCT income_source_id AS sourceId, pay_date AS payDate FROM transactions
+      WHERE deleted_at IS NULL AND is_ignored = 0 AND income_source_id IS NOT NULL AND pay_date BETWEEN ? AND ?`,
+    from,
+    to,
+  );
+}
+
+/** Today's cash: one query. A caller that needs it too passes it to buildPlanner so it isn't asked twice. */
+export function cashNow(db: D1Database): Promise<CashNow> {
+  return first<CashNow>(
+    db,
+    `SELECT COALESCE(SUM(current_balance_cents), 0) AS total, COUNT(current_balance_cents) AS counted
+       FROM accounts WHERE ${CASH_ACCOUNTS_WHERE}`,
+  ).then((c) => ({ total: c?.total ?? 0, counted: c?.counted ?? 0 }));
 }
 
 export interface Planner {
@@ -263,18 +295,18 @@ export async function buildPlanner(
   household: HouseholdSettings,
   today: ISODate,
   depth = 0,
+  /**
+   * What a caller loads anyway, so it isn't asked twice: today's cash, the categories, and received paydays
+   * (from at least the month's start through its end).
+   */
+  shared: { cash?: Promise<CashNow>; categories?: Promise<CategoryRow[]>; received?: Promise<ReceivedPay[]> } = {},
 ): Promise<Planner> {
-  const [data, received, start] = await Promise.all([
-    loadMonth(db, month),
-    all<{ sourceId: number; payDate: ISODate }>(
-      db,
-      `SELECT DISTINCT income_source_id AS sourceId, pay_date AS payDate FROM transactions
-        WHERE deleted_at IS NULL AND is_ignored = 0 AND income_source_id IS NOT NULL AND pay_date BETWEEN ? AND ?`,
-      monthStart(month),
-      monthEnd(month),
-    ),
-    startingBalance(db, month, household, today, depth),
+  const [data, receivedAll, start] = await Promise.all([
+    loadMonth(db, month, shared.categories),
+    shared.received ?? receivedPays(db, monthStart(month), monthEnd(month)),
+    startingBalance(db, month, household, today, depth, shared.cash),
   ]);
+  const received = receivedAll.filter((r) => r.payDate >= monthStart(month) && r.payDate <= monthEnd(month));
 
   const weeks = monthWeeks(month);
   const incomeByWeek = weeks.map((_, i) => data.uncategorized.inByWeek[i] ?? 0);
@@ -440,7 +472,7 @@ export async function loadLaterMonths(
   plannedCosts: readonly { startMonth: MonthKey; amounts: readonly AmountRow[] }[],
   categories: readonly CategoryRow[],
 ): Promise<Map<MonthKey, readonly BudgetRow[]>> {
-  const [lines, members] = await Promise.all([
+  const [lines] = await Promise.all([
     all<LineRow & { month: MonthKey }>(
       db,
       `SELECT id, month, category_id AS categoryId, budget_cents AS budgetCents, timing, due_day AS dueDay, notes
@@ -448,8 +480,9 @@ export async function loadLaterMonths(
       from,
       to,
     ),
-    all<{ id: number; funAllowanceCents: number }>(db, 'SELECT id, fun_allowance_cents AS funAllowanceCents FROM members'),
   ]);
+  // The members this month's load already has.
+  const members = planner.data.members;
   const out = new Map<MonthKey, readonly BudgetRow[]>();
   for (let month = from; month <= to; month = addMonths(month, 1)) {
     const own = lines.filter((l) => l.month === month);

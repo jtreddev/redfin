@@ -528,6 +528,8 @@ planning.patch('/debts/:id', async (c) => {
     .set('extra_cents', optInt(body.extraCents, 'extraCents', { min: 0 }) ?? undefined)
     .set('sort', optInt(body.sort, 'sort') ?? undefined)
     .set('paid_in_full', paidInFull === undefined ? undefined : paidInFull ? 1 : 0)
+    // The user's choice: auto-detection never overrides it.
+    .set('paid_in_full_checked', paidInFull === undefined ? undefined : 1)
     .set('bill_id', billId)
     .set('category_id', optInt(body.categoryId, 'categoryId', { min: 1 }))
     .set('archived', archived === undefined ? undefined : archived ? 1 : 0);

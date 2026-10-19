@@ -7,6 +7,8 @@ ALTER TABLE debts ADD COLUMN extra_cents INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE debts ADD COLUMN sort INTEGER NOT NULL DEFAULT 0;
 -- A card cleared each month: left out of payoff, sliders and the debt total.
 ALTER TABLE debts ADD COLUMN paid_in_full INTEGER NOT NULL DEFAULT 0;
+-- Detection has run (once, for a linked card) or the user set paid_in_full: it's never re-detected.
+ALTER TABLE debts ADD COLUMN paid_in_full_checked INTEGER NOT NULL DEFAULT 0;
 -- The minimum is our estimate (no bank data, not typed in): it follows the balance.
 ALTER TABLE debts ADD COLUMN min_estimated INTEGER NOT NULL DEFAULT 0;
 -- 'YYYY-MM': a fixed-term loan's last payment.
