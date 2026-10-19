@@ -350,3 +350,76 @@ Money totals.
 - the month sheet;
 - hide amounts;
 - the Trends redirect.
+
+## Rulings made while building (Task 1: engine and API)
+
+- **P7-R10 The plan starts next month.** Extras, set-aside changes, goal amounts and surprises count in whole
+  months only. In the rest of this month a debt pays its minimum if its due day is still ahead, with no
+  interest yet, and known items dated this month count. *Cost:* an extra paid this month shows from next.
+- **P7-R11 A linked debt is counted once, by the plan from next month.**
+  - This month its linked bill, or its category's line, counts it. It isn't paid again.
+  - From next month the gatherer takes out its linked bill and the bills and due-day lines in its category
+    (sub-categories too). The plan then counts minimum + extra on the due day (the 15th without one).
+  - Its category's money is also left out of "other bills" (P6b-R17).
+  - *Cost:* a hand-typed line bigger than the minimum shows as minimum + extra until the plan is saved.
+    Another payment filed in that category is dropped from next month on.
+- **P7-R12 A goal's saving line becomes the goal's monthly amount from next month.**
+  - With no saved amount, the slider starts at next month's line (or $0).
+  - Saving stops once the goal is reached.
+  - Months ahead's goal readout uses a saved amount as the pace.
+  - *Cost:* a line that differs month to month is flattened to next month's.
+- **P7-R13 Set-asides.**
+  - The cash numbers count the change (slider − current) as money out, from next month.
+  - The costs' expected spending stays as Project 6b works it out.
+  - The headline left-over subtracts the current set-asides in place of the costs' lumpy spending, so it's
+    even month to month.
+  - Allocated is debt extras + set-aside changes + goal amounts.
+  - *Cost:* with under a year of history, raising a set-aside counts as out once (as the change), not as
+    more spending too.
+- **P7-R14 A planned cost with no linked categories gets no slider.** Months ahead leaves it out, because its
+  spending can't be told apart. It is still edited in Planned Costs.
+- **P7-R15 Auto-link details.**
+  - Hidden accounts are skipped. A new loan gets kind 'other', or 'student' from Plaid's subtype.
+  - "Made positive" is `MAX(0, balance)`. Credit balances are stored positive when owed, and a negative one is
+    money the bank owes you, as sync already treats it.
+  - A linked debt's balance and estimated minimum are read live from the account. The stored copy is
+    refreshed after a sync and on Save.
+  - Steady state costs one query. A load that links something costs three.
+- **P7-R16 Paid-in-full detection.**
+  - Cycles are calendar months. In each of the last 3 full months, a payment came in that covered the month
+    before's charges, to the dollar.
+  - It runs only when a card is linked. Debts linked before migration 0011 aren't checked.
+  - *Cost:* a card already linked and paid in full stays in payoff until the toggle is flipped.
+- **P7-R17 Estimated minimums.**
+  - A debt added by hand with no minimum is estimated too.
+  - So is a Plaid card whose bank gives no minimum. Before this it was $0.
+  - Any typed minimum, or one from the bank, ends the estimate.
+- **P7-R18 Surprise suggestion details.**
+  - It counts shared charges only. Private ones are fun money.
+  - It counts charges with no category or an expense category, and leaves out transfers and splits.
+  - A charge is a confirmed bill when its merchant matches a confirmed bill's.
+  - A month with nothing counts as $0.
+- **P7-R19 Save.**
+  - In later months that already have a budget, a goal line is added where it's missing.
+  - A new debt line is due on the linked debts' first due day.
+  - Only next month's `planned_cost_amounts` row is written, as Planned Costs' edit does. A later row, if
+    any, still wins from its month.
+  - Copying a budget into a later month, and a check-in creating next month, apply the saved goal and debt
+    lines.
+  - Save first stores fresh balances and estimated minimums, in the same batch.
+- **P7-R20 Until payday.**
+  - A debt's minimum is an event on its due day this month, unless a linked bill or line counts it.
+  - Later months get minimum + extra, in place of its bill or lines.
+  - A saved goal amount is an event on the 1st of each later month, in place of the goal's lines.
+  - Known items and surprises aren't in Until payday.
+- **P7-R21 The suggestion runs in the browser.** `GET /api/ahead` doesn't run `autoFill`, to keep the Worker
+  within 10 ms of CPU. The client calls `autoFill(input)`.
+- **P7-R22 My order.** Debts missing from the order follow, highest rate first. Save writes `debts.sort`
+  only where it changed.
+- **P7-R23 Bill-link suggestion.** A visible confirmed bill whose name contains the debt's or its account's
+  name, or the reverse, or whose merchant (3+ letters) appears in either.
+- **P7-R24 Measured D1 queries** (middleware included):
+  - `/ahead`: 34 on a load that links a card, 32 after.
+  - `/forecast/months`: 31.
+  - `/forecast`: 23.
+  - The test bound is 35. Removing a duplicate income-sources query saved one.
