@@ -78,6 +78,45 @@ describe('syncStep', () => {
     ]);
   });
 
+  it('links a card to a debt of the same name instead of adding a second one', async () => {
+    db.exec("INSERT INTO debts (name, balance_cents, apr_percent, min_payment_cents) VALUES ('OWED', 100, 0, 0)");
+    const { itemId } = await seedBank(db, env, 'card');
+    db.exec(`UPDATE plaid_items SET liabilities_updated_at = NULL WHERE id = ?`, itemId);
+    const card = (id: string, current: number): PlaidAccount => ({
+      account_id: id,
+      name: id,
+      official_name: null,
+      mask: null,
+      type: 'credit',
+      subtype: 'credit card',
+      balances: { current, available: null, limit: 5000, iso_currency_code: 'USD' },
+    });
+    const accounts = [card('owed', 842.17), card('overpaid', -42.5)];
+    const liabilities: LiabilitiesResponse = {
+      accounts,
+      liabilities: {
+        credit: accounts.map((a) => ({
+          account_id: a.account_id,
+          aprs: [{ apr_percentage: 24.99, apr_type: 'purchase_apr' }],
+          minimum_payment_amount: 35,
+          next_payment_due_date: '2026-11-05',
+          last_statement_balance: null,
+        })),
+      },
+    };
+    vi.stubGlobal('fetch', async (url: string) =>
+      Response.json(new URL(url).pathname === '/liabilities/get' ? liabilities : page([], { accounts })),
+    );
+
+    await syncStep(env, { trigger: 'cron' });
+
+    expect(db.rows(`SELECT d.name, a.plaid_account_id AS account, d.balance_cents AS cents, d.source FROM debts d JOIN accounts a ON a.id = d.account_id ORDER BY d.id`)).toEqual([
+      { name: 'OWED', account: 'owed', cents: 84217, source: 'plaid' },
+      { name: 'overpaid', account: 'overpaid', cents: 0, source: 'plaid' },
+    ]);
+    expect(db.rows('SELECT COUNT(*) AS n FROM debts')).toEqual([{ n: 2 }]);
+  });
+
   it('stores a page of transactions', async () => {
     const { itemId } = await seedBank(db, env, 'chime');
     stubPlaid({ chime: [page([plaidTxn('chime', 't1', '2026-10-01', 12.34), plaidTxn('chime', 't2', '2026-10-02', 5)])] });

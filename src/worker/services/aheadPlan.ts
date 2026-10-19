@@ -1,12 +1,13 @@
 import type { MonthKey } from '../../shared/dates';
 import { nowIso, placeholders, stmt, type Param } from '../lib/db';
+import { LIVE_BALANCE, LIVE_MINIMUM } from './debts';
 
 /**
  * The saved plan's budget lines (Save as my plan, and a month created later): each goal's line is its monthly
  * amount, and a category linked to debts gets their minimums + extras (not paid in full, with a balance).
  * `months`: every month after `after` that already has a budget, or the one month just created. Only lines whose
- * amount changes are written; a new debt line is due on the debts' first due day. `goalIds` and
- * `debtCategoryIds` narrow it to what changed.
+ * amount changes are written; a new debt line is due on the debts' first due day. Balances and estimated
+ * minimums are read live, as GET /api/ahead shows them. `goalIds` and `debtCategoryIds` narrow it to what changed.
  */
 export function planLineStatements(
   db: D1Database,
@@ -46,10 +47,10 @@ export function planLineStatements(
       stmt(
         db,
         `INSERT INTO budget_lines (month, category_id, budget_cents, timing, due_day, updated_by_member_id)
-         SELECT m.month, d.category_id, SUM(d.min_payment_cents + d.extra_cents),
+         SELECT m.month, d.category_id, SUM(${LIVE_MINIMUM} + d.extra_cents),
                 CASE WHEN MIN(d.due_day) IS NULL THEN 'even' ELSE 'due_day' END, MIN(d.due_day), ?
-           FROM ${monthsSql} m, debts d
-          WHERE d.archived = 0 AND d.paid_in_full = 0 AND d.balance_cents > 0 AND d.category_id IS NOT NULL ${debtsIn}
+           FROM ${monthsSql} m CROSS JOIN debts d LEFT JOIN accounts a ON a.id = d.account_id
+          WHERE d.archived = 0 AND d.paid_in_full = 0 AND ${LIVE_BALANCE} > 0 AND d.category_id IS NOT NULL ${debtsIn}
           GROUP BY m.month, d.category_id
          ${upsert}`,
         memberId,

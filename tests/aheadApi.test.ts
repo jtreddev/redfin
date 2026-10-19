@@ -124,6 +124,15 @@ describe('Plan › Ahead API', () => {
       expect(debtRows()).toEqual(rows);
     });
 
+    it('links once when the first loads come in together', async () => {
+      await Promise.all([ahead(), ahead(), api(env, 'GET', '/debts'), ahead(PARTNER)]);
+      expect(debtRows().map((r) => [r.name, r.account_id])).toEqual([
+        ['car loan', 3],
+        ['Rewards Card', 2],
+        ['Overpaid Card', 4],
+      ]);
+    });
+
     it('keeps an archived linked debt archived, and follows the balance and the estimate', async () => {
       await ahead();
       db.exec('UPDATE debts SET archived = 1 WHERE account_id = 3');
@@ -305,6 +314,24 @@ describe('Plan › Ahead API', () => {
       const after = await ahead();
       expect(after.saved).toMatchObject({ debtExtra: { [card!]: 20000, [other!]: 0 }, costMonthly: { [car]: 12500 }, goalMonthly: { [goalId]: 5000 }, surpriseCents: 15000, strategy: 'custom', order: [other, card] });
       expect(after.surprise.savedCents).toBe(15000);
+
+      // A linked card's line uses its balance now, not a stored one; the debt row itself isn't written.
+      db.exec(`INSERT INTO accounts (id, name, type, current_balance_cents) VALUES (6, 'Store Card', 'credit', 400000)`);
+      await ahead();
+      const store = db.rows<{ id: number }>('SELECT id FROM debts WHERE account_id = 6')[0]!.id;
+      await api(env, 'PATCH', `/debts/${store}`, { categoryId: loans });
+      db.exec('UPDATE accounts SET current_balance_cents = 600000 WHERE id = 6');
+      const storeRow = () => db.rows('SELECT balance_cents, min_payment_cents, updated_at FROM debts WHERE id = ?', store);
+      const stored = storeRow();
+      await api(env, 'POST', '/ahead/plan', { debtExtra: { [store]: 1000 } });
+      expect(db.rows("SELECT budget_cents FROM budget_lines WHERE month = '2026-11' AND category_id = ?", loans)).toEqual([
+        // Card 15,000 + 20,000 extra; store card's estimate on 600,000 (6,000) + 1,000.
+        { budget_cents: 35000 + 7000 },
+      ]);
+      expect(db.rows('SELECT extra_cents FROM debts WHERE id = ?', store)).toEqual([{ extra_cents: 1000 }]);
+      expect(storeRow().map((r) => ({ ...r, updated_at: null }))).toEqual(stored.map((r) => ({ ...r, updated_at: null })));
+      await api(env, 'POST', '/ahead/plan', { debtExtra: { [store]: 0 } });
+      await api(env, 'PATCH', `/debts/${store}`, { categoryId: null });
 
       // A month created later carries the plan.
       expect((await api(env, 'POST', '/budget/copy', { from: '2026-10', to: '2026-12' })).status).toBe(200);

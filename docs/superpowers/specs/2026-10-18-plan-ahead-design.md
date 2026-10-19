@@ -382,8 +382,10 @@ Money totals.
   - Hidden accounts are skipped. A new loan gets kind 'other', or 'student' from Plaid's subtype.
   - "Made positive" is `MAX(0, balance)`. Credit balances are stored positive when owed, and a negative one is
     money the bank owes you, as sync already treats it.
-  - A linked debt's balance and estimated minimum are read live from the account. The stored copy is
-    refreshed after a sync and on Save.
+  - A linked debt's balance and estimated minimum are read live from the account, by the API and by the
+    budget lines Save and month creation write. The stored copy is refreshed after a sync.
+  - A sync links first, so a debt of the same name takes a new card before liabilities data would add one. A
+    hidden liability account still gets its debt from the liabilities data, as before.
   - Steady state costs one query. A load that links something costs three.
 - **P7-R16 Paid-in-full detection.**
   - Cycles are calendar months. In each of the last 3 full months, a payment came in that covered the month
@@ -406,7 +408,6 @@ Money totals.
     any, still wins from its month.
   - Copying a budget into a later month, and a check-in creating next month, apply the saved goal and debt
     lines.
-  - Save first stores fresh balances and estimated minimums, in the same batch.
 - **P7-R20 Until payday.**
   - A debt's minimum is an event on its due day this month, unless a linked bill or line counts it.
   - Later months get minimum + extra, in place of its bill or lines.

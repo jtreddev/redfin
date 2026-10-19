@@ -10,13 +10,15 @@ export const estimatedMinimumSql = (balance: string, apr = 'apr_percent') =>
   `CASE WHEN ${balance} <= 0 THEN 0 ELSE MIN(${balance}, MAX(2500, CAST(ROUND(${balance} * 0.01) AS INTEGER) + CAST(ROUND(${balance} * ${apr} / 1200.0) AS INTEGER))) END`;
 
 /** A debt's balance (alias d) from its linked account (alias a), made positive: money the bank owes you isn't debt. */
-const LIVE_BALANCE = 'CASE WHEN a.current_balance_cents IS NULL THEN d.balance_cents ELSE MAX(0, a.current_balance_cents) END';
+export const LIVE_BALANCE = 'CASE WHEN a.current_balance_cents IS NULL THEN d.balance_cents ELSE MAX(0, a.current_balance_cents) END';
+/** A debt's minimum, its estimate following the live balance. */
+export const LIVE_MINIMUM = `CASE WHEN d.min_estimated = 1 THEN ${estimatedMinimumSql(LIVE_BALANCE, 'd.apr_percent')} ELSE d.min_payment_cents END`;
 
 /**
- * Stores each debt's balance from its account and its estimated minimum (they're read live, so this is for
- * the stored copies: Plaid sync and Save as my plan). Only rows that change are written.
+ * Stores each debt's balance from its account and its estimated minimum (they're read live, so this keeps the
+ * stored copies, as exported, in step after a Plaid sync). Only rows that change are written.
  */
-export function refreshStatement(db: D1Database): D1PreparedStatement {
+function refreshStatement(db: D1Database): D1PreparedStatement {
   const estimate = estimatedMinimumSql('s.b', 'debts.apr_percent');
   return stmt(
     db,
@@ -149,7 +151,7 @@ export async function loadDebts(db: D1Database, viewerId: number): Promise<DebtR
     db,
     `SELECT d.id, d.name, d.kind, d.account_id AS accountId, a.name AS accountName, d.source, ${LIVE_BALANCE} AS balanceCents,
             d.apr_percent AS aprPercent, d.min_estimated AS minEstimated, d.due_day AS dueDay,
-            CASE WHEN d.min_estimated = 1 THEN ${estimatedMinimumSql(LIVE_BALANCE, 'd.apr_percent')} ELSE d.min_payment_cents END AS minPaymentCents,
+            ${LIVE_MINIMUM} AS minPaymentCents,
             d.extra_cents AS extraCents, d.sort, d.paid_in_full AS paidInFull, d.end_month AS endMonth,
             b.id AS billId, b.name AS billName, b.status = 'confirmed' AS billConfirmed,
             d.category_id AS categoryId, c.name AS categoryName, d.balance_as_of AS balanceAsOf, d.updated_at AS updatedAt,

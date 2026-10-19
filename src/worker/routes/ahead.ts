@@ -5,7 +5,6 @@ import type { AppEnv } from '../env';
 import { all, first, nowIso, run, stmt, Updates } from '../lib/db';
 import { badRequest, notFound, oneOf, optInt, paramId, readBody, reqInt, reqMonth, reqStr } from '../lib/http';
 import { planLineStatements } from '../services/aheadPlan';
-import { refreshStatement } from '../services/debts';
 import { loadItems, loadMonthsAheadInput } from '../services/monthsAhead';
 import { loadPlannedCosts } from '../services/plannedCosts';
 
@@ -118,8 +117,7 @@ ahead.post('/ahead/plan', async (c) => {
       ...planLineStatements(db, { after: current }, c.get('viewer').memberId, { goalIds: changedGoals, debtCategoryIds: [...changedCategories] }),
     );
   }
-  // Stored balances and estimated minimums first: debt lines are worked out from them.
-  if (statements.length) await db.batch([refreshStatement(db), ...statements]);
+  if (statements.length) await db.batch(statements);
   return c.json({ ok: true, changes: statements.length });
 });
 

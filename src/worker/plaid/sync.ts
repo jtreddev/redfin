@@ -341,10 +341,11 @@ async function syncItem(env: Env, item: ItemRow, trigger: 'cron' | 'manual' | 'l
     );
 
     if (!page.has_more && !notReady) {
-      await refreshExtras(env, item, accessToken, accountIdFor);
-      // Plan › Ahead's auto-link: new cards and loans get a debt; balances follow the accounts.
+      // Plan › Ahead's auto-link first, so a debt of the same name takes a new card before liabilities would add
+      // one; balances follow the accounts.
       const household = await first<{ timezone: string }>(db, 'SELECT timezone FROM household WHERE id = 1');
       await linkDebts(db, todayIn(household?.timezone ?? 'America/Chicago'), { refresh: true });
+      await refreshExtras(env, item, accessToken, accountIdFor);
     }
 
     await finishRun(db, runRow?.id, { status: 'ok', added, modified, removed, hasMore: page.has_more });
@@ -737,7 +738,7 @@ async function upsertDebts(db: D1Database, response: LiabilitiesResponse, accoun
     })),
   ];
 
-  // One debt per account: insert only when none has it (a concurrent auto-link may have), then update.
+  // One debt per account: auto-link has made it (a hidden account's is made here), then its details are updated.
   const statements = entries.flatMap((entry) => {
     const accountId = entry.plaidAccountId ? accountIdFor.get(entry.plaidAccountId) : undefined;
     const account = entry.plaidAccountId ? balances.get(entry.plaidAccountId) : undefined;
