@@ -74,15 +74,18 @@ export async function linkDebts(db: D1Database, today: ISODate, { refresh = fals
       balance,
       min: estimatedMinimum(balance, 0),
       kind: a.type === 'credit' ? 'credit_card' : 'other',
-      paidInFull: a.type === 'credit' && cardPaidInFull(byMonth, today, a.balanceCents ?? 0) ? 1 : 0,
+      // No balance from the bank yet: not paid in full, and checked again once one arrives.
+      known: a.balanceCents === null ? 0 : 1,
+      paidInFull: a.type === 'credit' && a.balanceCents !== null && cardPaidInFull(byMonth, today, a.balanceCents) ? 1 : 0,
     };
   });
   const unchecked = rows.filter((_, i) => accounts[i]!.debtId !== null);
   const json = JSON.stringify(rows.filter((_, i) => accounts[i]!.debtId === null));
-  const checks = JSON.stringify(rows.flatMap((r, i) => (accounts[i]!.debtId === null ? [] : [{ id: accounts[i]!.debtId, paidInFull: r.paidInFull }])));
+  const checks = JSON.stringify(rows.flatMap((r, i) => (accounts[i]!.debtId === null || !r.known ? [] : [{ id: accounts[i]!.debtId, paidInFull: r.paidInFull }])));
   const candidates = `(SELECT json_extract(value, '$.id') AS id, json_extract(value, '$.name') AS name, json_extract(value, '$.type') AS type,
                               json_extract(value, '$.balance') AS balance, json_extract(value, '$.min') AS min,
-                              json_extract(value, '$.kind') AS kind, json_extract(value, '$.paidInFull') AS paidInFull
+                              json_extract(value, '$.kind') AS kind, json_extract(value, '$.paidInFull') AS paidInFull,
+                              json_extract(value, '$.known') AS known
                          FROM json_each(?))`;
   const linking = rows.length > unchecked.length;
   await db.batch([
@@ -112,7 +115,7 @@ function linkStatements(db: D1Database, json: string, candidates: string): D1Pre
       db,
       `UPDATE debts SET account_id = j.id, balance_cents = j.balance, updated_at = ?,
               paid_in_full = CASE WHEN debts.paid_in_full_checked = 1 THEN debts.paid_in_full ELSE j.paidInFull END,
-              paid_in_full_checked = CASE WHEN j.type = 'credit' THEN 1 ELSE debts.paid_in_full_checked END,
+              paid_in_full_checked = CASE WHEN j.type = 'credit' AND j.known = 1 THEN 1 ELSE debts.paid_in_full_checked END,
               kind = CASE WHEN j.type = 'credit' AND debts.kind = 'other' THEN 'credit_card' ELSE debts.kind END
          FROM ${candidates} j
         WHERE debts.id = (SELECT d.id FROM debts d WHERE d.account_id IS NULL AND d.archived = 0 AND lower(d.name) = lower(j.name) ORDER BY d.id LIMIT 1)
@@ -123,7 +126,7 @@ function linkStatements(db: D1Database, json: string, candidates: string): D1Pre
     stmt(
       db,
       `INSERT INTO debts (name, account_id, balance_cents, min_payment_cents, min_estimated, source, kind, paid_in_full, paid_in_full_checked)
-       SELECT j.name, j.id, j.balance, j.min, 1, 'plaid', j.kind, j.paidInFull, j.type = 'credit' FROM ${candidates} j
+       SELECT j.name, j.id, j.balance, j.min, 1, 'plaid', j.kind, j.paidInFull, j.type = 'credit' AND j.known = 1 FROM ${candidates} j
         WHERE NOT EXISTS (SELECT 1 FROM debts d WHERE d.account_id = j.id)`,
       json,
     ),

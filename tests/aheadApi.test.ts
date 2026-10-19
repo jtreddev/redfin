@@ -181,6 +181,18 @@ describe('Plan › Ahead API', () => {
       expect((await api(env, 'PATCH', `/debts/${id}`, { paidInFull: false })).status).toBe(200);
       expect((await ahead()).debts.find((d) => d.name === 'Clear Card')?.paidInFull).toBe(false);
     });
+    it('waits for a balance from the bank before checking a card', async () => {
+      db.exec(`INSERT INTO accounts (id, name, type, current_balance_cents) VALUES (5, 'New Card', 'credit', NULL)`);
+      for (const month of ['2026-07', '2026-08', '2026-09']) {
+        charge(5, `${month}-10`, -30000);
+        charge(5, `${month}-20`, 30000);
+      }
+      expect((await ahead()).debts.find((d) => d.name === 'New Card')?.paidInFull).toBe(false);
+      // The balance arrives with the next sync: now it's checked, once.
+      db.exec('UPDATE accounts SET current_balance_cents = 500000 WHERE id = 5');
+      expect((await ahead()).debts.find((d) => d.name === 'New Card')?.paidInFull).toBe(false);
+      expect(db.rows('SELECT paid_in_full_checked AS c FROM debts WHERE account_id = 5')).toEqual([{ c: 1 }]);
+    });
   });
 
   describe('paid in full for debts linked before Plan › Ahead', () => {
